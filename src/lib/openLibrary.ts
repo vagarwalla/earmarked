@@ -259,10 +259,25 @@ function buildEdition(
 
 export async function getEditions(workId: string, language = 'eng'): Promise<Edition[]> {
   // workId e.g. "/works/OL45804W"
-  const url = `${BASE}${workId}/editions.json?limit=300`
-  const res = await fetch(url, { next: { revalidate: 3600 } })
-  if (!res.ok) return []
-  const data = await res.json()
+  // Fetch up to 600 editions: first 300, then a second page if needed
+  const page1Url = `${BASE}${workId}/editions.json?limit=300`
+  const page1Res = await fetch(page1Url, { next: { revalidate: 3600 } })
+  if (!page1Res.ok) return []
+  const page1Data = await page1Res.json()
+
+  const totalSize: number = page1Data.size ?? 0
+  let allEntries: Record<string, unknown>[] = page1Data.entries || []
+
+  if (totalSize > 300) {
+    const page2Url = `${BASE}${workId}/editions.json?limit=300&offset=300`
+    const page2Res = await fetch(page2Url, { next: { revalidate: 3600 } }).catch(() => null)
+    if (page2Res?.ok) {
+      const page2Data = await page2Res.json()
+      allEntries = [...allEntries, ...(page2Data.entries || [])]
+    }
+  }
+
+  const data = { entries: allEntries }
 
   const confirmed: Edition[] = []
   const needsVerification: Array<{ isbn: string; entry: Record<string, unknown>; coverId: number | null; coverUrl: string | null }> = []
