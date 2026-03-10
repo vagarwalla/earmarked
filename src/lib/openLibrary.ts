@@ -220,23 +220,15 @@ const OL_TO_GB_LANG: Record<string, string> = {
 
 async function fetchGoogleBooksInfo(isbn: string): Promise<{ language: string | null; coverUrl: string | null }> {
   try {
-    const url = `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}&fields=items(id,volumeInfo/language,volumeInfo/imageLinks)&maxResults=1`
+    const url = `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}&fields=items(volumeInfo/language,volumeInfo/imageLinks)&maxResults=1`
     const res = await fetch(url, { next: { revalidate: 86400 } })
     if (!res.ok) return { language: null, coverUrl: null }
     const data = await res.json()
-    const item = data.items?.[0]
-    if (!item) return { language: null, coverUrl: null }
-    const info = item.volumeInfo
-    const volumeId: string | null = (item.id as string) ?? null
-    // Prefer thumbnail > smallThumbnail; fall back to constructing from volume ID
-    const rawThumb = (info?.imageLinks?.thumbnail as string | undefined)
-      ?? (info?.imageLinks?.smallThumbnail as string | undefined)
-    const coverUrl = rawThumb
-      ? rawThumb.replace('http://', 'https://').replace('&zoom=1', '&zoom=0')
-      : volumeId
-        ? `https://books.google.com/books/content?id=${volumeId}&printsec=frontcover&img=1&zoom=1&source=gbs_api`
-        : null
-    return { language: (info?.language as string) ?? null, coverUrl }
+    const info = data.items?.[0]?.volumeInfo
+    const thumbnail = (info?.imageLinks?.thumbnail as string | undefined)
+      ?.replace('http://', 'https://')
+      .replace('&zoom=1', '&zoom=0') ?? null
+    return { language: (info?.language as string) ?? null, coverUrl: thumbnail }
   } catch {
     return { language: null, coverUrl: null }
   }
@@ -310,7 +302,7 @@ export async function getEditions(workId: string, language = 'eng'): Promise<Edi
       if (langs.length > 0) {
         const matchesLanguage = langs.some((l) => l.key === `/languages/${language}`)
         if (!matchesLanguage) {
-          // Wrong language — but keep it if it has cover art (shown in English view)
+          // Wrong language — but keep it if it has cover art (include in English view)
           if (coverId) confirmed.push(buildEdition(isbn, entry, coverId, coverUrl))
           continue
         }
@@ -324,18 +316,30 @@ export async function getEditions(workId: string, language = 'eng'): Promise<Edi
     }
   }
 
-  // Editions with no OL language tag: include all (benefit of the doubt).
-  for (const { isbn, entry, coverId, coverUrl } of needsVerification) {
-    confirmed.push(buildEdition(isbn, entry, coverId, coverUrl))
+  // Editions with no OL language tag: include all with benefit of the doubt.
+  // GB is only used to try to find a cover image, not to gate inclusion.
+  if (language && needsVerification.length > 0) {
+    const toCheck = needsVerification.slice(0, 8)
+    const rest = needsVerification.slice(8)
+    const gbInfos = await Promise.all(toCheck.map(({ isbn }) => fetchGoogleBooksInfo(isbn)))
+    for (let i = 0; i < toCheck.length; i++) {
+      const { coverUrl: gbCoverUrl } = gbInfos[i]
+      const { isbn, entry, coverId, coverUrl } = toCheck[i]
+      confirmed.push(buildEdition(isbn, entry, coverId, coverUrl ?? gbCoverUrl))
+    }
+    for (const { isbn, entry, coverId, coverUrl } of rest) {
+      confirmed.push(buildEdition(isbn, entry, coverId, coverUrl))
+    }
   }
 
-  // Back-fill covers from Google Books for every confirmed edition with no OL cover.
+  // Back-fill covers from Google Books for any remaining no-cover editions (cap at 5 extra calls)
   const noCoverEditions = confirmed.filter((e) => !e.cover_url)
   if (noCoverEditions.length > 0) {
-    const gbInfos = await Promise.all(noCoverEditions.map((e) => fetchGoogleBooksInfo(e.isbn)))
-    for (let i = 0; i < noCoverEditions.length; i++) {
+    const toFetch = noCoverEditions.slice(0, 5)
+    const gbInfos = await Promise.all(toFetch.map((e) => fetchGoogleBooksInfo(e.isbn)))
+    for (let i = 0; i < toFetch.length; i++) {
       const gbCoverUrl = gbInfos[i].coverUrl
-      if (gbCoverUrl) noCoverEditions[i].cover_url = gbCoverUrl
+      if (gbCoverUrl) toFetch[i].cover_url = gbCoverUrl
     }
   }
 

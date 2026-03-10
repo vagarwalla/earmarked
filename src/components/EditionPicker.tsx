@@ -468,13 +468,13 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
                               <img src={group.cover_url} alt={rep.title} className="w-full h-full object-cover" />
                             ) : (
                               <div className="text-center px-2">
-                                <div className="text-sm font-medium text-muted-foreground">No cover art found</div>
+                                <div className="text-xl font-semibold text-muted-foreground leading-tight">No cover art found</div>
                               </div>
                             )}
                           </div>
                           <div className="text-sm leading-snug space-y-1 min-h-[72px]">
                             {rep.edition_name && <div className="font-medium text-foreground line-clamp-2">{rep.edition_name}</div>}
-                            {!group.cover_url && rep.publisher && <div className="text-muted-foreground line-clamp-2">{rep.publisher}</div>}
+                            {rep.publisher && <div className="text-muted-foreground line-clamp-2">{rep.publisher}</div>}
                             <div className="text-muted-foreground">{rep.publish_year ?? ''}</div>
                             {rep.pages && <div className="text-muted-foreground text-xs">{rep.pages} pp</div>}
                             <div className="flex flex-wrap gap-1 pt-0.5">
@@ -530,13 +530,13 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
                               <img src={group.cover_url} alt={rep.title} className="w-full h-full object-cover" />
                             ) : (
                               <div className="text-center px-2 space-y-1">
-                                <div className="text-sm font-medium text-muted-foreground">No cover art found</div>
+                                <div className="text-xl font-semibold text-muted-foreground leading-tight">No cover art found</div>
                               </div>
                             )}
                           </div>
                           <div className="text-sm leading-snug space-y-1 min-h-[72px]">
                             {rep.edition_name && <div className="font-medium text-foreground line-clamp-2">{rep.edition_name}</div>}
-                            {!group.cover_url && rep.publisher && <div className="text-muted-foreground line-clamp-2">{rep.publisher}</div>}
+                            {rep.publisher && <div className="text-muted-foreground line-clamp-2">{rep.publisher}</div>}
                             <div className="text-muted-foreground">{rep.publish_year ?? ''}</div>
                             {rep.pages && <div className="text-muted-foreground text-xs">{rep.pages} pp</div>}
                             <div className="flex flex-wrap gap-1 pt-0.5">
