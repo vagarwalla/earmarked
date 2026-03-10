@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- amber rounded background -->
+  <rect width="32" height="32" rx="7" fill="#f59e0b"/>
+
+  <!-- book body: top-right corner clipped for the dog-ear -->
+  <path d="M6 5 L20 5 L26 11 L26 28 L6 28 Z" fill="#fffbeb"/>
+
+  <!-- spine -->
+  <rect x="6" y="5" width="3.5" height="23" fill="#fde68a" rx="1"/>
+
+  <!-- dog-ear fold (back face of the folded corner) -->
+  <path d="M20 5 L26 11 L20 11 Z" fill="#d1d5db"/>
+
+  <!-- fold highlight (front face curl) -->
+  <path d="M20 5 L26 11 L20 11 Z" fill="none" stroke="#9ca3af" stroke-width="0.6"/>
+
+  <!-- text lines suggesting book content -->
+  <rect x="12" y="15" width="11" height="2" rx="1" fill="#fcd34d"/>
+  <rect x="12" y="19" width="11" height="2" rx="1" fill="#fcd34d"/>
+  <rect x="12" y="23" width="7" height="2" rx="1" fill="#fcd34d"/>
+</svg>
