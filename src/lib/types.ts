@@ -36,6 +36,7 @@ export interface BookSearchResult {
   cover_url: string | null
   first_publish_year: number | null
   series: string | null
+  series_number: string | null
 }
 
 export interface Edition {

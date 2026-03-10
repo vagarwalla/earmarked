@@ -62,6 +62,7 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
       cover_url: item.cover_url,
       first_publish_year: null,
       series: null,
+      series_number: null,
     })
     setEditingItem(item)
     setPickerOpen(true)

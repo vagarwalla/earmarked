@@ -81,7 +81,9 @@ export function BookSearch({ onSelect }: Props) {
               <div className="min-w-0">
                 <div className="font-medium text-sm truncate">{book.title}</div>
                 {book.series && (
-                  <div className="text-xs text-muted-foreground italic truncate">{book.series}</div>
+                  <div className="text-xs text-muted-foreground italic truncate">
+                    {book.series}{book.series_number ? ` #${book.series_number}` : ''}
+                  </div>
                 )}
                 <div className="text-xs text-muted-foreground">
                   {book.author}{book.first_publish_year ? ` · ${book.first_publish_year}` : ''}
