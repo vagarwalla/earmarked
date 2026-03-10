@@ -262,21 +262,27 @@ function normaliseGBUrl(raw: string | undefined): string | null {
 async function fetchGoogleBooksInfo(isbn: string): Promise<GBInfo> {
   const empty: GBInfo = { language: null, coverUrl: null, publishYear: null, publisher: null, format: null }
   try {
-    const url = `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}&fields=items(volumeInfo/language,volumeInfo/imageLinks,volumeInfo/publishedDate,volumeInfo/publisher,volumeInfo/printType)&maxResults=1${GB_KEY}`
+    // Include `id` so we can construct a direct cover URL when imageLinks is absent
+    const url = `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}&fields=items(id,volumeInfo/language,volumeInfo/imageLinks,volumeInfo/publishedDate,volumeInfo/publisher,volumeInfo/printType)&maxResults=1${GB_KEY}`
     const res = await fetch(url, { next: { revalidate: 3600 } })
     if (!res.ok) return empty
     const data = await res.json()
-    const info = data.items?.[0]?.volumeInfo
-    if (!info) return empty
+    const item = data.items?.[0]
+    if (!item) return empty
+    const info = item.volumeInfo ?? {}
+    const volumeId = item.id as string | undefined
 
-    // Try thumbnail → smallThumbnail, validating each before accepting
+    // Cover priority: thumbnail → smallThumbnail → direct volume URL (covers GB books
+    // that have a cover on the web but don't expose it through imageLinks)
     const thumbnail = normaliseGBUrl(info.imageLinks?.thumbnail as string | undefined)
     const smallThumbnail = normaliseGBUrl(info.imageLinks?.smallThumbnail as string | undefined)
+    const directUrl = volumeId
+      ? `https://books.google.com/books/content?id=${volumeId}&printsec=frontcover&img=1&zoom=1`
+      : null
+
     let coverUrl: string | null = null
-    if (thumbnail && await isRealCoverImage(thumbnail)) {
-      coverUrl = thumbnail
-    } else if (smallThumbnail && await isRealCoverImage(smallThumbnail)) {
-      coverUrl = smallThumbnail
+    for (const candidate of [thumbnail, smallThumbnail, directUrl]) {
+      if (candidate && await isRealCoverImage(candidate)) { coverUrl = candidate; break }
     }
 
     const yearMatch = (info.publishedDate as string | undefined)?.match(/\b(1\d{3}|20\d{2})\b/)
@@ -382,26 +388,6 @@ export async function getEditions(workId: string, language = 'eng'): Promise<Edi
   // Editions with no OL language tag: include all — covers handled by back-fill below
   for (const { isbn, entry, coverId, coverUrl } of needsVerification) {
     confirmed.push(buildEdition(isbn, entry, coverId, coverUrl))
-  }
-
-  // Validate OL cover_id images — OL occasionally stores placeholder images against
-  // real cover IDs. Run up to 15 validations in parallel; invalid ones are cleared
-  // so they fall through to the GB backfill below.
-  const withOLCover = confirmed.filter((e) => e.cover_url !== null)
-  if (withOLCover.length > 0) {
-    const CONCURRENCY = 15
-    let ci = 0
-    const olValid: boolean[] = new Array(withOLCover.length)
-    async function olWorker() {
-      while (ci < withOLCover.length) {
-        const idx = ci++
-        olValid[idx] = await isRealCoverImage(withOLCover[idx].cover_url!)
-      }
-    }
-    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, withOLCover.length) }, olWorker))
-    for (let i = 0; i < withOLCover.length; i++) {
-      if (!olValid[i]) withOLCover[i].cover_url = null
-    }
   }
 
   // Back-fill missing critical fields: cover, year, publisher, format
