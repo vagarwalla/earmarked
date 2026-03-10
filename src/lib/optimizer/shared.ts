@@ -57,7 +57,9 @@ export function buildBookOptions(
         (item.conditions ?? []).includes(l.condition_normalized) &&
         (item.max_price == null || l.price <= item.max_price)
     )
-    return { item, listings: qualified.sort((a, b) => a.price - b.price) }
+    // Sort by total standalone cost (price + shipping_base) so candidate selection
+    // in all strategies considers actual cost, not just book price.
+    return { item, listings: qualified.sort((a, b) => (a.price + a.shipping_base) - (b.price + b.shipping_base)) }
   })
 }
 

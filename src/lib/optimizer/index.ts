@@ -28,10 +28,12 @@ export function optimize(
 
   const grand_total = groups.reduce((s, g) => s + g.group_total, 0)
 
-  // Naive baseline: each book bought separately at cheapest price + $3.99 shipping
+  // Naive baseline: each book bought separately at cheapest total cost (price + actual shipping).
+  // listings[0] is cheapest by total cost after buildBookOptions sorts by price + shipping_base.
   const naive_total = bookOptions.reduce((sum, { item, listings }) => {
     if (listings.length === 0) return sum
-    return sum + (listings[0].price + 3.99) * item.quantity
+    const l = listings[0]
+    return sum + (l.price + l.shipping_base) * item.quantity
   }, 0)
 
   return {

@@ -29,8 +29,11 @@ export const greedyStrategy: OptimizerStrategy = {
     const sellerScores = Array.from(sellerCatalog.entries())
       .map(([sellerId, { catalog }]) => {
         const ids = Array.from(unassigned).filter((id) => catalog.has(id))
-        const totalBookCost = ids.reduce((s, id) => s + (catalog.get(id)?.price ?? 0), 0)
-        return { sellerId, bookCount: ids.length, score: totalBookCost + shippingCost(ids.length) }
+        const listings = ids.map((id) => catalog.get(id)!)
+        const totalBookCost = listings.reduce((s, l) => s + l.price, 0)
+        // Use the seller's actual shipping base (same for all listings from this seller)
+        const shippingBase = listings[0]?.shipping_base ?? 3.99
+        return { sellerId, bookCount: ids.length, score: totalBookCost + shippingCost(ids.length, shippingBase) }
       })
       .sort((a, b) => b.bookCount !== a.bookCount ? b.bookCount - a.bookCount : a.score - b.score)
 
