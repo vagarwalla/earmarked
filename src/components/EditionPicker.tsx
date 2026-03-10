@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { Loader2, Star, ChevronDown, X, Check } from 'lucide-react'
+import { Loader2, Star, ChevronDown, X, Check, Sparkles } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import type { BookSearchResult, Edition, Format } from '@/lib/types'
@@ -233,6 +233,34 @@ function SectionHeader({
   )
 }
 
+// ── AI-grouping cache (localStorage, 24-hour TTL) ──────────────────────────
+interface AiGroupCache {
+  timestamp: number
+  clusterUrls: string[]
+  mergeGroups: number[]
+  clusterLabels: Record<string, string>
+}
+
+function aiCacheKey(workId: string, lang: string) {
+  return `earmarked:ai-groups:${workId}:${lang}`
+}
+
+function loadAiCache(workId: string, lang: string): AiGroupCache | null {
+  try {
+    const raw = localStorage.getItem(aiCacheKey(workId, lang))
+    if (!raw) return null
+    const parsed: AiGroupCache = JSON.parse(raw)
+    if (Date.now() - parsed.timestamp > 24 * 60 * 60 * 1000) return null
+    return parsed
+  } catch { return null }
+}
+
+function saveAiCache(workId: string, lang: string, clusterUrls: string[], mergeGroups: number[], clusterLabels: Record<string, string>) {
+  try {
+    localStorage.setItem(aiCacheKey(workId, lang), JSON.stringify({ timestamp: Date.now(), clusterUrls, mergeGroups, clusterLabels }))
+  } catch { /* ignore quota errors */ }
+}
+
 export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
   const [editions, setEditions] = useState<Edition[]>([])
   const [loading, setLoading] = useState(false)
@@ -252,7 +280,6 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
   // AI text labels for visual sections: clusterRep URL → label string
   const [clusterLabels, setClusterLabels] = useState<Record<string, string>>({})
   const [labelsLoading, setLabelsLoading] = useState(false)
-  const labelsFetchedRef = useRef(false)
 
   useEffect(() => {
     if (!book || !open) return
@@ -268,7 +295,6 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
     setAiCheckLoading(false)
     setClusterLabels({})
     setLabelsLoading(false)
-    labelsFetchedRef.current = false
     fetch(`/api/editions?workId=${encodeURIComponent(book.work_id)}&language=${language}`)
       .then((r) => r.json())
       .then((data) => {
@@ -416,34 +442,73 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
     return sections
   }, [hashMap, filtered])
 
-  // Step 2: Claude sanity check — send one rep per dHash cluster, get final merged groups
+  // Restore AI grouping from localStorage cache when dHash is ready
   useEffect(() => {
-    if (groupBy !== 'visual') return
-    if (hashMap.size === 0) return           // dHash not ready yet
-    if (aiMergeMap.size > 0 || aiCheckLoading) return  // already done or in flight
-    if (dHashSections.length < 2) return     // nothing to merge
+    if (hashMap.size === 0 || aiMergeMap.size > 0 || !book) return
+    const cached = loadAiCache(book.work_id, language)
+    if (!cached) return
+    const clusterUrls = dHashSections.map(s => s.clusterRep).filter((u): u is string => u !== null)
+    const cachedSet = new Set(cached.clusterUrls)
+    if (clusterUrls.length !== cachedSet.size || clusterUrls.some(u => !cachedSet.has(u))) return
+    const map = new Map<string, number>()
+    cached.clusterUrls.forEach((url, i) => map.set(url, cached.mergeGroups[i]))
+    setAiMergeMap(map)
+    setClusterLabels(cached.clusterLabels)
+  }, [hashMap.size, dHashSections, aiMergeMap.size, book, language])
 
-    const clusterUrls = dHashSections
-      .map(s => s.clusterRep)
-      .filter((u): u is string => u !== null)
-
+  async function runAiEnhance() {
+    const clusterUrls = dHashSections.map(s => s.clusterRep).filter((u): u is string => u !== null)
     if (clusterUrls.length < 2) return
-
     setAiCheckLoading(true)
-    fetch('/api/cover-groups', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clusterUrls }),
-    })
-      .then(r => r.json())
-      .then((data: { groups: number[] }) => {
-        const map = new Map<string, number>()
-        clusterUrls.forEach((url, i) => map.set(url, data.groups[i]))
-        setAiMergeMap(map)
+    try {
+      // Step 1: merge check
+      const groupsRes = await fetch('/api/cover-groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clusterUrls }),
       })
-      .catch(() => { /* leave aiMergeMap empty — fall back to dHash sections */ })
-      .finally(() => setAiCheckLoading(false))
-  }, [groupBy, hashMap, dHashSections, aiMergeMap.size, aiCheckLoading])
+      const groupsData: { groups: number[] } = await groupsRes.json()
+      const map = new Map<string, number>()
+      clusterUrls.forEach((url, i) => map.set(url, groupsData.groups[i]))
+      setAiMergeMap(map)
+
+      // Compute merged sections to pass to label-clusters
+      const mergedMap = new Map<number, { clusterRep: string | null; groups: CoverGroup[] }>()
+      for (const section of dHashSections) {
+        const finalId = section.clusterRep != null
+          ? (map.get(section.clusterRep) ?? dHashSections.indexOf(section))
+          : dHashSections.indexOf(section)
+        if (!mergedMap.has(finalId)) mergedMap.set(finalId, { clusterRep: section.clusterRep, groups: [] })
+        mergedMap.get(finalId)!.groups.push(...section.groups)
+      }
+      const mergedSections = Array.from(mergedMap.entries()).sort(([a], [b]) => a - b).map(([, s]) => s)
+
+      // Step 2: labels
+      setLabelsLoading(true)
+      const clusters = mergedSections
+        .filter(s => s.clusterRep !== null && s.groups.length > 0)
+        .map(s => ({
+          id: s.clusterRep!,
+          editions: s.groups.flatMap(g => g.editions).map(e => ({
+            publisher: e.publisher, year: e.publish_year, format: e.format, edition_name: e.edition_name,
+          })),
+        }))
+      const labelsRes = await fetch('/api/label-clusters', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clusters }),
+      })
+      const labelsData: Record<string, string> = await labelsRes.json()
+      setClusterLabels(labelsData)
+      setLabelsLoading(false)
+
+      // Cache results for 24 h
+      if (book) saveAiCache(book.work_id, language, clusterUrls, groupsData.groups, labelsData)
+    } catch { /* fall back to dHash sections */ } finally {
+      setAiCheckLoading(false)
+      setLabelsLoading(false)
+    }
+  }
 
   // Step 3: Apply AI merge map to produce final sections
   const visualSections = useMemo((): { clusterRep: string | null; groups: CoverGroup[] }[] => {
@@ -475,26 +540,6 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
     setTitleFilter(new Set())
   }
 
-  // Fetch AI text labels once visualSections are stable (after AI merge or dHash fallback)
-  useEffect(() => {
-    if (hashMap.size === 0 || labelsLoading || labelsFetchedRef.current) return
-    // Wait for AI merge to settle (either done or failed gracefully)
-    if (aiCheckLoading) return
-    labelsFetchedRef.current = true
-    setLabelsLoading(true)
-    const clusters = visualSections
-      .filter((s) => s.clusterRep !== null && s.groups.length > 0)
-      .map((s) => ({
-        id: s.clusterRep!,
-        editions: s.groups.flatMap((g) => g.editions).map((e) => ({
-          publisher: e.publisher, year: e.publish_year, format: e.format, edition_name: e.edition_name,
-        })),
-      }))
-    fetch('/api/label-clusters', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clusters }) })
-      .then((r) => r.json())
-      .then((data: Record<string, string>) => { setClusterLabels(data); setLabelsLoading(false) })
-      .catch(() => setLabelsLoading(false))
-  }, [hashMap.size, aiCheckLoading]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function toggleCard(key: string) {
     setSelectedKeys((prev) => {
@@ -615,7 +660,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
                 onClick={() => setGroupBy('visual')}
               >
                 Visual
-                {groupBy === 'visual' && (hashesLoading || aiCheckLoading || labelsLoading) && (
+                {groupBy === 'visual' && hashesLoading && (
                   <Loader2 className="h-3 w-3 animate-spin" />
                 )}
               </button>
@@ -657,6 +702,25 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
             </div>
           ) : (
             <div className="space-y-4 py-2">
+              {hashMap.size > 0 && aiMergeMap.size === 0 && dHashSections.length >= 2 && (
+                aiCheckLoading ? (
+                  <div className="flex items-center justify-center gap-2 py-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Analyzing covers with AI…
+                  </div>
+                ) : (
+                  <div className="flex justify-center">
+                    <button
+                      onClick={runAiEnhance}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg border border-dashed border-amber-400 text-amber-700 hover:bg-amber-50 text-sm transition-colors"
+                    >
+                      <Sparkles className="h-4 w-4" />
+                      Improve grouping with AI
+                    </button>
+                  </div>
+                )
+              )}
+            <div className="space-y-4">
               {visualSections.map((section, sectionIdx) => {
                 const sectionLabel = section.clusterRep
                   ? (clusterLabels[section.clusterRep] ?? (labelsLoading ? '…' : `Cover design ${sectionIdx + 1}`))
@@ -672,6 +736,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
                   </div>
                 )
               })}
+            </div>
             </div>
           )}
         </div>
