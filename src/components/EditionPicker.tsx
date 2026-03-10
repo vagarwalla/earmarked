@@ -473,7 +473,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
                             )}
                           </div>
                           <div className="text-sm leading-snug space-y-1 min-h-[72px]">
-                            {rep.edition_name && <div className="font-medium text-foreground line-clamp-2">{rep.edition_name}</div>}
+                            {(rep.edition_name || rep.title) && <div className="font-medium text-foreground line-clamp-2">{rep.edition_name || rep.title}</div>}
                             {rep.publisher && <div className="text-muted-foreground line-clamp-2">{rep.publisher}</div>}
                             <div className="text-muted-foreground">{rep.publish_year ?? ''}</div>
                             {rep.pages && <div className="text-muted-foreground text-xs">{rep.pages} pp</div>}
@@ -535,7 +535,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
                             )}
                           </div>
                           <div className="text-sm leading-snug space-y-1 min-h-[72px]">
-                            {rep.edition_name && <div className="font-medium text-foreground line-clamp-2">{rep.edition_name}</div>}
+                            {(rep.edition_name || rep.title) && <div className="font-medium text-foreground line-clamp-2">{rep.edition_name || rep.title}</div>}
                             {rep.publisher && <div className="text-muted-foreground line-clamp-2">{rep.publisher}</div>}
                             <div className="text-muted-foreground">{rep.publish_year ?? ''}</div>
                             {rep.pages && <div className="text-muted-foreground text-xs">{rep.pages} pp</div>}
