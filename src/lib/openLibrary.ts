@@ -111,7 +111,7 @@ async function fetchSeriesBooks(seriesKey: string, existing: BookSearchResult[])
   return books
 }
 
-/** If most GB results share a series name that matches the query, return sorted results */
+/** If GB results show a series matching the query, sort all results by series number */
 function detectGBSeriesSearch(
   query: string,
   results: BookSearchResult[],
@@ -130,7 +130,6 @@ function detectGBSeriesSearch(
   }
   if (seriesCounts.size === 0) return null
 
-  // Find the dominant series
   let bestSeries = ''
   let bestCount = 0
   for (const [s, c] of seriesCounts) {
@@ -138,15 +137,13 @@ function detectGBSeriesSearch(
   }
   if (bestCount < 2) return null
 
-  // Filter to just books in that series and sort by series number
-  const seriesBooks = results
-    .filter(r => r.series === bestSeries)
-    .sort((a, b) => {
-      const na = a.series_number ? parseInt(a.series_number) : Infinity
-      const nb = b.series_number ? parseInt(b.series_number) : Infinity
-      return na - nb
-    })
-  return seriesBooks
+  // Propagate the series name to all results that don't have one yet, then sort all
+  const enriched = results.map(r => ({ ...r, series: r.series ?? bestSeries }))
+  return enriched.sort((a, b) => {
+    const na = a.series_number ? parseInt(a.series_number) : Infinity
+    const nb = b.series_number ? parseInt(b.series_number) : Infinity
+    return na - nb
+  })
 }
 
 type GBMatch = { series: string; number: string | null }
