@@ -254,7 +254,8 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-5xl w-[90vw] max-h-[90vh] flex flex-col">
+      <DialogContent className="max-w-5xl w-[90vw] p-0 overflow-hidden">
+        <div className="flex flex-col h-[min(90vh,780px)] p-4 gap-3">
         <DialogHeader>
           <DialogTitle>Choose cover — {book?.title}</DialogTitle>
         </DialogHeader>
@@ -404,6 +405,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
               ? `Add ${previewEdition.edition_name || previewEdition.publisher || 'this edition'}`
               : 'Select a cover'}
           </Button>
+        </div>
         </div>
       </DialogContent>
     </Dialog>

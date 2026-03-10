@@ -295,10 +295,10 @@ export async function getEditions(workId: string, language = 'eng'): Promise<Edi
     }
   }
 
-  // Verify untagged editions via Google Books (cap at 40 to stay fast)
+  // Verify untagged editions via Google Books (cap at 8 to stay fast)
   if (language && needsVerification.length > 0) {
     const gbLangCode = OL_TO_GB_LANG[language] ?? language.slice(0, 2)
-    const toCheck = needsVerification.slice(0, 40)
+    const toCheck = needsVerification.slice(0, 8)
     const gbLanguages = await Promise.all(toCheck.map(({ isbn }) => fetchGoogleBooksLanguage(isbn)))
     for (let i = 0; i < toCheck.length; i++) {
       const gbLang = gbLanguages[i]
