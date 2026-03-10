@@ -220,15 +220,23 @@ const OL_TO_GB_LANG: Record<string, string> = {
 
 async function fetchGoogleBooksInfo(isbn: string): Promise<{ language: string | null; coverUrl: string | null }> {
   try {
-    const url = `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}&fields=items(volumeInfo/language,volumeInfo/imageLinks)&maxResults=1`
+    const url = `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}&fields=items(id,volumeInfo/language,volumeInfo/imageLinks)&maxResults=1`
     const res = await fetch(url, { next: { revalidate: 86400 } })
     if (!res.ok) return { language: null, coverUrl: null }
     const data = await res.json()
-    const info = data.items?.[0]?.volumeInfo
-    const thumbnail = (info?.imageLinks?.thumbnail as string | undefined)
-      ?.replace('http://', 'https://')
-      .replace('&zoom=1', '&zoom=0') ?? null
-    return { language: (info?.language as string) ?? null, coverUrl: thumbnail }
+    const item = data.items?.[0]
+    if (!item) return { language: null, coverUrl: null }
+    const info = item.volumeInfo
+    const volumeId: string | null = (item.id as string) ?? null
+    // Prefer thumbnail > smallThumbnail; fall back to constructing from volume ID
+    const rawThumb = (info?.imageLinks?.thumbnail as string | undefined)
+      ?? (info?.imageLinks?.smallThumbnail as string | undefined)
+    const coverUrl = rawThumb
+      ? rawThumb.replace('http://', 'https://').replace('&zoom=1', '&zoom=0')
+      : volumeId
+        ? `https://books.google.com/books/content?id=${volumeId}&printsec=frontcover&img=1&zoom=1&source=gbs_api`
+        : null
+    return { language: (info?.language as string) ?? null, coverUrl }
   } catch {
     return { language: null, coverUrl: null }
   }
