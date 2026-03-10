@@ -475,7 +475,10 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
                           <div className="text-sm leading-snug space-y-1 min-h-[72px]">
                             {(rep.edition_name || rep.title) && <div className="font-medium text-foreground line-clamp-2">{rep.edition_name || rep.title}</div>}
                             {rep.publisher && <div className="text-muted-foreground line-clamp-2">{rep.publisher}</div>}
-                            <div className="text-muted-foreground">{rep.publish_year ?? ''}</div>
+                            <div className="flex justify-between items-baseline gap-1">
+                              <span className="text-muted-foreground">{rep.publish_year ?? ''}</span>
+                              <span className="text-[10px] text-muted-foreground/60 shrink-0">{rep.isbn}</span>
+                            </div>
                             {rep.pages && <div className="text-muted-foreground text-xs">{rep.pages} pp</div>}
                             <div className="flex flex-wrap gap-1 pt-0.5">
                               {group.formats.filter((f) => f !== 'any').map((f) => (
@@ -537,7 +540,10 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
                           <div className="text-sm leading-snug space-y-1 min-h-[72px]">
                             {(rep.edition_name || rep.title) && <div className="font-medium text-foreground line-clamp-2">{rep.edition_name || rep.title}</div>}
                             {rep.publisher && <div className="text-muted-foreground line-clamp-2">{rep.publisher}</div>}
-                            <div className="text-muted-foreground">{rep.publish_year ?? ''}</div>
+                            <div className="flex justify-between items-baseline gap-1">
+                              <span className="text-muted-foreground">{rep.publish_year ?? ''}</span>
+                              <span className="text-[10px] text-muted-foreground/60 shrink-0">{rep.isbn}</span>
+                            </div>
                             {rep.pages && <div className="text-muted-foreground text-xs">{rep.pages} pp</div>}
                             <div className="flex flex-wrap gap-1 pt-0.5">
                               {group.formats.filter((f) => f !== 'any').map((f) => (
