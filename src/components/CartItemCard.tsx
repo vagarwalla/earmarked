@@ -41,15 +41,15 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover }: Props)
     <div className={`flex gap-3 p-3 rounded-lg border bg-card transition-opacity ${saving ? 'opacity-60' : ''}`}>
       {/* Cover */}
       <div className="shrink-0">
-        <div className="w-12 h-16 bg-muted rounded overflow-hidden">
+        <div className="w-20 h-28 bg-muted rounded overflow-hidden">
           {item.cover_url ? (
             <img src={item.cover_url} alt={item.title} className="w-full h-full object-cover" />
           ) : (
-            <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground">?</div>
+            <div className="w-full h-full flex items-center justify-center text-sm text-muted-foreground">?</div>
           )}
         </div>
         <button
-          className="mt-1 w-12 flex justify-center text-muted-foreground hover:text-foreground"
+          className="mt-1 w-20 flex justify-center text-muted-foreground hover:text-foreground"
           onClick={() => onChangeCover(item)}
           title="Change cover"
         >
@@ -61,8 +61,8 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover }: Props)
       <div className="flex-1 min-w-0 space-y-2">
         <div className="flex items-start justify-between gap-2">
           <div>
-            <div className="font-medium text-sm leading-tight">{item.title}</div>
-            {item.author && <div className="text-xs text-muted-foreground">{item.author}</div>}
+            <div className="font-medium text-base leading-tight">{item.title}</div>
+            {item.author && <div className="text-sm text-muted-foreground">{item.author}</div>}
           </div>
           <button onClick={() => onRemove(item.id)} className="text-muted-foreground hover:text-destructive shrink-0">
             <X className="h-4 w-4" />
