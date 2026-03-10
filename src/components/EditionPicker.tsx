@@ -160,7 +160,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
               No editions found for this filter.
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5 py-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-5 py-2">
               {sorted.map((group) => {
                 const rep = bestEdition(group, formatFilter)
                 const isSelected = group.key === selectedKey
@@ -188,18 +188,18 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
                         <Star className="h-3.5 w-3.5 text-white fill-white" />
                       </div>
                     )}
-                    <div className="aspect-[2/3] bg-muted rounded overflow-hidden mb-3 min-h-[240px]">
+                    <div className="aspect-[2/3] bg-muted rounded overflow-hidden mb-3">
                       <img
                         src={group.cover_url}
                         alt={rep.title}
                         className="w-full h-full object-cover"
                       />
                     </div>
-                    <div className="text-sm leading-snug space-y-1">
+                    <div className="text-sm leading-snug space-y-1 min-h-[72px]">
                       {rep.edition_name && (
-                        <div className="font-medium text-foreground truncate">{rep.edition_name}</div>
+                        <div className="font-medium text-foreground line-clamp-2">{rep.edition_name}</div>
                       )}
-                      <div className="text-muted-foreground truncate">
+                      <div className="text-muted-foreground line-clamp-2">
                         {rep.publisher || 'Unknown'}{rep.publish_year ? ` · ${rep.publish_year}` : ''}
                       </div>
                       {rep.pages && (
