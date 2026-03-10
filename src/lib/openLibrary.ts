@@ -4,19 +4,72 @@ const BASE = 'https://openlibrary.org'
 const COVERS = 'https://covers.openlibrary.org'
 
 export async function searchBooks(query: string): Promise<BookSearchResult[]> {
-  const url = `${BASE}/search.json?q=${encodeURIComponent(query)}&fields=title,author_name,key,cover_i,first_publish_year,series&limit=10`
-  const res = await fetch(url, { next: { revalidate: 3600 } })
-  if (!res.ok) return []
-  const data = await res.json()
+  const olUrl = `${BASE}/search.json?q=${encodeURIComponent(query)}&fields=title,author_name,key,cover_i,first_publish_year,series&limit=10`
+  const gbUrl = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=20`
 
-  return (data.docs || []).map((doc: Record<string, unknown>) => ({
-    title: doc.title as string,
-    author: Array.isArray(doc.author_name) ? (doc.author_name as string[])[0] : 'Unknown',
-    work_id: doc.key as string,
-    cover_url: doc.cover_i ? `${COVERS}/b/id/${doc.cover_i}-M.jpg` : null,
-    first_publish_year: doc.first_publish_year as number | null,
-    series: Array.isArray(doc.series) ? (doc.series as string[])[0] : null,
-  }))
+  const [olRes, gbRes] = await Promise.all([
+    fetch(olUrl, { next: { revalidate: 3600 } }),
+    fetch(gbUrl, { next: { revalidate: 3600 } }).catch(() => null),
+  ])
+
+  if (!olRes.ok) return []
+  const olData = await olRes.json()
+
+  const gbTitlesWithSeries: Array<{ bookTitle: string; series: string }> = []
+  if (gbRes?.ok) {
+    const gbData = await gbRes.json()
+    for (const item of gbData.items || []) {
+      const gbTitle: string = item.volumeInfo?.title || ''
+      const extracted = extractSeriesFromGBTitle(gbTitle)
+      if (extracted) gbTitlesWithSeries.push(extracted)
+    }
+  }
+
+  return (olData.docs || []).map((doc: Record<string, unknown>) => {
+    const olTitle = doc.title as string
+    const olSeries = Array.isArray(doc.series) ? (doc.series as string[])[0] : null
+    const series = olSeries ?? matchSeries(olTitle, gbTitlesWithSeries)
+    return {
+      title: olTitle,
+      author: Array.isArray(doc.author_name) ? (doc.author_name as string[])[0] : 'Unknown',
+      work_id: doc.key as string,
+      cover_url: doc.cover_i ? `${COVERS}/b/id/${doc.cover_i}-M.jpg` : null,
+      first_publish_year: doc.first_publish_year as number | null,
+      series,
+    }
+  })
+}
+
+function extractSeriesFromGBTitle(gbTitle: string): { bookTitle: string; series: string } | null {
+  // Pattern 1: "Series: Book Title" or "Series #N: Book Title"
+  // e.g., "Lockwood & Co.: The Screaming Staircase" or "Lockwood & Co. 1: The Screaming Staircase"
+  const colonIdx = gbTitle.indexOf(':')
+  if (colonIdx > 0) {
+    const prefix = gbTitle.slice(0, colonIdx).trim()
+    const seriesName = prefix.replace(/[,\s]*(book\s+)?#?\d+\s*$/i, '').trim()
+    const bookTitle = gbTitle.slice(colonIdx + 1).trim()
+    if (seriesName.length > 1 && bookTitle.length > 1) {
+      return { bookTitle, series: seriesName }
+    }
+  }
+  // Pattern 2: "Book Title (Series, #N)" or "Book Title (Series Book N)"
+  const parenMatch = gbTitle.match(/^(.+?)\s*\(([^)]+?)(?:[,\s]+(?:book\s+)?#?\d+)?\)\s*$/i)
+  if (parenMatch) {
+    return { bookTitle: parenMatch[1].trim(), series: parenMatch[2].trim() }
+  }
+  return null
+}
+
+function matchSeries(olTitle: string, candidates: Array<{ bookTitle: string; series: string }>): string | null {
+  const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim()
+  const normOL = normalize(olTitle)
+  for (const { bookTitle, series } of candidates) {
+    const normGB = normalize(bookTitle)
+    if (normOL === normGB || normOL.includes(normGB) || normGB.includes(normOL)) {
+      return series
+    }
+  }
+  return null
 }
 
 export function detectFormat(title: string, physDesc: string | null): Format {

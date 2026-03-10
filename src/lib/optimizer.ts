@@ -1,5 +1,4 @@
-import type { CartItem, Listing, SellerGroup, OptimizationResult, Condition } from './types'
-import { conditionMeets } from './abebooks'
+import type { CartItem, Listing, SellerGroup, OptimizationResult } from './types'
 
 // AbeBooks standard US shipping estimate
 function shippingCost(n: number, base = 3.99, perAdditional = 1.99): number {
@@ -23,7 +22,8 @@ export function optimize(
       ? listingsByIsbn.get(item.isbn_preferred) || []
       : []
     const qualified = rawListings.filter((l) =>
-      conditionMeets(l.condition_normalized, item.condition_min as Condition)
+      (item.conditions ?? []).includes(l.condition_normalized) &&
+      (item.max_price == null || l.price <= item.max_price)
     )
     return { item, listings: qualified.sort((a, b) => a.price - b.price) }
   })
@@ -99,12 +99,17 @@ export function optimize(
     }
   }
 
-  // Remaining unassigned: assign to globally cheapest listing
+  // Remaining unassigned: assign to globally cheapest listing.
+  // Fall back to raw (unfiltered) listings as an estimate if no condition-filtered ones exist.
   for (const itemId of unassigned) {
     const bookOpt = bookOptions.find((b) => b.item.id === itemId)!
-    if (bookOpt.listings.length > 0) {
-      const cheapest = bookOpt.listings[0]
-      assignment.set(itemId, { item: bookOpt.item, listing: cheapest })
+    let listingsToUse = bookOpt.listings
+    if (listingsToUse.length === 0 && bookOpt.item.isbn_preferred) {
+      const raw = listingsByIsbn.get(bookOpt.item.isbn_preferred) ?? []
+      listingsToUse = [...raw].sort((a, b) => a.price - b.price)
+    }
+    if (listingsToUse.length > 0) {
+      assignment.set(itemId, { item: bookOpt.item, listing: listingsToUse[0] })
     }
   }
 

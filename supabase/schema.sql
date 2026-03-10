@@ -2,7 +2,10 @@ CREATE TABLE carts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   slug TEXT UNIQUE NOT NULL,
   name TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT now()
+  created_at TIMESTAMPTZ DEFAULT now(),
+  default_conditions TEXT[] DEFAULT ARRAY['new', 'like_new'],
+  default_format TEXT DEFAULT 'any',
+  default_max_price NUMERIC DEFAULT NULL
 );
 
 CREATE TABLE cart_items (
@@ -14,7 +17,8 @@ CREATE TABLE cart_items (
   isbn_preferred TEXT,
   cover_url TEXT,
   format TEXT DEFAULT 'any', -- 'hardcover' | 'paperback' | 'any'
-  condition_min TEXT DEFAULT 'like_new', -- 'new' | 'like_new' | 'very_good' | 'good'
+  conditions TEXT[] DEFAULT ARRAY['new', 'like_new'], -- acceptable conditions
+  max_price NUMERIC DEFAULT NULL,
   flexible BOOLEAN DEFAULT false,
   quantity INT DEFAULT 1,
   sort_order INT DEFAULT 0,

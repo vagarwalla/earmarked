@@ -7,6 +7,9 @@ export interface Cart {
   name: string
   created_at: string
   item_count?: number
+  default_conditions: Condition[]
+  default_format: Format
+  default_max_price: number | null
 }
 
 export interface CartItem {
@@ -19,6 +22,7 @@ export interface CartItem {
   cover_url: string | null
   format: Format
   conditions: Condition[]
+  max_price: number | null
   flexible: boolean
   quantity: number
   sort_order: number
@@ -31,6 +35,7 @@ export interface BookSearchResult {
   work_id: string // Open Library work ID e.g. "/works/OL45804W"
   cover_url: string | null
   first_publish_year: number | null
+  series: string | null
 }
 
 export interface Edition {
@@ -40,7 +45,9 @@ export interface Edition {
   publish_year: number | null
   format: Format
   cover_url: string | null
-  edition_note: string | null // e.g. "Penguin Classics", "First Edition"
+  cover_id: number | null
+  edition_name: string | null  // e.g. "Penguin Classics", "Revised Edition"
+  pages: number | null
 }
 
 export interface Listing {

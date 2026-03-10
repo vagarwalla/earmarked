@@ -17,6 +17,24 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ slu
   }
 }
 
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ slug: string }> }) {
+  try {
+    const { slug } = await params
+    const body = await req.json()
+    const { data, error } = await supabase
+      .from('carts')
+      .update(body)
+      .eq('slug', slug)
+      .select()
+      .single()
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json(data)
+  } catch (err) {
+    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+  }
+}
+
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ slug: string }> }) {
   try {
     const { slug } = await params

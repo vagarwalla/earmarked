@@ -31,15 +31,17 @@ function toggleCondition(current: Condition[], value: Condition): Condition[] {
 
 export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCover }: Props) {
   const [saving, setSaving] = useState(false)
+  const [maxPriceInput, setMaxPriceInput] = useState(item.max_price != null ? String(item.max_price) : '')
 
   async function patch(updates: Partial<CartItem>) {
     setSaving(true)
-    await fetch(`/api/cart/${encodeURIComponent(window.location.pathname.split('/').pop()!)}/items/${item.id}`, {
+    const res = await fetch(`/api/cart/${encodeURIComponent(window.location.pathname.split('/').pop()!)}/items/${item.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
     })
-    onUpdate(item.id, updates)
+    const saved = await res.json()
+    onUpdate(item.id, res.ok ? saved : updates)
     setSaving(false)
   }
 
@@ -123,29 +125,52 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
           </button>
         </div>
 
-        {/* Quantity */}
-        <div className="flex items-center gap-1">
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-6 w-6"
-            disabled={item.quantity <= 1}
-            onClick={() => patch({ quantity: item.quantity - 1 })}
-          >
-            <Minus className="h-3 w-3" />
-          </Button>
-          <span className="text-sm w-6 text-center">{item.quantity}</span>
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-6 w-6"
-            onClick={() => patch({ quantity: item.quantity + 1 })}
-          >
-            <Plus className="h-3 w-3" />
-          </Button>
-          <span className="text-xs text-muted-foreground ml-1">cop{item.quantity === 1 ? 'y' : 'ies'}</span>
+        {/* Quantity + max price */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1">
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-6 w-6"
+              disabled={item.quantity <= 1}
+              onClick={() => patch({ quantity: item.quantity - 1 })}
+            >
+              <Minus className="h-3 w-3" />
+            </Button>
+            <span className="text-sm w-6 text-center">{item.quantity}</span>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => patch({ quantity: item.quantity + 1 })}
+            >
+              <Plus className="h-3 w-3" />
+            </Button>
+            <span className="text-xs text-muted-foreground ml-1">cop{item.quantity === 1 ? 'y' : 'ies'}</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-muted-foreground">max</span>
+            <div className="relative">
+              <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">$</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="—"
+                value={maxPriceInput}
+                onChange={(e) => setMaxPriceInput(e.target.value)}
+                onBlur={() => {
+                  const val = maxPriceInput.trim() === '' ? null : parseFloat(maxPriceInput)
+                  if (val === null || (!isNaN(val) && val >= 0)) {
+                    patch({ max_price: val })
+                  }
+                }}
+                className="h-6 w-16 pl-4 pr-1 text-xs border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+            </div>
+          </div>
           {item.isbn_preferred && (
-            <Badge variant="outline" className="text-[10px] ml-2 font-normal">
+            <Badge variant="outline" className="text-[10px] font-normal">
               ISBN {item.isbn_preferred}
             </Badge>
           )}
