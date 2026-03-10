@@ -59,16 +59,110 @@ function bestEdition(group: CoverGroup, formatFilter: Format): Edition {
   })[0]
 }
 
+function YearRangeDropdown({
+  availableYears,
+  range,
+  onChange,
+}: {
+  availableYears: number[]
+  range: { min: number | null; max: number | null }
+  onChange: (range: { min: number | null; max: number | null }) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const hasFilter = range.min !== null || range.max !== null
+  const minYear = availableYears[0]
+  const maxYear = availableYears[availableYears.length - 1]
+  const label = hasFilter
+    ? `${range.min ?? minYear}–${range.max ?? maxYear}`
+    : 'Year'
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className={`flex items-center gap-1.5 h-8 px-2.5 rounded-lg border text-sm transition-colors whitespace-nowrap ${
+          hasFilter
+            ? 'border-primary bg-primary/5 text-primary'
+            : 'border-input hover:bg-muted text-foreground'
+        }`}
+      >
+        {label}
+        <ChevronDown className="h-3.5 w-3.5 opacity-50 shrink-0" />
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-50 bg-popover text-popover-foreground shadow-md rounded-lg ring-1 ring-foreground/10 p-3 min-w-[200px]">
+          <div className="flex items-center gap-2">
+            <div className="flex flex-col gap-1 flex-1">
+              <label className="text-xs text-muted-foreground">From</label>
+              <select
+                value={range.min ?? ''}
+                onChange={(e) => {
+                  const val = e.target.value ? Number(e.target.value) : null
+                  onChange({ min: val, max: range.max && val && range.max < val ? val : range.max })
+                }}
+                className="h-8 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="">Any</option>
+                {availableYears.map((y) => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+            </div>
+            <span className="text-muted-foreground mt-4">–</span>
+            <div className="flex flex-col gap-1 flex-1">
+              <label className="text-xs text-muted-foreground">To</label>
+              <select
+                value={range.max ?? ''}
+                onChange={(e) => {
+                  const val = e.target.value ? Number(e.target.value) : null
+                  onChange({ min: range.min && val && range.min > val ? val : range.min, max: val })
+                }}
+                className="h-8 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="">Any</option>
+                {availableYears.map((y) => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {hasFilter && (
+            <button
+              onClick={() => onChange({ min: null, max: null })}
+              className="flex items-center gap-1.5 mt-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <X className="h-3 w-3" /> Clear
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function MultiSelectDropdown<T extends string | number>({
   label,
   options,
   selected,
   onChange,
+  renderOption,
 }: {
   label: string
   options: T[]
   selected: Set<T>
   onChange: (next: Set<T>) => void
+  renderOption?: (opt: T) => string
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -136,7 +230,7 @@ function MultiSelectDropdown<T extends string | number>({
                     >
                       {isSelected && <X className="h-2.5 w-2.5 text-white" />}
                     </div>
-                    <span className="truncate">{String(opt)}</span>
+                    <span className="truncate">{renderOption ? renderOption(opt) : String(opt)}</span>
                   </button>
                 )
               })}
@@ -264,12 +358,12 @@ function saveAiCache(workId: string, lang: string, clusterUrls: string[], mergeG
 export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
   const [editions, setEditions] = useState<Edition[]>([])
   const [loading, setLoading] = useState(false)
-  const [formatFilter, setFormatFilter] = useState<Format>('any')
+  const [formatFilter, setFormatFilter] = useState<Set<Format>>(new Set())
   const [language, setLanguage] = useState('eng')
   // Ordered list of selected cover-group keys: index 0 = primary/top pick
   const [selectedKeys, setSelectedKeys] = useState<string[]>([])
   const [publisherFilter, setPublisherFilter] = useState<Set<string>>(new Set())
-  const [yearFilter, setYearFilter] = useState<Set<number>>(new Set())
+  const [yearRange, setYearRange] = useState<{ min: number | null; max: number | null }>({ min: null, max: null })
   const [titleFilter, setTitleFilter] = useState<Set<string>>(new Set())
   const [groupBy, setGroupBy] = useState<'publisher' | 'visual'>('publisher')
   const [hashMap, setHashMap] = useState<Map<string, bigint>>(new Map())
@@ -286,8 +380,9 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
     setLoading(true)
     setEditions([])
     setSelectedKeys([])
+    setFormatFilter(new Set())
     setPublisherFilter(new Set())
-    setYearFilter(new Set())
+    setYearRange({ min: null, max: null })
     setTitleFilter(new Set())
     setHashMap(new Map())
     setHashesLoading(false)
@@ -335,15 +430,25 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
     return set.size > 1 ? Array.from(set).sort((a, b) => a.localeCompare(b)) : []
   }, [coverGroups])
 
+  const effectiveFormat: Format = formatFilter.size === 1 ? [...formatFilter][0] : 'any'
+
   const filtered = useMemo(() => {
     return coverGroups.filter((group) => {
-      if (formatFilter !== 'any' && !group.editions.some((e) => e.format === formatFilter)) return false
+      if (formatFilter.size > 0 && !group.editions.some((e) => formatFilter.has(e.format))) return false
       if (publisherFilter.size > 0 && !group.editions.some((e) => e.publisher && publisherFilter.has(e.publisher))) return false
-      if (yearFilter.size > 0 && !group.editions.some((e) => e.publish_year != null && yearFilter.has(e.publish_year))) return false
+      if (yearRange.min !== null || yearRange.max !== null) {
+        const inRange = group.editions.some((e) => {
+          if (!e.publish_year) return false
+          if (yearRange.min !== null && e.publish_year < yearRange.min) return false
+          if (yearRange.max !== null && e.publish_year > yearRange.max) return false
+          return true
+        })
+        if (!inRange) return false
+      }
       if (titleFilter.size > 0 && !group.editions.some((e) => e.title && titleFilter.has(e.title))) return false
       return true
     })
-  }, [coverGroups, formatFilter, publisherFilter, yearFilter, titleFilter])
+  }, [coverGroups, formatFilter, publisherFilter, yearRange, titleFilter])
 
   const sorted = useMemo(() => {
     const earliestYear = (group: CoverGroup) =>
@@ -363,11 +468,12 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
   const firstEditionKey = sorted[0]?.key ?? null
 
   const publisherSections = useMemo(() => {
+    const fmt: Format = formatFilter.size === 1 ? [...formatFilter][0] : 'any'
     const normalizePublisher = (p: string | null) =>
       p?.trim().toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ') ?? ''
     const map = new Map<string, { label: string; groups: CoverGroup[] }>()
     for (const group of sorted) {
-      const rep = bestEdition(group, formatFilter)
+      const rep = bestEdition(group, fmt)
       const norm = normalizePublisher(rep.publisher)
       const key = norm || 'unknown'
       if (!map.has(key)) map.set(key, { label: rep.publisher || 'Unknown publisher', groups: [] })
@@ -532,11 +638,12 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
       .map(([, section]) => section)
   }, [dHashSections, aiMergeMap])
 
-  const hasActiveFilters = publisherFilter.size > 0 || yearFilter.size > 0 || titleFilter.size > 0
+  const hasActiveFilters = formatFilter.size > 0 || publisherFilter.size > 0 || yearRange.min !== null || yearRange.max !== null || titleFilter.size > 0
 
   function clearAllFilters() {
+    setFormatFilter(new Set())
     setPublisherFilter(new Set())
-    setYearFilter(new Set())
+    setYearRange({ min: null, max: null })
     setTitleFilter(new Set())
   }
 
@@ -567,7 +674,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
     const chosenEditions = selectedKeys
       .map((key) => {
         const group = coverGroups.find((g) => g.key === key)
-        return group ? bestEdition(group, formatFilter) : null
+        return group ? bestEdition(group, effectiveFormat) : null
       })
       .filter((e): e is Edition => e !== null)
     if (chosenEditions.length === 0) return
@@ -589,47 +696,25 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
           Pick one or more editions you&apos;d accept. First picked = top preference. All are searched for the best price.
         </p>
 
-        {/* Filters row 1: format + language */}
-        <div className="flex flex-wrap gap-2 shrink-0">
-          {(['any', 'hardcover', 'paperback'] as Format[]).map((f) => (
-            <Button
-              key={f}
-              variant={formatFilter === f ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setFormatFilter(f)}
-            >
-              {FORMAT_LABELS[f]}
-            </Button>
-          ))}
-          <div className="ml-auto flex gap-1 border rounded-md overflow-hidden text-sm">
-            <button
-              className={`px-3 py-1.5 transition-colors ${language === 'eng' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
-              onClick={() => setLanguage('eng')}
-            >
-              English
-            </button>
-            <button
-              className={`px-3 py-1.5 transition-colors ${language === '' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
-              onClick={() => setLanguage('')}
-            >
-              All languages
-            </button>
-          </div>
-        </div>
-
-        {/* Filters row 2: publisher + year */}
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
+        {/* Filters: single row */}
+        <div className="flex items-center gap-2 shrink-0 overflow-x-auto pb-0.5">
+          <MultiSelectDropdown
+            label="Format"
+            options={(['hardcover', 'paperback'] as Format[])}
+            selected={formatFilter}
+            onChange={setFormatFilter}
+            renderOption={(f) => FORMAT_LABELS[f as Format]}
+          />
           <MultiSelectDropdown
             label="Publisher"
             options={availablePublishers}
             selected={publisherFilter}
             onChange={setPublisherFilter}
           />
-          <MultiSelectDropdown
-            label="Year"
-            options={availableYears}
-            selected={yearFilter}
-            onChange={setYearFilter}
+          <YearRangeDropdown
+            availableYears={availableYears}
+            range={yearRange}
+            onChange={setYearRange}
           />
           {availableTitles.length > 0 && (
             <MultiSelectDropdown
@@ -639,24 +724,38 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
               onChange={setTitleFilter}
             />
           )}
+          <div className="flex gap-1 border rounded-md overflow-hidden text-sm shrink-0">
+            <button
+              className={`px-2.5 py-1.5 transition-colors whitespace-nowrap ${language === 'eng' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
+              onClick={() => setLanguage('eng')}
+            >
+              English
+            </button>
+            <button
+              className={`px-2.5 py-1.5 transition-colors whitespace-nowrap ${language === '' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
+              onClick={() => setLanguage('')}
+            >
+              All languages
+            </button>
+          </div>
           {hasActiveFilters && (
             <button
               onClick={clearAllFilters}
-              className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap shrink-0"
             >
-              <X className="h-3 w-3" /> Clear filters
+              <X className="h-3 w-3" /> Clear
             </button>
           )}
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-2 shrink-0">
             <div className="flex gap-0 border rounded-md overflow-hidden text-sm">
               <button
-                className={`px-2.5 py-1.5 transition-colors ${groupBy === 'publisher' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
+                className={`px-2.5 py-1.5 transition-colors whitespace-nowrap ${groupBy === 'publisher' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
                 onClick={() => setGroupBy('publisher')}
               >
                 Publisher
               </button>
               <button
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 transition-colors ${groupBy === 'visual' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 transition-colors whitespace-nowrap ${groupBy === 'visual' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
                 onClick={() => setGroupBy('visual')}
               >
                 Visual
@@ -666,7 +765,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
               </button>
             </div>
             {!loading && (
-              <span className="text-sm text-muted-foreground">
+              <span className="text-sm text-muted-foreground whitespace-nowrap">
                 {sorted.length} edition{sorted.length !== 1 ? 's' : ''}
               </span>
             )}
@@ -690,7 +789,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
                   <SectionHeader label={label} groups={groups} selectedKeys={selectedKeys} onToggleGroup={toggleGroup} />
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 p-3">
                     {groups.map((group) => (
-                      <EditionCard key={group.key} group={group} formatFilter={formatFilter} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} />
+                      <EditionCard key={group.key} group={group} formatFilter={effectiveFormat} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} />
                     ))}
                   </div>
                 </div>
@@ -730,7 +829,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
                     <SectionHeader label={sectionLabel} groups={section.groups} selectedKeys={selectedKeys} onToggleGroup={toggleGroup} />
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 p-3">
                       {section.groups.map((group) => (
-                        <EditionCard key={group.key} group={group} formatFilter={formatFilter} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} />
+                        <EditionCard key={group.key} group={group} formatFilter={effectiveFormat} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} />
                       ))}
                     </div>
                   </div>
@@ -747,7 +846,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
               {selectedCount} edition{selectedCount !== 1 ? 's' : ''} selected
               {primaryKey && (() => {
                 const g = coverGroups.find((g) => g.key === primaryKey)
-                const rep = g ? bestEdition(g, formatFilter) : null
+                const rep = g ? bestEdition(g, effectiveFormat) : null
                 return rep ? ` · top: ${rep.publisher || rep.publish_year || 'selected'}` : ''
               })()}
             </span>
