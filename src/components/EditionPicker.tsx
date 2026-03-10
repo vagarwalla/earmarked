@@ -148,6 +148,80 @@ function MultiSelectDropdown<T extends string | number>({
   )
 }
 
+function EditionCard({
+  group, formatFilter, selectedKeys, firstEditionKey, onToggle,
+}: {
+  group: CoverGroup; formatFilter: Format; selectedKeys: string[]; firstEditionKey: string | null; onToggle: (key: string) => void
+}) {
+  const rep = bestEdition(group, formatFilter)
+  const selIdx = selectedKeys.indexOf(group.key)
+  const isSelected = selIdx !== -1
+  const isPrimary = selIdx === 0
+  const isFirstEdition = group.key === firstEditionKey
+  return (
+    <button
+      onClick={() => onToggle(group.key)}
+      className={`relative rounded-lg p-2 text-left transition-all border-2 ${isPrimary ? 'border-amber-500 bg-amber-50' : isSelected ? 'border-primary bg-primary/5' : 'border-transparent hover:border-border'}`}
+    >
+      {isSelected && (
+        <div className={`absolute top-2 right-2 rounded-full px-1.5 py-0.5 z-10 flex items-center gap-0.5 text-[10px] font-semibold leading-none ${isPrimary ? 'bg-amber-500 text-white' : 'bg-primary text-primary-foreground'}`}>
+          {isPrimary && <Star className="h-2.5 w-2.5 fill-white" />}
+          {isPrimary ? 'Top' : `#${selIdx + 1}`}
+        </div>
+      )}
+      {isFirstEdition && !isSelected && (
+        <div className="absolute top-2 right-2 bg-amber-400 rounded-full p-1 z-10" title="First edition">
+          <Star className="h-3 w-3 text-white fill-white" />
+        </div>
+      )}
+      <div className="aspect-[2/3] bg-muted rounded overflow-hidden mb-3 flex items-center justify-center">
+        {group.cover_url ? (
+          <img src={group.cover_url} alt={rep.title} className="w-full h-full object-cover" />
+        ) : (
+          <div className="text-center px-2">
+            <div className="text-xl font-medium text-muted-foreground leading-tight">No cover art found</div>
+          </div>
+        )}
+      </div>
+      <div className="text-sm leading-snug space-y-1 min-h-[72px]">
+        {(rep.edition_name || rep.title) && (
+          <div className="font-medium text-foreground line-clamp-2">{rep.edition_name || rep.title}</div>
+        )}
+        {rep.publisher && <div className="text-muted-foreground line-clamp-2">{rep.publisher}</div>}
+        <div className="flex justify-between items-baseline gap-1">
+          <span className="text-muted-foreground">{rep.publish_year ?? ''}</span>
+          <span className="text-[10px] text-muted-foreground/60 shrink-0">{rep.isbn}</span>
+        </div>
+        {rep.pages && <div className="text-muted-foreground text-xs">{rep.pages} pp</div>}
+        <div className="flex flex-wrap gap-1 pt-0.5">
+          {group.formats.filter((f) => f !== 'any').map((f) => (
+            <span key={f} className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground capitalize">
+              {f === 'hardcover' ? 'HC' : 'PB'}
+            </span>
+          ))}
+        </div>
+      </div>
+    </button>
+  )
+}
+
+function SectionHeader({
+  label, groups, selectedKeys, onToggleGroup,
+}: {
+  label: string; groups: CoverGroup[]; selectedKeys: string[]; onToggleGroup: (keys: string[]) => void
+}) {
+  const groupKeys = groups.map((g) => g.key)
+  const allSelected = groupKeys.length > 0 && groupKeys.every((k) => selectedKeys.includes(k))
+  return (
+    <div className="flex items-center justify-between px-1 mb-2">
+      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
+      <button onClick={() => onToggleGroup(groupKeys)} className="text-xs text-primary hover:underline shrink-0">
+        {allSelected ? 'Deselect all' : 'Select all'}
+      </button>
+    </div>
+  )
+}
+
 export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
   const [editions, setEditions] = useState<Edition[]>([])
   const [loading, setLoading] = useState(false)
@@ -164,6 +238,10 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
   // AI sanity-check state: clusterRep URL → final merged group ID
   const [aiMergeMap, setAiMergeMap] = useState<Map<string, number>>(new Map())
   const [aiCheckLoading, setAiCheckLoading] = useState(false)
+  // AI text labels for visual sections: clusterRep URL → label string
+  const [clusterLabels, setClusterLabels] = useState<Record<string, string>>({})
+  const [labelsLoading, setLabelsLoading] = useState(false)
+  const labelsFetchedRef = useRef(false)
 
   useEffect(() => {
     if (!book || !open) return
@@ -177,6 +255,9 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
     setHashesLoading(false)
     setAiMergeMap(new Map())
     setAiCheckLoading(false)
+    setClusterLabels({})
+    setLabelsLoading(false)
+    labelsFetchedRef.current = false
     fetch(`/api/editions?workId=${encodeURIComponent(book.work_id)}&language=${language}`)
       .then((r) => r.json())
       .then((data) => {
@@ -383,6 +464,27 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
     setTitleFilter(new Set())
   }
 
+  // Fetch AI text labels once visualSections are stable (after AI merge or dHash fallback)
+  useEffect(() => {
+    if (hashMap.size === 0 || labelsLoading || labelsFetchedRef.current) return
+    // Wait for AI merge to settle (either done or failed gracefully)
+    if (aiCheckLoading) return
+    labelsFetchedRef.current = true
+    setLabelsLoading(true)
+    const clusters = visualSections
+      .filter((s) => s.clusterRep !== null && s.groups.length > 0)
+      .map((s) => ({
+        id: s.clusterRep!,
+        editions: s.groups.flatMap((g) => g.editions).map((e) => ({
+          publisher: e.publisher, year: e.publish_year, format: e.format, edition_name: e.edition_name,
+        })),
+      }))
+    fetch('/api/label-clusters', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clusters }) })
+      .then((r) => r.json())
+      .then((data: Record<string, string>) => { setClusterLabels(data); setLabelsLoading(false) })
+      .catch(() => setLabelsLoading(false))
+  }, [hashMap.size, aiCheckLoading]) // eslint-disable-line react-hooks/exhaustive-deps
+
   function toggleCard(key: string) {
     setSelectedKeys((prev) => {
       if (prev.includes(key)) {
@@ -390,6 +492,17 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
         return prev.filter((k) => k !== key)
       }
       return [...prev, key]
+    })
+  }
+
+  function toggleGroup(groupKeys: string[]) {
+    setSelectedKeys((prev) => {
+      const allSelected = groupKeys.every((k) => prev.includes(k))
+      if (allSelected) {
+        const remaining = prev.filter((k) => !groupKeys.includes(k))
+        return remaining.length > 0 ? remaining : prev
+      }
+      return [...prev, ...groupKeys.filter((k) => !prev.includes(k))]
     })
   }
 
@@ -491,7 +604,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
                 onClick={() => setGroupBy('visual')}
               >
                 Visual
-                {groupBy === 'visual' && (hashesLoading || aiCheckLoading) && (
+                {groupBy === 'visual' && (hashesLoading || aiCheckLoading || labelsLoading) && (
                   <Loader2 className="h-3 w-3 animate-spin" />
                 )}
               </button>
@@ -518,60 +631,11 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
             <div className="space-y-6 py-2">
               {publisherSections.map(({ label, groups }) => (
                 <div key={label}>
-                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2 px-1">
-                    {label}
-                  </div>
+                  <SectionHeader label={label} groups={groups} selectedKeys={selectedKeys} onToggleGroup={toggleGroup} />
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                    {groups.map((group) => {
-                      const rep = bestEdition(group, formatFilter)
-                      const selIdx = selectedKeys.indexOf(group.key)
-                      const isSelected = selIdx !== -1
-                      const isPrimary = selIdx === 0
-                      const isFirstEdition = group.key === firstEditionKey
-                      return (
-                        <button
-                          key={group.key}
-                          onClick={() => toggleCard(group.key)}
-                          className={`relative rounded-lg p-2 text-left transition-all border-2 ${
-                            isPrimary ? 'border-amber-500 bg-amber-50' : isSelected ? 'border-primary bg-primary/5' : 'border-transparent hover:border-border'
-                          }`}
-                        >
-                          {isSelected && (
-                            <div className={`absolute top-2 right-2 rounded-full px-1.5 py-0.5 z-10 flex items-center gap-0.5 text-[10px] font-semibold leading-none ${isPrimary ? 'bg-amber-500 text-white' : 'bg-primary text-primary-foreground'}`}>
-                              {isPrimary && <Star className="h-2.5 w-2.5 fill-white" />}
-                              {isPrimary ? 'Top' : `#${selIdx + 1}`}
-                            </div>
-                          )}
-                          {isFirstEdition && !isSelected && (
-                            <div className="absolute top-2 right-2 bg-amber-400 rounded-full p-1 z-10" title="First edition">
-                              <Star className="h-3 w-3 text-white fill-white" />
-                            </div>
-                          )}
-                          <div className="aspect-[2/3] bg-muted rounded overflow-hidden mb-3 flex items-center justify-center">
-                            {group.cover_url ? (
-                              <img src={group.cover_url} alt={rep.title} className="w-full h-full object-cover" />
-                            ) : (
-                              <div className="text-center px-2">
-                                <div className="text-sm font-medium text-muted-foreground">No cover art found</div>
-                              </div>
-                            )}
-                          </div>
-                          <div className="text-sm leading-snug space-y-1 min-h-[72px]">
-                            {rep.edition_name && <div className="font-medium text-foreground line-clamp-2">{rep.edition_name}</div>}
-                            {rep.publisher && <div className="text-muted-foreground line-clamp-2">{rep.publisher}</div>}
-                            <div className="text-muted-foreground">{rep.publish_year ?? ''}</div>
-                            {rep.pages && <div className="text-muted-foreground text-xs">{rep.pages} pp</div>}
-                            <div className="flex flex-wrap gap-1 pt-0.5">
-                              {group.formats.filter((f) => f !== 'any').map((f) => (
-                                <span key={f} className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground capitalize">
-                                  {f === 'hardcover' ? 'HC' : 'PB'}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        </button>
-                      )
-                    })}
+                    {groups.map((group) => (
+                      <EditionCard key={group.key} group={group} formatFilter={formatFilter} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} />
+                    ))}
                   </div>
                 </div>
               ))}
@@ -582,67 +646,21 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
             </div>
           ) : (
             <div className="space-y-6 py-2">
-              {visualSections.map((section, sectionIdx) => (
-                <div key={section.clusterRep ?? `no-cover-${sectionIdx}`}>
-                  {visualSections.length > 1 && (
-                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2 px-1">
-                      Cover design {sectionIdx + 1}
+              {visualSections.map((section, sectionIdx) => {
+                const sectionLabel = section.clusterRep
+                  ? (clusterLabels[section.clusterRep] ?? (labelsLoading ? '…' : `Cover design ${sectionIdx + 1}`))
+                  : `Cover design ${sectionIdx + 1}`
+                return (
+                  <div key={section.clusterRep ?? `no-cover-${sectionIdx}`}>
+                    <SectionHeader label={sectionLabel} groups={section.groups} selectedKeys={selectedKeys} onToggleGroup={toggleGroup} />
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                      {section.groups.map((group) => (
+                        <EditionCard key={group.key} group={group} formatFilter={formatFilter} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} />
+                      ))}
                     </div>
-                  )}
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                    {section.groups.map((group) => {
-                      const rep = bestEdition(group, formatFilter)
-                      const selIdx = selectedKeys.indexOf(group.key)
-                      const isSelected = selIdx !== -1
-                      const isPrimary = selIdx === 0
-                      const isFirstEdition = group.key === firstEditionKey
-                      return (
-                        <button
-                          key={group.key}
-                          onClick={() => toggleCard(group.key)}
-                          className={`relative rounded-lg p-2 text-left transition-all border-2 ${
-                            isPrimary ? 'border-amber-500 bg-amber-50' : isSelected ? 'border-primary bg-primary/5' : 'border-transparent hover:border-border'
-                          }`}
-                        >
-                          {isSelected && (
-                            <div className={`absolute top-2 right-2 rounded-full px-1.5 py-0.5 z-10 flex items-center gap-0.5 text-[10px] font-semibold leading-none ${isPrimary ? 'bg-amber-500 text-white' : 'bg-primary text-primary-foreground'}`}>
-                              {isPrimary && <Star className="h-2.5 w-2.5 fill-white" />}
-                              {isPrimary ? 'Top' : `#${selIdx + 1}`}
-                            </div>
-                          )}
-                          {isFirstEdition && !isSelected && (
-                            <div className="absolute top-2 right-2 bg-amber-400 rounded-full p-1 z-10" title="First edition">
-                              <Star className="h-3 w-3 text-white fill-white" />
-                            </div>
-                          )}
-                          <div className="aspect-[2/3] bg-muted rounded overflow-hidden mb-3 flex items-center justify-center">
-                            {group.cover_url ? (
-                              <img src={group.cover_url} alt={rep.title} className="w-full h-full object-cover" />
-                            ) : (
-                              <div className="text-center px-2">
-                                <div className="text-sm font-medium text-muted-foreground">No cover art found</div>
-                              </div>
-                            )}
-                          </div>
-                          <div className="text-sm leading-snug space-y-1 min-h-[72px]">
-                            {rep.edition_name && <div className="font-medium text-foreground line-clamp-2">{rep.edition_name}</div>}
-                            {!group.cover_url && rep.publisher && <div className="text-muted-foreground line-clamp-2">{rep.publisher}</div>}
-                            <div className="text-muted-foreground">{rep.publish_year ?? ''}</div>
-                            {rep.pages && <div className="text-muted-foreground text-xs">{rep.pages} pp</div>}
-                            <div className="flex flex-wrap gap-1 pt-0.5">
-                              {group.formats.filter((f) => f !== 'any').map((f) => (
-                                <span key={f} className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground capitalize">
-                                  {f === 'hardcover' ? 'HC' : 'PB'}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        </button>
-                      )
-                    })}
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>
