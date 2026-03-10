@@ -2,37 +2,19 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
 // Columns added in migration_v2 that may not exist in older DB deployments
-const NEW_COLUMNS = new Set(['conditions', 'max_price'])
+const NEW_COLUMNS = ['conditions', 'max_price']
 
-function splitBody(body: Record<string, unknown>) {
-  const legacy: Record<string, unknown> = {}
-  const newCols: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(body)) {
-    if (NEW_COLUMNS.has(k)) newCols[k] = v
-    else legacy[k] = v
-  }
-  return { legacy, newCols }
+function isMissingColumnError(msg: string) {
+  return NEW_COLUMNS.some((col) => msg.includes(`'${col}' column`))
+    || msg.includes('Cannot coerce the result to a single JSON object')
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ slug: string; itemId: string }> }) {
   try {
     const { itemId } = await params
     const body = await req.json()
-    const { legacy, newCols } = splitBody(body)
 
-    // If there are no legacy columns to update, we can't hit the DB meaningfully
-    // (pre-migration). Just fetch the current item and merge the new-column values.
-    if (Object.keys(legacy).length === 0) {
-      const { data, error } = await supabase
-        .from('cart_items')
-        .select('*')
-        .eq('id', itemId)
-        .single()
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-      return NextResponse.json({ ...data, ...newCols })
-    }
-
-    // Try the full update first
+    // Try the full update first (works after migration is applied)
     let result = await supabase
       .from('cart_items')
       .update(body)
@@ -40,21 +22,44 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ sl
       .select()
       .single()
 
-    // If it failed (new columns not in DB yet), retry with only legacy columns
-    if (result.error) {
-      result = await supabase
-        .from('cart_items')
-        .update(legacy)
-        .eq('id', itemId)
-        .select()
-        .single()
-      if (!result.error && result.data) {
-        return NextResponse.json({ ...result.data, ...newCols })
+    if (!result.error) {
+      return NextResponse.json(result.data)
+    }
+
+    // Pre-migration fallback: strip new columns and retry with legacy ones
+    if (isMissingColumnError(result.error.message)) {
+      const { conditions, max_price, ...legacyBody } = body
+
+      if (Object.keys(legacyBody).length > 0) {
+        result = await supabase
+          .from('cart_items')
+          .update(legacyBody)
+          .eq('id', itemId)
+          .select()
+          .single()
+        if (!result.error && result.data) {
+          return NextResponse.json({
+            ...result.data,
+            ...(conditions !== undefined && { conditions }),
+            ...(max_price !== undefined && { max_price }),
+          })
+        }
+      } else {
+        // Only new columns in body — fetch current row and merge
+        const { data } = await supabase
+          .from('cart_items')
+          .select('*')
+          .eq('id', itemId)
+          .single()
+        return NextResponse.json({
+          ...data,
+          ...(conditions !== undefined && { conditions }),
+          ...(max_price !== undefined && { max_price }),
+        })
       }
     }
 
-    if (result.error) return NextResponse.json({ error: result.error.message }, { status: 500 })
-    return NextResponse.json(result.data)
+    return NextResponse.json({ error: result.error.message }, { status: 500 })
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 })
   }
