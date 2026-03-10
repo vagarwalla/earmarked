@@ -300,11 +300,15 @@ export async function getEditions(workId: string, language = 'eng'): Promise<Edi
     if (language) {
       const langs = (entry.languages as { key: string }[]) || []
       if (langs.length > 0) {
-        // OL has language data — trust it
-        if (!langs.some((l) => l.key === `/languages/${language}`)) continue
+        const matchesLanguage = langs.some((l) => l.key === `/languages/${language}`)
+        if (!matchesLanguage) {
+          // Wrong language — but keep it if it has cover art (shown in English view)
+          if (coverId) confirmed.push(buildEdition(isbn, entry, coverId, coverUrl))
+          continue
+        }
         confirmed.push(buildEdition(isbn, entry, coverId, coverUrl))
       } else {
-        // No OL language data — queue for Google Books verification
+        // No OL language data — include with benefit of the doubt; queue for GB cover lookup
         needsVerification.push({ isbn, entry, coverId, coverUrl })
       }
     } else {
@@ -312,22 +316,17 @@ export async function getEditions(workId: string, language = 'eng'): Promise<Edi
     }
   }
 
-  // Verify untagged editions via Google Books (check first 8, give benefit of the doubt for the rest)
+  // Editions with no OL language tag: include all (benefit of the doubt).
+  // GB is used only to find a cover image, not to gate inclusion.
   if (language && needsVerification.length > 0) {
-    const gbLangCode = OL_TO_GB_LANG[language] ?? language.slice(0, 2)
     const toCheck = needsVerification.slice(0, 8)
     const rest = needsVerification.slice(8)
     const gbInfos = await Promise.all(toCheck.map(({ isbn }) => fetchGoogleBooksInfo(isbn)))
     for (let i = 0; i < toCheck.length; i++) {
-      const { language: gbLang, coverUrl: gbCoverUrl } = gbInfos[i]
-      // Include if Google Books confirms the language OR has no data (give benefit of the doubt)
-      if (gbLang === null || gbLang === gbLangCode) {
-        const { isbn, entry, coverId, coverUrl } = toCheck[i]
-        // Prefer OL cover; fall back to GB thumbnail
-        confirmed.push(buildEdition(isbn, entry, coverId, coverUrl ?? gbCoverUrl))
-      }
+      const { coverUrl: gbCoverUrl } = gbInfos[i]
+      const { isbn, entry, coverId, coverUrl } = toCheck[i]
+      confirmed.push(buildEdition(isbn, entry, coverId, coverUrl ?? gbCoverUrl))
     }
-    // Editions beyond the 8 we verified: include with benefit of the doubt
     for (const { isbn, entry, coverId, coverUrl } of rest) {
       confirmed.push(buildEdition(isbn, entry, coverId, coverUrl))
     }
