@@ -349,7 +349,7 @@ export async function getEditions(workId: string, language = 'eng'): Promise<Edi
     for (let i = 0; i < noCoverEditions.length; i++) {
       if (olChecks[i]) noCoverEditions[i].cover_url = olChecks[i]
     }
-    const stillNoCover = noCoverEditions.filter((e) => !e.cover_url).slice(0, 5)
+    const stillNoCover = noCoverEditions.filter((e) => !e.cover_url)
     if (stillNoCover.length > 0) {
       const gbInfos = await Promise.all(stillNoCover.map((e) => fetchGoogleBooksInfo(e.isbn)))
       for (let i = 0; i < stillNoCover.length; i++) {
