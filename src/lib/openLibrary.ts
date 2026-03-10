@@ -317,29 +317,17 @@ export async function getEditions(workId: string, language = 'eng'): Promise<Edi
   }
 
   // Editions with no OL language tag: include all (benefit of the doubt).
-  // GB is used only to find a cover image, not to gate inclusion.
-  if (language && needsVerification.length > 0) {
-    const toCheck = needsVerification.slice(0, 8)
-    const rest = needsVerification.slice(8)
-    const gbInfos = await Promise.all(toCheck.map(({ isbn }) => fetchGoogleBooksInfo(isbn)))
-    for (let i = 0; i < toCheck.length; i++) {
-      const { coverUrl: gbCoverUrl } = gbInfos[i]
-      const { isbn, entry, coverId, coverUrl } = toCheck[i]
-      confirmed.push(buildEdition(isbn, entry, coverId, coverUrl ?? gbCoverUrl))
-    }
-    for (const { isbn, entry, coverId, coverUrl } of rest) {
-      confirmed.push(buildEdition(isbn, entry, coverId, coverUrl))
-    }
+  for (const { isbn, entry, coverId, coverUrl } of needsVerification) {
+    confirmed.push(buildEdition(isbn, entry, coverId, coverUrl))
   }
 
-  // Back-fill covers from Google Books for any remaining no-cover editions (cap at 5 extra calls)
+  // Back-fill covers from Google Books for every confirmed edition with no OL cover.
   const noCoverEditions = confirmed.filter((e) => !e.cover_url)
   if (noCoverEditions.length > 0) {
-    const toFetch = noCoverEditions.slice(0, 5)
-    const gbInfos = await Promise.all(toFetch.map((e) => fetchGoogleBooksInfo(e.isbn)))
-    for (let i = 0; i < toFetch.length; i++) {
+    const gbInfos = await Promise.all(noCoverEditions.map((e) => fetchGoogleBooksInfo(e.isbn)))
+    for (let i = 0; i < noCoverEditions.length; i++) {
       const gbCoverUrl = gbInfos[i].coverUrl
-      if (gbCoverUrl) toFetch[i].cover_url = gbCoverUrl
+      if (gbCoverUrl) noCoverEditions[i].cover_url = gbCoverUrl
     }
   }
 
