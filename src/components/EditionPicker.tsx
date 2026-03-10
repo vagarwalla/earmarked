@@ -69,16 +69,29 @@ function YearRangeDropdown({
   onChange: (range: { min: number | null; max: number | null }) => void
 }) {
   const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
+  const [panelPos, setPanelPos] = useState({ top: 0, left: 0 })
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      if (
+        panelRef.current && !panelRef.current.contains(e.target as Node) &&
+        buttonRef.current && !buttonRef.current.contains(e.target as Node)
+      ) setOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
+
+  function handleOpen() {
+    if (buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect()
+      setPanelPos({ top: rect.bottom + 4, left: rect.left })
+    }
+    setOpen((o) => !o)
+  }
 
   const hasFilter = range.min !== null || range.max !== null
   const minYear = availableYears[0]
@@ -88,9 +101,10 @@ function YearRangeDropdown({
     : 'Year'
 
   return (
-    <div ref={ref} className="relative">
+    <div className="relative">
       <button
-        onClick={() => setOpen((o) => !o)}
+        ref={buttonRef}
+        onClick={handleOpen}
         className={`flex items-center gap-1.5 h-8 px-2.5 rounded-lg border text-sm transition-colors whitespace-nowrap ${
           hasFilter
             ? 'border-primary bg-primary/5 text-primary'
@@ -101,7 +115,11 @@ function YearRangeDropdown({
         <ChevronDown className="h-3.5 w-3.5 opacity-50 shrink-0" />
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-1 z-50 bg-popover text-popover-foreground shadow-md rounded-lg ring-1 ring-foreground/10 p-3 min-w-[200px]">
+        <div
+          ref={panelRef}
+          style={{ position: 'fixed', top: panelPos.top, left: panelPos.left }}
+          className="z-50 bg-popover text-popover-foreground shadow-md rounded-lg ring-1 ring-foreground/10 p-3 min-w-[200px]"
+        >
           <div className="flex items-center gap-2">
             <div className="flex flex-col gap-1 flex-1">
               <label className="text-xs text-muted-foreground">From</label>
@@ -165,23 +183,37 @@ function MultiSelectDropdown<T extends string | number>({
   renderOption?: (opt: T) => string
 }) {
   const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
+  const [panelPos, setPanelPos] = useState({ top: 0, left: 0 })
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      if (
+        panelRef.current && !panelRef.current.contains(e.target as Node) &&
+        buttonRef.current && !buttonRef.current.contains(e.target as Node)
+      ) setOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
+  function handleOpen() {
+    if (buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect()
+      setPanelPos({ top: rect.bottom + 4, left: rect.left })
+    }
+    setOpen((o) => !o)
+  }
+
   const count = selected.size
 
   return (
-    <div ref={ref} className="relative">
+    <div className="relative">
       <button
-        onClick={() => setOpen((o) => !o)}
+        ref={buttonRef}
+        onClick={handleOpen}
         className={`flex items-center gap-1.5 h-8 px-2.5 rounded-lg border text-sm transition-colors whitespace-nowrap ${
           count > 0
             ? 'border-primary bg-primary/5 text-primary'
@@ -197,7 +229,11 @@ function MultiSelectDropdown<T extends string | number>({
         <ChevronDown className="h-3.5 w-3.5 opacity-50 shrink-0" />
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-1 z-50 bg-popover text-popover-foreground shadow-md rounded-lg ring-1 ring-foreground/10 min-w-[180px] max-h-60 overflow-y-auto p-1">
+        <div
+          ref={panelRef}
+          style={{ position: 'fixed', top: panelPos.top, left: panelPos.left }}
+          className="z-50 bg-popover text-popover-foreground shadow-md rounded-lg ring-1 ring-foreground/10 min-w-[180px] max-h-60 overflow-y-auto p-1"
+        >
           {options.length === 0 ? (
             <div className="px-2 py-1.5 text-sm text-muted-foreground">No options available</div>
           ) : (
