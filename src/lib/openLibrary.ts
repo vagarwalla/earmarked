@@ -221,18 +221,43 @@ const OL_TO_GB_LANG: Record<string, string> = {
   nor: 'no', fin: 'fi', tur: 'tr', heb: 'he', hin: 'hi',
 }
 
+// Returns true if the URL points to a genuine cover image.
+// OL and GB both occasionally serve small "image not available" placeholders
+// (typically a GIF, or a JPEG under 5 KB). Real covers are almost always ≥ 5 KB.
+async function isRealCoverImage(url: string): Promise<boolean> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(6000), next: { revalidate: 3600 } })
+    if (!res.ok) return false
+    const type = res.headers.get('content-type') ?? ''
+    if (type.includes('gif')) return false
+    const lengthStr = res.headers.get('content-length')
+    if (lengthStr) return parseInt(lengthStr, 10) >= 5000
+    // Some CDNs omit Content-Length — read the body to check actual size
+    const buf = await res.arrayBuffer()
+    return buf.byteLength >= 5000
+  } catch {
+    return false
+  }
+}
+
 async function fetchOLCoverByIsbn(isbn: string): Promise<string | null> {
   try {
     const url = `${COVERS}/b/isbn/${isbn}-M.jpg?default=false`
     const res = await fetch(url, { next: { revalidate: 3600 } })
     if (!res.ok) return null
-    return `${COVERS}/b/isbn/${isbn}-M.jpg`
+    const coverUrl = `${COVERS}/b/isbn/${isbn}-M.jpg`
+    // Even with ?default=false OL can occasionally serve a placeholder — validate
+    return await isRealCoverImage(coverUrl) ? coverUrl : null
   } catch {
     return null
   }
 }
 
 type GBInfo = { language: string | null; coverUrl: string | null; publishYear: number | null; publisher: string | null; format: Format | null }
+
+function normaliseGBUrl(raw: string | undefined): string | null {
+  return raw?.replace('http://', 'https://').replace('&zoom=1', '&zoom=0') ?? null
+}
 
 async function fetchGoogleBooksInfo(isbn: string): Promise<GBInfo> {
   const empty: GBInfo = { language: null, coverUrl: null, publishYear: null, publisher: null, format: null }
@@ -243,17 +268,23 @@ async function fetchGoogleBooksInfo(isbn: string): Promise<GBInfo> {
     const data = await res.json()
     const info = data.items?.[0]?.volumeInfo
     if (!info) return empty
-    const rawThumb = (info.imageLinks?.thumbnail as string | undefined)
-      ?? (info.imageLinks?.smallThumbnail as string | undefined)
-    const thumbnail = rawThumb
-      ?.replace('http://', 'https://')
-      .replace('&zoom=1', '&zoom=0') ?? null
+
+    // Try thumbnail → smallThumbnail, validating each before accepting
+    const thumbnail = normaliseGBUrl(info.imageLinks?.thumbnail as string | undefined)
+    const smallThumbnail = normaliseGBUrl(info.imageLinks?.smallThumbnail as string | undefined)
+    let coverUrl: string | null = null
+    if (thumbnail && await isRealCoverImage(thumbnail)) {
+      coverUrl = thumbnail
+    } else if (smallThumbnail && await isRealCoverImage(smallThumbnail)) {
+      coverUrl = smallThumbnail
+    }
+
     const yearMatch = (info.publishedDate as string | undefined)?.match(/\b(1\d{3}|20\d{2})\b/)
     const publishYear = yearMatch ? parseInt(yearMatch[1]) : null
     const publisher = (info.publisher as string | undefined) ?? null
     const printType = (info.printType as string | undefined)?.toLowerCase() ?? ''
     const format: Format | null = printType === 'book' ? null : printType.includes('hardcover') ? 'hardcover' : printType.includes('paperback') ? 'paperback' : null
-    return { language: (info.language as string) ?? null, coverUrl: thumbnail, publishYear, publisher, format }
+    return { language: (info.language as string) ?? null, coverUrl, publishYear, publisher, format }
   } catch {
     return empty
   }
@@ -351,6 +382,26 @@ export async function getEditions(workId: string, language = 'eng'): Promise<Edi
   // Editions with no OL language tag: include all — covers handled by back-fill below
   for (const { isbn, entry, coverId, coverUrl } of needsVerification) {
     confirmed.push(buildEdition(isbn, entry, coverId, coverUrl))
+  }
+
+  // Validate OL cover_id images — OL occasionally stores placeholder images against
+  // real cover IDs. Run up to 15 validations in parallel; invalid ones are cleared
+  // so they fall through to the GB backfill below.
+  const withOLCover = confirmed.filter((e) => e.cover_url !== null)
+  if (withOLCover.length > 0) {
+    const CONCURRENCY = 15
+    let ci = 0
+    const olValid: boolean[] = new Array(withOLCover.length)
+    async function olWorker() {
+      while (ci < withOLCover.length) {
+        const idx = ci++
+        olValid[idx] = await isRealCoverImage(withOLCover[idx].cover_url!)
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, withOLCover.length) }, olWorker))
+    for (let i = 0; i < withOLCover.length; i++) {
+      if (!olValid[i]) withOLCover[i].cover_url = null
+    }
   }
 
   // Back-fill missing critical fields: cover, year, publisher, format
