@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { X, RefreshCw, Minus, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -32,6 +32,10 @@ function toggleCondition(current: Condition[], value: Condition): Condition[] {
 export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCover }: Props) {
   const [saving, setSaving] = useState(false)
   const [maxPriceInput, setMaxPriceInput] = useState(item.max_price != null ? String(item.max_price) : '')
+
+  useEffect(() => {
+    setMaxPriceInput(item.max_price != null ? String(item.max_price) : '')
+  }, [item.max_price])
 
   async function patch(updates: Partial<CartItem>) {
     setSaving(true)

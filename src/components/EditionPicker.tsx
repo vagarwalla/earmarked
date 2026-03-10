@@ -99,7 +99,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
+      <DialogContent className="max-w-5xl w-[90vw] max-h-[90vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>Choose cover — {book?.title}</DialogTitle>
         </DialogHeader>
@@ -143,7 +143,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
               No editions found for this filter.
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 py-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5 py-2">
               {filtered.map((group) => {
                 const rep = bestEdition(group, formatFilter)
                 const isSelected = group.key === selectedKey
@@ -151,23 +151,23 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
                   <button
                     key={group.key}
                     onClick={() => setSelectedKey(group.key)}
-                    className={`relative rounded-lg p-1.5 text-left transition-all border-2 ${
+                    className={`relative rounded-lg p-2 text-left transition-all border-2 ${
                       isSelected ? 'border-primary bg-primary/5' : 'border-transparent hover:border-border'
                     }`}
                   >
                     {isSelected && (
-                      <div className="absolute top-1 right-1 bg-primary rounded-full p-0.5 z-10">
-                        <Check className="h-2.5 w-2.5 text-white" />
+                      <div className="absolute top-2 right-2 bg-primary rounded-full p-1 z-10">
+                        <Check className="h-3.5 w-3.5 text-white" />
                       </div>
                     )}
-                    <div className="aspect-[2/3] bg-muted rounded overflow-hidden mb-2 min-h-[180px]">
+                    <div className="aspect-[2/3] bg-muted rounded overflow-hidden mb-3 min-h-[240px]">
                       <img
                         src={group.cover_url}
                         alt={rep.title}
                         className="w-full h-full object-cover"
                       />
                     </div>
-                    <div className="text-xs leading-snug space-y-0.5">
+                    <div className="text-sm leading-snug space-y-1">
                       {rep.edition_name && (
                         <div className="font-medium text-foreground truncate">{rep.edition_name}</div>
                       )}
@@ -175,12 +175,12 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
                         {rep.publisher || 'Unknown'}{rep.publish_year ? ` · ${rep.publish_year}` : ''}
                       </div>
                       {rep.pages && (
-                        <div className="text-muted-foreground">{rep.pages} pp</div>
+                        <div className="text-muted-foreground text-xs">{rep.pages} pp</div>
                       )}
                       {/* Format badges */}
-                      <div className="flex flex-wrap gap-0.5 pt-0.5">
+                      <div className="flex flex-wrap gap-1 pt-0.5">
                         {group.formats.filter((f) => f !== 'any').map((f) => (
-                          <span key={f} className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground capitalize">
+                          <span key={f} className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground capitalize">
                             {f === 'hardcover' ? 'HC' : 'PB'}
                           </span>
                         ))}

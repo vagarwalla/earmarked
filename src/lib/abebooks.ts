@@ -74,6 +74,7 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
   const condRe = /data-test-id="listing-book-condition"[^>]*>([\s\S]*?)<\/span>/
   const sellerRe = /seller-name">([^<]+)/
   const hrefRe = /href="(\/[^"]+\/\d+\/bd)"/
+  const sfRe = /href="\/[^"]+\/(\d+)\/sf(?:\?[^"]*)?"/
 
   let m: RegExpExecArray | null
   while ((m = listingBlockRe.exec(html)) !== null) {
@@ -90,8 +91,10 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
     const condMatch = condRe.exec(block)
     const sellerMatch = sellerRe.exec(block)
     const hrefMatch = hrefRe.exec(block)
+    const sfMatch = sfRe.exec(block)
 
     const listingId = idMatch ? idMatch[1] : undefined
+    const sellerId = sfMatch ? sfMatch[1] : undefined
     const shipping = shipMatch ? parseFloat(shipMatch[1]) : 0
     const condition = condMatch ? condMatch[1].trim() : 'Good'
 
@@ -108,7 +111,7 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
 
     listings.push({
       listing_id: listingId ?? `${isbn}_${listings.length}`,
-      seller_id: listingId ?? `seller_${listings.length}`,
+      seller_id: sellerId ?? listingId ?? `seller_${listings.length}`,
       seller_name: sellerName,
       price,
       shipping_base: isNaN(shipping) ? 0 : shipping,
