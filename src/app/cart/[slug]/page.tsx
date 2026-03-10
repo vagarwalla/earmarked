@@ -10,6 +10,7 @@ import { EditionPicker } from '@/components/EditionPicker'
 import { CoverPicker } from '@/components/CoverPicker'
 import { CartItemCard } from '@/components/CartItemCard'
 import { OptimizationPanel } from '@/components/OptimizationPanel'
+import { CartDefaults } from '@/components/CartDefaults'
 import type { Cart, CartItem, BookSearchResult, Edition } from '@/lib/types'
 
 export default function CartPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -60,6 +61,7 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
       work_id: item.work_id,
       cover_url: item.cover_url,
       first_publish_year: null,
+      series: null,
     })
     setEditingItem(item)
     setPickerOpen(true)
@@ -97,8 +99,9 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
           work_id: pickerBook.work_id,
           isbn_preferred: edition.isbn,
           cover_url: edition.cover_url,
-          format: edition.format,
-          conditions: ['new', 'like_new'],
+          conditions: cart?.default_conditions ?? ['new', 'like_new'],
+          format: edition.format !== 'any' ? edition.format : (cart?.default_format ?? 'any'),
+          max_price: cart?.default_max_price ?? null,
           flexible: false,
           quantity: 1,
           sort_order: items.length,
@@ -182,6 +185,7 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
         {/* Left: Book list */}
         <div className="space-y-4">
           <BookSearch onSelect={handleBookSelect} />
+          <CartDefaults cart={cart} onUpdate={(updated) => setCart(updated)} slug={slug} />
 
           {items.length === 0 ? (
             <div className="text-center py-16 text-muted-foreground border-2 border-dashed rounded-lg">
