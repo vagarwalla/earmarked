@@ -108,8 +108,12 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
         }),
       })
       const newItem = await res.json()
-      setItems((prev) => [...prev, newItem])
-      toast.success(`"${pickerBook.title}" added`)
+      if (!res.ok) {
+        toast.error(`Failed to add book: ${newItem?.error ?? res.statusText}`)
+      } else {
+        setItems((prev) => [...prev, newItem])
+        toast.success(`"${pickerBook.title}" added`)
+      }
     }
     setEditingItem(null)
     setPickerBook(null)
