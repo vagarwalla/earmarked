@@ -4,7 +4,7 @@ const BASE = 'https://openlibrary.org'
 const COVERS = 'https://covers.openlibrary.org'
 
 export async function searchBooks(query: string): Promise<BookSearchResult[]> {
-  const olUrl = `${BASE}/search.json?q=${encodeURIComponent(query)}&fields=title,author_name,key,cover_i,first_publish_year,series&limit=10`
+  const olUrl = `${BASE}/search.json?q=${encodeURIComponent(query)}&fields=title,author_name,key,cover_i,first_publish_year,series_name&limit=10`
   const gbUrl = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=20`
 
   const [olRes, gbRes] = await Promise.all([
@@ -27,7 +27,8 @@ export async function searchBooks(query: string): Promise<BookSearchResult[]> {
 
   return (olData.docs || []).map((doc: Record<string, unknown>) => {
     const olTitle = doc.title as string
-    const olSeries = Array.isArray(doc.series) ? (doc.series as string[])[0] : null
+    // series_name is the authoritative OL field; fall back to GB title parsing
+    const olSeries = Array.isArray(doc.series_name) ? (doc.series_name as string[])[0] : null
     const series = olSeries ?? matchSeries(olTitle, gbTitlesWithSeries)
     return {
       title: olTitle,
@@ -55,9 +56,16 @@ function extractSeriesFromGBTitle(gbTitle: string): { bookTitle: string; series:
   // Pattern 2: "Book Title (Series, #N)" or "Book Title (Series Book N)"
   const parenMatch = gbTitle.match(/^(.+?)\s*\(([^)]+?)(?:[,\s]+(?:book\s+)?#?\d+)?\)\s*$/i)
   if (parenMatch) {
-    return { bookTitle: parenMatch[1].trim(), series: parenMatch[2].trim() }
+    const candidate = parenMatch[2].trim()
+    if (!isEditionNote(candidate)) return { bookTitle: parenMatch[1].trim(), series: candidate }
   }
   return null
+}
+
+// Reject strings that are marketing/edition notes rather than series names
+const EDITION_NOTE_RE = /\b(edition|tie-in|priced|special|anniversary|illustrated|revised|expanded|complete|omnibus|box\s*set|collection|volume|vol\.|reprint|abridged|unabridged|classic|deluxe|premium|exclusive|authorized|official|gift)\b/i
+function isEditionNote(s: string): boolean {
+  return EDITION_NOTE_RE.test(s)
 }
 
 function matchSeries(olTitle: string, candidates: Array<{ bookTitle: string; series: string }>): string | null {
