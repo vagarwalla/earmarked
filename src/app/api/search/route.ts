@@ -9,5 +9,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json([])
   }
   const results = await searchBooks(query)
-  return NextResponse.json(results)
+  return NextResponse.json(results, {
+    headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+  })
 }
