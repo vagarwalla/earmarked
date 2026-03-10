@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { X, RefreshCw, Minus, Plus, Star } from 'lucide-react'
+import { X, RefreshCw, Minus, Plus, Star, ChevronDown, ChevronUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import type { CartItem, Condition, Format } from '@/lib/types'
@@ -97,6 +97,7 @@ function toggleCondition(current: Condition[], value: Condition): Condition[] {
 
 export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCover }: Props) {
   const [saving, setSaving] = useState(false)
+  const [collapsed, setCollapsed] = useState(false)
   const [maxPriceInput, setMaxPriceInput] = useState(item.max_price != null ? String(item.max_price) : '')
 
   useEffect(() => {
@@ -121,6 +122,26 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
   }
 
   const formatOptions: Format[] = ['any', 'hardcover', 'paperback']
+
+  if (collapsed) {
+    return (
+      <div className={`flex items-center gap-3 px-3 py-2 rounded-lg border bg-card transition-opacity ${saving ? 'opacity-60' : ''}`}>
+        {item.cover_url && (
+          <img src={item.cover_url} alt={item.title} className="w-7 h-9 object-cover rounded shrink-0" />
+        )}
+        <div className="flex-1 min-w-0">
+          <span className="font-medium text-sm leading-tight truncate block">{item.title}</span>
+          {item.author && <span className="text-xs text-muted-foreground truncate block">{item.author}</span>}
+        </div>
+        <button onClick={() => setCollapsed(false)} className="text-muted-foreground hover:text-foreground shrink-0" title="Expand">
+          <ChevronDown className="h-4 w-4" />
+        </button>
+        <button onClick={() => onRemove(item.id)} className="text-muted-foreground hover:text-destructive shrink-0">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className={`flex gap-3 p-3 rounded-lg border bg-card transition-opacity ${saving ? 'opacity-60' : ''}`}>
@@ -154,9 +175,14 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
             <div className="font-medium text-base leading-tight">{item.title}</div>
             {item.author && <div className="text-sm text-muted-foreground">{item.author}</div>}
           </div>
-          <button onClick={() => onRemove(item.id)} className="text-muted-foreground hover:text-destructive shrink-0">
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            <button onClick={() => setCollapsed(true)} className="text-muted-foreground hover:text-foreground" title="Collapse">
+              <ChevronUp className="h-4 w-4" />
+            </button>
+            <button onClick={() => onRemove(item.id)} className="text-muted-foreground hover:text-destructive">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-2 items-center">
