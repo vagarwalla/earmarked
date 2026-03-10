@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { optimize } from '../optimizer'
+import {
+  greedyStrategy,
+  localSearchStrategy,
+  exactStrategy,
+} from '../optimizer/index'
+import { computeTotalCost, buildBookOptions } from '../optimizer/shared'
 import type { CartItem, Condition, Listing } from '../types'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -100,14 +106,17 @@ describe('optimize', () => {
     expect(result.grand_total).toBeCloseTo(5.00 + 3.99 + 6.00 + 3.99)
   })
 
-  it('picks the seller with the most books to maximize grouping', () => {
+  it('finds the minimum cost when one seller has all books and another is cheaper for one', () => {
     const items = [
       makeItem({ id: 'i1', isbn_preferred: 'isbn-1' }),
       makeItem({ id: 'i2', isbn_preferred: 'isbn-2' }),
       makeItem({ id: 'i3', isbn_preferred: 'isbn-3' }),
     ]
 
-    // Seller A has all 3 books, seller B only has isbn-1 at a lower price
+    // Seller A has all 3 books; Seller B only has isbn-1 at a lower price.
+    // Both assignments are equally optimal ($25.97):
+    //   A(all 3): (5+6+7) + shipping(3)          = 18 + 7.97 = $25.97
+    //   B(isbn-1) + A(isbn-2,isbn-3): 6.99 + 18.98 = $25.97
     const listings = new Map([
       ['isbn-1', [
         makeListing({ seller_id: 'B', isbn: 'isbn-1', price: 3.00 }),
@@ -118,10 +127,7 @@ describe('optimize', () => {
     ])
 
     const result = optimize(items, listings)
-
-    // Seller A has all 3 → should win even if B is cheaper for isbn-1
-    expect(result.groups).toHaveLength(1)
-    expect(result.groups[0].seller_id).toBe('A')
+    expect(result.grand_total).toBeCloseTo(25.97, 1)
   })
 
   it('excludes listings that do not match the required conditions', () => {
@@ -419,5 +425,151 @@ describe('optimize', () => {
     expect(result.groups[0].assignments).toHaveLength(10)
     // shipping: 3.99 + 9 × 1.99 = 21.90
     expect(result.groups[0].shipping).toBeCloseTo(21.9)
+  })
+})
+
+// ── Strategy tests ─────────────────────────────────────────────────────────────
+//
+// Scenario where greedy is suboptimal:
+//
+//   Book 1: Seller A=$5, Seller B=$3
+//   Book 2: Seller A=$6 only
+//   Book 3: Seller A=$7 only
+//   Book 4: Seller B=$1 only
+//
+// Greedy sees A has 3 books (books 1,2,3) and assigns them to A, then B gets
+// book 4 as fallback:
+//   A: (5+6+7) + shipping(3) = 18 + 7.97 = $25.97
+//   B: 1 + shipping(1)       = 1  + 3.99 = $4.99
+//   Total: $30.96
+//
+// Optimal splits differently — B takes books 1 and 4 (cheapest for both),
+// A takes books 2 and 3:
+//   B: (3+1) + shipping(2)  = 4  + 5.98 = $9.98
+//   A: (6+7) + shipping(2)  = 13 + 5.98 = $18.98
+//   Total: $28.96  (saves $2 vs greedy)
+
+function makeGreedySuboptimalFixture() {
+  const items = [
+    makeItem({ id: 'i1', isbn_preferred: 'isbn-1', title: 'Book 1' }),
+    makeItem({ id: 'i2', isbn_preferred: 'isbn-2', title: 'Book 2' }),
+    makeItem({ id: 'i3', isbn_preferred: 'isbn-3', title: 'Book 3' }),
+    makeItem({ id: 'i4', isbn_preferred: 'isbn-4', title: 'Book 4' }),
+  ]
+  const listingsByIsbn = new Map([
+    ['isbn-1', [
+      makeListing({ seller_id: 'B', isbn: 'isbn-1', price: 3.00 }),
+      makeListing({ seller_id: 'A', isbn: 'isbn-1', price: 5.00 }),
+    ]],
+    ['isbn-2', [makeListing({ seller_id: 'A', isbn: 'isbn-2', price: 6.00 })]],
+    ['isbn-3', [makeListing({ seller_id: 'A', isbn: 'isbn-3', price: 7.00 })]],
+    ['isbn-4', [makeListing({ seller_id: 'B', isbn: 'isbn-4', price: 1.00 })]],
+  ])
+  return { items, listingsByIsbn }
+}
+
+describe('greedyStrategy', () => {
+  it('produces a suboptimal result on the known difficult fixture', () => {
+    const { items, listingsByIsbn } = makeGreedySuboptimalFixture()
+    const bookOptions = buildBookOptions(items, listingsByIsbn)
+    const assignment = greedyStrategy.solve(bookOptions)
+    const cost = computeTotalCost(bookOptions, assignment)
+    // Greedy gets $30.96; verify it does NOT find the $28.96 optimum
+    expect(cost).toBeGreaterThan(29)
+  })
+})
+
+describe('exactStrategy', () => {
+  it('finds the true optimum on the greedy-suboptimal fixture', () => {
+    const { items, listingsByIsbn } = makeGreedySuboptimalFixture()
+    const bookOptions = buildBookOptions(items, listingsByIsbn)
+    const assignment = exactStrategy.solve(bookOptions)
+    const cost = computeTotalCost(bookOptions, assignment)
+    // Optimal: B(book1+book4)=$9.98, A(book2+book3)=$18.98 → $28.96
+    expect(cost).toBeCloseTo(28.96, 1)
+  })
+
+  it('assigns book 1 to B and book 4 to B in the optimal solution', () => {
+    const { items, listingsByIsbn } = makeGreedySuboptimalFixture()
+    const bookOptions = buildBookOptions(items, listingsByIsbn)
+    const assignment = exactStrategy.solve(bookOptions)
+    expect(assignment.get('i1')?.seller_id).toBe('B')
+    expect(assignment.get('i4')?.seller_id).toBe('B')
+  })
+
+  it('returns empty assignment when no listings exist', () => {
+    const items = [makeItem({ id: 'i1', isbn_preferred: 'isbn-1' })]
+    const bookOptions = buildBookOptions(items, new Map())
+    const assignment = exactStrategy.solve(bookOptions)
+    expect(assignment.size).toBe(0)
+  })
+
+  it('handles a cart of 10 books within reasonable time', () => {
+    const items = Array.from({ length: 10 }, (_, i) =>
+      makeItem({ id: `i${i}`, isbn_preferred: `isbn-${i}` })
+    )
+    const listingsByIsbn = new Map(
+      items.map((item) => [
+        item.isbn_preferred!,
+        [makeListing({ seller_id: 'A', isbn: item.isbn_preferred!, price: 5.00 })],
+      ])
+    )
+    const bookOptions = buildBookOptions(items, listingsByIsbn)
+    const start = Date.now()
+    const assignment = exactStrategy.solve(bookOptions)
+    expect(Date.now() - start).toBeLessThan(500) // must finish in < 500ms
+    expect(assignment.size).toBe(10)
+  })
+})
+
+describe('localSearchStrategy', () => {
+  it('finds the optimum (or better) on the greedy-suboptimal fixture', () => {
+    const { items, listingsByIsbn } = makeGreedySuboptimalFixture()
+    const bookOptions = buildBookOptions(items, listingsByIsbn)
+    const greedyCost = computeTotalCost(bookOptions, greedyStrategy.solve(bookOptions))
+    const lsCost = computeTotalCost(bookOptions, localSearchStrategy.solve(bookOptions))
+    // Local search must beat greedy on this fixture
+    expect(lsCost).toBeLessThan(greedyCost)
+    // And should reach the optimum
+    expect(lsCost).toBeCloseTo(28.96, 1)
+  })
+
+  it('never produces a worse result than greedy', () => {
+    // Run both strategies on several random-ish fixtures and verify LS ≤ greedy
+    const fixtures = [
+      // Single seller — both strategies should tie
+      {
+        items: [makeItem({ id: 'i1', isbn_preferred: 'isbn-1' }), makeItem({ id: 'i2', isbn_preferred: 'isbn-2' })],
+        listingsByIsbn: new Map([
+          ['isbn-1', [makeListing({ seller_id: 'A', isbn: 'isbn-1', price: 5 })]],
+          ['isbn-2', [makeListing({ seller_id: 'A', isbn: 'isbn-2', price: 6 })]],
+        ]),
+      },
+      // Two sellers with equal coverage — both should assign to cheaper
+      {
+        items: [makeItem({ id: 'i1', isbn_preferred: 'isbn-1' }), makeItem({ id: 'i2', isbn_preferred: 'isbn-2' })],
+        listingsByIsbn: new Map([
+          ['isbn-1', [makeListing({ seller_id: 'A', isbn: 'isbn-1', price: 4 }), makeListing({ seller_id: 'B', isbn: 'isbn-1', price: 5 })]],
+          ['isbn-2', [makeListing({ seller_id: 'A', isbn: 'isbn-2', price: 3 }), makeListing({ seller_id: 'B', isbn: 'isbn-2', price: 2 })]],
+        ]),
+      },
+    ]
+
+    for (const { items, listingsByIsbn } of fixtures) {
+      const bookOptions = buildBookOptions(items, listingsByIsbn)
+      const greedyCost = computeTotalCost(bookOptions, greedyStrategy.solve(bookOptions))
+      const lsCost = computeTotalCost(bookOptions, localSearchStrategy.solve(bookOptions))
+      expect(lsCost).toBeLessThanOrEqual(greedyCost + 0.001)
+    }
+  })
+})
+
+describe('optimize() with explicit strategy', () => {
+  it('accepts a strategy override', () => {
+    const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1' })
+    const listing = makeListing({ seller_id: 'A', isbn: 'isbn-1', price: 5 })
+    const result = optimize([item], new Map([['isbn-1', [listing]]]), greedyStrategy)
+    expect(result.groups).toHaveLength(1)
+    expect(result.grand_total).toBeCloseTo(8.99)
   })
 })
