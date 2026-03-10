@@ -79,11 +79,64 @@ export async function fetchListingsByISBN(isbn: string): Promise<Listing[]> {
   }
 }
 
+function listingUrl(listingId: string | undefined, isbn: string): string {
+  if (listingId && /^\d+$/.test(listingId)) {
+    return `https://www.abebooks.com/servlet/BookDetailsPL?bi=${listingId}`
+  }
+  return `https://www.abebooks.com/servlet/SearchResults?isbn=${isbn}&sortby=17&n=100110615`
+}
+
 function parseListingsFromHTML(html: string, isbn: string): Listing[] {
   const listings: Listing[] = []
 
-  // AbeBooks embeds listing data as JSON in script tags
-  // Look for the listings data in the page
+  // Strategy 1: __NEXT_DATA__ (AbeBooks is a Next.js app)
+  const nextDataMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]+?)<\/script>/)
+  if (nextDataMatch) {
+    try {
+      const data = JSON.parse(nextDataMatch[1])
+      const pageProps = data?.props?.pageProps
+      const rawListings =
+        pageProps?.searchResult?.books ||
+        pageProps?.listings ||
+        pageProps?.initialState?.listings ||
+        data?.props?.initialState?.listings ||
+        []
+
+      for (const raw of rawListings) {
+        const price = parseFloat(String(
+          raw.orderInfo?.surfacePrice ?? raw.price ?? raw.salePrice ?? '0'
+        ))
+        if (!price || price <= 0) continue
+
+        const shipping = parseFloat(String(
+          raw.orderInfo?.shippingInfo?.totalShipping ?? raw.shippingPrice ?? '3.99'
+        ))
+        const condition = raw.conditionInfo?.conditionDescription || raw.condition || 'Good'
+        const sellerId = String(raw.sellerInfo?.sellerId || raw.sellerId || `seller_${listings.length}`)
+        const sellerName = raw.sellerInfo?.sellerName || raw.sellerName || 'Unknown Seller'
+        const listingId = raw.listingId || raw.id || raw.listing_id
+
+        listings.push({
+          listing_id: listingId || `${isbn}_${sellerId}_${listings.length}`,
+          seller_id: sellerId,
+          seller_name: sellerName,
+          price,
+          shipping_base: isNaN(shipping) ? 3.99 : shipping,
+          shipping_per_additional: 1.99,
+          condition,
+          condition_normalized: normalizeCondition(condition),
+          url: listingUrl(String(listingId ?? ''), isbn),
+          isbn,
+        })
+      }
+
+      if (listings.length > 0) return listings
+    } catch {
+      // Fall through to next strategy
+    }
+  }
+
+  // Strategy 2: window.__INITIAL_STATE__ or window.pagedata
   const scriptMatch = html.match(/window\.__INITIAL_STATE__\s*=\s*({.+?});?\s*<\/script>/s) ||
                       html.match(/window\.pagedata\s*=\s*({.+?});?\s*<\/script>/s)
 
@@ -103,18 +156,18 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
         const conditionNorm = normalizeCondition(condition)
         const sellerId = raw.sellerId || raw.sellerUsername || `seller_${listings.length}`
         const sellerName = raw.sellerName || raw.sellerUsername || 'Unknown Seller'
-        const listingId = raw.listing_id || `${isbn}_${sellerId}_${listings.length}`
+        const listingId = raw.listing_id
 
         listings.push({
-          listing_id: listingId,
+          listing_id: listingId || `${isbn}_${sellerId}_${listings.length}`,
           seller_id: sellerId,
           seller_name: sellerName,
           price,
-          shipping_base: shipping,
+          shipping_base: isNaN(shipping) ? 3.99 : shipping,
           shipping_per_additional: 1.99,
           condition,
           condition_normalized: conditionNorm,
-          url: `https://www.abebooks.com/products/isbn/${isbn}`,
+          url: listingUrl(listingId, isbn),
           isbn,
         })
       }
@@ -125,8 +178,7 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
     }
   }
 
-  // Fallback: parse listing data from HTML structure using regex
-  // AbeBooks listing containers
+  // Strategy 3: HTML regex fallback
   const listingRegex = /<li[^>]*data-seller-id="([^"]*)"[^>]*>[\s\S]*?<\/li>/g
   const priceRegex = /class="[^"]*item-price[^"]*"[^>]*>\s*\$?([\d,]+\.?\d*)/
   const sellerRegex = /data-seller-name="([^"]*)"/
@@ -147,10 +199,10 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
     const price = parseFloat(priceMatch[1].replace(',', ''))
     const sellerName = sellerMatch ? sellerMatch[1] : sellerId
     const condition = condMatch ? condMatch[1].trim() : 'Good'
-    const listingId = idMatch ? idMatch[1] : `${isbn}_${sellerId}`
+    const listingId = idMatch ? idMatch[1] : undefined
 
     listings.push({
-      listing_id: listingId,
+      listing_id: listingId || `${isbn}_${sellerId}`,
       seller_id: sellerId || `s_${listings.length}`,
       seller_name: sellerName,
       price,
@@ -158,12 +210,12 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
       shipping_per_additional: 1.99,
       condition,
       condition_normalized: normalizeCondition(condition),
-      url: listingId ? `https://www.abebooks.com/servlet/BookDetailsPL?bi=${listingId}` : `https://www.abebooks.com/products/isbn/${isbn}`,
+      url: listingUrl(listingId, isbn),
       isbn,
     })
   }
 
-  // If still no listings, return a placeholder directing to AbeBooks
+  // If still no listings, return a placeholder directing to AbeBooks search
   if (listings.length === 0) {
     listings.push({
       listing_id: `placeholder_${isbn}`,
@@ -174,7 +226,7 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
       shipping_per_additional: 1.99,
       condition: 'Unknown',
       condition_normalized: 'good',
-      url: `https://www.abebooks.com/products/isbn/${isbn}`,
+      url: listingUrl(undefined, isbn),
       isbn,
     })
   }

@@ -32,12 +32,15 @@ export async function POST(req: NextRequest) {
     const listings = await fetchListingsByISBN(isbn)
     results[isbn] = listings
 
-    // Update cache
-    await supabase.from('price_cache').upsert({
-      isbn,
-      listings,
-      cached_at: new Date().toISOString(),
-    })
+    // Only cache real results, not placeholders (price === 0 means fallback)
+    const hasRealListings = listings.some((l) => (l as { price: number }).price > 0)
+    if (hasRealListings) {
+      await supabase.from('price_cache').upsert({
+        isbn,
+        listings,
+        cached_at: new Date().toISOString(),
+      })
+    }
   }
 
   return NextResponse.json(results)
