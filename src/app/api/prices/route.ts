@@ -1,15 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { fetchListingsByISBN } from '@/lib/abebooks'
-import type { Listing, PriceResponse, SourceInfo } from '@/lib/types'
+import type { Listing, PriceResponse } from '@/lib/types'
 
 const CACHE_TTL_HOURS = 6
-
-// Other stores we link to for manual browsing (we don't scrape these)
-const BROWSE_SOURCES = [
-  { name: 'ThriftBooks', search_url: (isbn: string) => `https://www.thriftbooks.com/browse/?b.search=${isbn}` },
-  { name: 'BetterWorldBooks', search_url: (isbn: string) => `https://www.betterworldbooks.com/search/results?q=${isbn}` },
-]
 
 export async function POST(req: NextRequest) {
   const { isbns }: { isbns: string[] } = await req.json()
@@ -18,7 +12,6 @@ export async function POST(req: NextRequest) {
   }
 
   const allListings: Record<string, Listing[]> = {}
-  let totalFound = 0
 
   for (const isbn of isbns) {
     // Check cache
@@ -32,18 +25,16 @@ export async function POST(req: NextRequest) {
       const age = Date.now() - new Date(cached.cached_at).getTime()
       if (age < CACHE_TTL_HOURS * 3600 * 1000) {
         allListings[isbn] = cached.listings as Listing[]
-        totalFound += (cached.listings as Listing[]).length
         continue
       }
     }
 
-    // Fetch fresh
+    // Fetch fresh from AbeBooks
     const listings = await fetchListingsByISBN(isbn)
     allListings[isbn] = listings
 
-    // Only cache real results (price > 0 means actual listings)
-    if (listings.some((l) => l.price > 0)) {
-      totalFound += listings.length
+    // Only cache real results (non-empty)
+    if (listings.length > 0) {
       await supabase.from('price_cache').upsert({
         isbn,
         listings,
@@ -52,21 +43,14 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Build source info — we always try AbeBooks; others are browse-only links
-  // Use the first ISBN as a representative search (they'll all have different ISBNs anyway)
-  const representativeIsbn = isbns[0]
-  const sources: SourceInfo[] = [
-    {
-      name: 'AbeBooks',
-      search_url: `https://www.abebooks.com/servlet/SearchResults?isbn=${representativeIsbn}&sortby=17`,
-      found: totalFound,
-    },
-    ...BROWSE_SOURCES.map((s) => ({
-      name: s.name,
-      search_url: s.search_url(representativeIsbn),
-      found: -1, // -1 = not searched, just linked
-    })),
-  ]
+  // Build per-source summary (AbeBooks only for now — ThriftBooks and BetterWorldBooks
+  // use Cloudflare/AWS WAF protection that blocks server-side requests)
+  const totalFound = Object.values(allListings).reduce((n, ls) => n + ls.length, 0)
+  const sources = [{
+    name: 'AbeBooks',
+    search_url: `https://www.abebooks.com/servlet/SearchResults?isbn=${isbns[0]}&sortby=17`,
+    found: totalFound,
+  }]
 
   return NextResponse.json({ listings: allListings, sources } satisfies PriceResponse)
 }
