@@ -94,6 +94,13 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
     const listingId = idMatch ? idMatch[1] : undefined
     const shipping = shipMatch ? parseFloat(shipMatch[1]) : 0
     const condition = condMatch ? condMatch[1].trim() : 'Good'
+
+    // Skip non-book media — check condition text for format keywords
+    // (AbeBooks lists CDs, DVDs, etc. in the same search results for ISBN lookups)
+    const condLower = condition.toLowerCase()
+    const NON_BOOK = [/\bcd\b/, /\bdvd\b/, /\bvhs\b/, /\bcassette\b/, /\bvinyl\b/, /\baudio cd\b/, /\bmp3\b/, /\bdigital\b/]
+    if (NON_BOOK.some((r) => r.test(condLower))) continue
+
     const sellerName = sellerMatch ? sellerMatch[1].trim() : 'AbeBooks Seller'
     const url = hrefMatch
       ? `https://www.abebooks.com${hrefMatch[1]}`

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Loader2, ExternalLink, TrendingDown, Copy, Check, Search } from 'lucide-react'
+import { Loader2, ExternalLink, TrendingDown, Copy, Check, Search, AlertCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -17,6 +17,7 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<OptimizationResult | null>(null)
   const [sources, setSources] = useState<SourceInfo[]>([])
+  const [listingsByIsbn, setListingsByIsbn] = useState<Record<string, Listing[]>>({})
   const [copied, setCopied] = useState(false)
 
   async function findDeals() {
@@ -24,6 +25,7 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
     setLoading(true)
     setResult(null)
     setSources([])
+    setListingsByIsbn({})
 
     try {
       const isbns = items
@@ -38,12 +40,13 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
       const priceData: PriceResponse = await priceRes.json()
       setSources(priceData.sources ?? [])
 
-      const listingsByIsbn: Record<string, Listing[]> = priceData.listings ?? {}
+      const byIsbn: Record<string, Listing[]> = priceData.listings ?? {}
+      setListingsByIsbn(byIsbn)
 
       const optRes = await fetch('/api/optimize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items, listingsByIsbn }),
+        body: JSON.stringify({ items, listingsByIsbn: byIsbn }),
       })
       const optimized: OptimizationResult = await optRes.json()
       setResult(optimized)
@@ -69,7 +72,16 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
   const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
   const searchedSources = sources.filter((s) => s.found >= 0)
   const browseSources = sources.filter((s) => s.found === -1)
-  const foundAnyListings = searchedSources.some((s) => s.found > 0)
+
+  // Per-book listing status (only shown after a search)
+  const searched = result !== null || sources.length > 0
+  const itemsWithIsbn = items.filter((i) => i.isbn_preferred)
+  const itemListingCounts = itemsWithIsbn.map((item) => ({
+    item,
+    count: (listingsByIsbn[item.isbn_preferred!] ?? []).length,
+  }))
+  const foundAnyListings = itemListingCounts.some((x) => x.count > 0)
+  const missingItems = itemListingCounts.filter((x) => x.count === 0)
 
   return (
     <div className="space-y-4">
@@ -100,53 +112,60 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
         </p>
       )}
 
-      {/* Source search results */}
-      {sources.length > 0 && (
+      {/* Per-book search results */}
+      {searched && itemListingCounts.length > 0 && (
         <div className="rounded-lg border bg-muted/30 px-3 py-2 space-y-1.5">
-          <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground mb-1">
             <Search className="h-3 w-3" />
-            Searched
+            Searched AbeBooks
           </div>
-          {searchedSources.map((s) => (
+          {itemListingCounts.map(({ item, count }) => (
             <a
-              key={s.name}
-              href={s.search_url}
+              key={item.id}
+              href={`https://www.abebooks.com/servlet/SearchResults?isbn=${item.isbn_preferred}&sortby=17`}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center justify-between text-xs hover:underline"
+              className="flex items-center justify-between text-xs hover:underline gap-2"
             >
-              <span className="font-medium">{s.name}</span>
-              <span className={s.found > 0 ? 'text-green-700' : 'text-muted-foreground'}>
-                {s.found > 0 ? `${s.found} listing${s.found !== 1 ? 's' : ''}` : 'no results'}
+              <span className="truncate text-foreground">{item.title}</span>
+              <span className={`shrink-0 ${count > 0 ? 'text-green-700' : 'text-amber-600 font-medium'}`}>
+                {count > 0 ? `${count} listing${count !== 1 ? 's' : ''}` : 'none found'}
               </span>
             </a>
           ))}
           {browseSources.length > 0 && (
-            <div className="pt-1 border-t">
-              <div className="text-[10px] text-muted-foreground mb-1">Browse manually</div>
-              <div className="flex flex-wrap gap-1.5">
-                {browseSources.map((s) => (
-                  <a
-                    key={s.name}
-                    href={s.search_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[10px] underline text-muted-foreground hover:text-foreground"
-                  >
-                    {s.name}
-                    <ExternalLink className="inline h-2.5 w-2.5 ml-0.5 -mt-0.5" />
-                  </a>
-                ))}
-              </div>
+            <div className="pt-1.5 border-t flex flex-wrap gap-2">
+              <span className="text-[10px] text-muted-foreground self-center">Also browse:</span>
+              {browseSources.map((s) => (
+                <a
+                  key={s.name}
+                  href={s.search_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[10px] underline text-muted-foreground hover:text-foreground"
+                >
+                  {s.name}
+                  <ExternalLink className="inline h-2.5 w-2.5 ml-0.5 -mt-0.5" />
+                </a>
+              ))}
             </div>
           )}
         </div>
       )}
 
-      {/* No-results fallback */}
-      {result && !foundAnyListings && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          No listings were found automatically. Try browsing the stores above, or check that your editions have ISBNs selected.
+      {/* No-results warning for specific books */}
+      {searched && missingItems.length > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 space-y-1">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-amber-800">
+            <AlertCircle className="h-3 w-3" />
+            No listings found for {missingItems.length === 1 ? 'this book' : `${missingItems.length} books`}:
+          </div>
+          {missingItems.map(({ item }) => (
+            <div key={item.id} className="text-xs text-amber-700 pl-4">• {item.title}</div>
+          ))}
+          <p className="text-[10px] text-amber-600 pt-0.5">
+            Try browsing AbeBooks or ThriftBooks manually using the links above.
+          </p>
         </div>
       )}
 
@@ -182,7 +201,15 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
                 {group.assignments.map(({ item, listing, quantity, subtotal }) => (
                   <div key={item.id} className="flex items-center justify-between text-sm">
                     <div className="flex items-center gap-2 min-w-0">
-                      <span className="truncate text-sm">{item.title}</span>
+                      <a
+                        href={listing.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="truncate text-sm hover:underline"
+                        title={`Open "${item.title}" on AbeBooks`}
+                      >
+                        {item.title}
+                      </a>
                       {quantity > 1 && (
                         <Badge variant="outline" className="text-xs shrink-0">×{quantity}</Badge>
                       )}
@@ -206,7 +233,7 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
                   onClick={() => openGroup(group.assignments.map((a) => a.listing.url))}
                 >
                   <ExternalLink className="h-3 w-3 mr-1.5" />
-                  Open {group.assignments.length} listing{group.assignments.length !== 1 ? 's' : ''} on AbeBooks
+                  Open all {group.assignments.length} listing{group.assignments.length !== 1 ? 's' : ''} on AbeBooks
                 </Button>
               </CardContent>
             </Card>
