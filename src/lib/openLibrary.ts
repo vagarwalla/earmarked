@@ -332,14 +332,25 @@ export async function getEditions(workId: string, language = 'eng'): Promise<Edi
     }
   }
 
-  // Back-fill covers from Google Books for any remaining no-cover editions (cap at 5 extra calls)
+  // Back-fill covers for editions with no OL cover.
+  // Try OL-by-ISBN first (covers sometimes exist there even without a covers[] entry in the edition record),
+  // then fall back to Google Books (capped at 5 calls to avoid quota exhaustion).
   const noCoverEditions = confirmed.filter((e) => !e.cover_url)
   if (noCoverEditions.length > 0) {
-    const toFetch = noCoverEditions.slice(0, 5)
-    const gbInfos = await Promise.all(toFetch.map((e) => fetchGoogleBooksInfo(e.isbn)))
-    for (let i = 0; i < toFetch.length; i++) {
-      const gbCoverUrl = gbInfos[i].coverUrl
-      if (gbCoverUrl) toFetch[i].cover_url = gbCoverUrl
+    const olCoverResults = await Promise.all(noCoverEditions.map(async (e) => {
+      const url = `${COVERS}/b/isbn/${e.isbn}-M.jpg`
+      const res = await fetch(url, { method: 'HEAD', next: { revalidate: 86400 } }).catch(() => null)
+      return res?.ok ? url : null
+    }))
+    for (let i = 0; i < noCoverEditions.length; i++) {
+      if (olCoverResults[i]) noCoverEditions[i].cover_url = olCoverResults[i]
+    }
+    const stillNoCover = noCoverEditions.filter((e) => !e.cover_url).slice(0, 5)
+    if (stillNoCover.length > 0) {
+      const gbInfos = await Promise.all(stillNoCover.map((e) => fetchGoogleBooksInfo(e.isbn)))
+      for (let i = 0; i < stillNoCover.length; i++) {
+        if (gbInfos[i].coverUrl) stillNoCover[i].cover_url = gbInfos[i].coverUrl
+      }
     }
   }
 

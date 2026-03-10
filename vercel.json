@@ -2,6 +2,9 @@
   "functions": {
     "src/app/api/prices/route.ts": {
       "maxDuration": 30
+    },
+    "src/app/api/cover-hashes/route.ts": {
+      "maxDuration": 60
     }
   }
 }
