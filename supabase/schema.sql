@@ -30,3 +30,13 @@ CREATE TABLE price_cache (
 
 CREATE UNIQUE INDEX ON price_cache(isbn);
 CREATE INDEX ON cart_items(cart_id);
+
+-- Enable RLS (required for publishable key)
+ALTER TABLE carts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cart_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE price_cache ENABLE ROW LEVEL SECURITY;
+
+-- Allow full public access (this is a personal/shared tool with no auth)
+CREATE POLICY "public_all" ON carts FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "public_all" ON cart_items FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "public_all" ON price_cache FOR ALL USING (true) WITH CHECK (true);

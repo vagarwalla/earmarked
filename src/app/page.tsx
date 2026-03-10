@@ -15,10 +15,15 @@ export default function HomePage() {
   const [open, setOpen] = useState(false)
 
   async function loadCarts() {
-    const res = await fetch('/api/cart')
-    const data = await res.json()
-    setCarts(data)
-    setLoading(false)
+    try {
+      const res = await fetch('/api/cart')
+      const data = await res.json()
+      setCarts(Array.isArray(data) ? data : [])
+    } catch {
+      setCarts([])
+    } finally {
+      setLoading(false)
+    }
   }
 
   useEffect(() => { loadCarts() }, [])
