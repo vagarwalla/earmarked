@@ -161,6 +161,9 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
   const [groupBy, setGroupBy] = useState<'publisher' | 'visual'>('publisher')
   const [hashMap, setHashMap] = useState<Map<string, bigint>>(new Map())
   const [hashesLoading, setHashesLoading] = useState(false)
+  // AI sanity-check state: clusterRep URL → final merged group ID
+  const [aiMergeMap, setAiMergeMap] = useState<Map<string, number>>(new Map())
+  const [aiCheckLoading, setAiCheckLoading] = useState(false)
 
   useEffect(() => {
     if (!book || !open) return
@@ -172,6 +175,8 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
     setTitleFilter(new Set())
     setHashMap(new Map())
     setHashesLoading(false)
+    setAiMergeMap(new Map())
+    setAiCheckLoading(false)
     fetch(`/api/editions?workId=${encodeURIComponent(book.work_id)}&language=${language}`)
       .then((r) => r.json())
       .then((data) => {
@@ -278,33 +283,28 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
       .catch(() => setHashesLoading(false))
   }, [groupBy, coverGroups, hashMap.size, hashesLoading])
 
-  const visualSections = useMemo((): { clusterRep: string | null; groups: CoverGroup[] }[] => {
+  // Step 1: dHash-based initial clusters
+  const dHashSections = useMemo((): { clusterRep: string | null; groups: CoverGroup[] }[] => {
     const coverId = (group: CoverGroup) =>
       group.key.startsWith('id:') ? parseInt(group.key.slice(3), 10) : Infinity
 
     if (hashMap.size === 0) {
-      // No hashes yet — each group is its own cluster, sorted by cover_id
       const sorted = [...filtered].sort((a, b) => coverId(a) - coverId(b))
       return sorted.map((group) => ({ clusterRep: group.cover_url, groups: [group] }))
     }
 
-    // Build cluster map: coverUrl → representative URL (threshold loosened to 15 for same-cover variants)
     const urlToCluster = clusterByHash(hashMap, 15)
-
-    // Assign each group a cluster representative
     const withCluster = filtered.map((group) => ({
       group,
       clusterRep: group.cover_url ? (urlToCluster.get(group.cover_url) ?? group.cover_url) : null,
     }))
 
-    // Order clusters by the earliest cover_id in the cluster
     const clusterOrder = new Map<string | null, number>()
     for (const { group, clusterRep } of withCluster) {
       const existing = clusterOrder.get(clusterRep) ?? Infinity
       clusterOrder.set(clusterRep, Math.min(existing, coverId(group)))
     }
 
-    // Sort items: by cluster order first, then by cover_id within cluster
     const sorted = [...withCluster].sort((a, b) => {
       const orderA = clusterOrder.get(a.clusterRep) ?? Infinity
       const orderB = clusterOrder.get(b.clusterRep) ?? Infinity
@@ -312,7 +312,6 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
       return coverId(a.group) - coverId(b.group)
     })
 
-    // Build sections: one section per cluster
     const sections: { clusterRep: string | null; groups: CoverGroup[] }[] = []
     for (const { group, clusterRep } of sorted) {
       const last = sections[sections.length - 1]
@@ -324,6 +323,57 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
     }
     return sections
   }, [hashMap, filtered])
+
+  // Step 2: Claude sanity check — send one rep per dHash cluster, get final merged groups
+  useEffect(() => {
+    if (groupBy !== 'visual') return
+    if (hashMap.size === 0) return           // dHash not ready yet
+    if (aiMergeMap.size > 0 || aiCheckLoading) return  // already done or in flight
+    if (dHashSections.length < 2) return     // nothing to merge
+
+    const clusterUrls = dHashSections
+      .map(s => s.clusterRep)
+      .filter((u): u is string => u !== null)
+
+    if (clusterUrls.length < 2) return
+
+    setAiCheckLoading(true)
+    fetch('/api/cover-groups', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clusterUrls }),
+    })
+      .then(r => r.json())
+      .then((data: { groups: number[] }) => {
+        const map = new Map<string, number>()
+        clusterUrls.forEach((url, i) => map.set(url, data.groups[i]))
+        setAiMergeMap(map)
+      })
+      .catch(() => { /* leave aiMergeMap empty — fall back to dHash sections */ })
+      .finally(() => setAiCheckLoading(false))
+  }, [groupBy, hashMap, dHashSections, aiMergeMap.size, aiCheckLoading])
+
+  // Step 3: Apply AI merge map to produce final sections
+  const visualSections = useMemo((): { clusterRep: string | null; groups: CoverGroup[] }[] => {
+    // While AI check is pending, show dHash sections as-is
+    if (aiMergeMap.size === 0) return dHashSections
+
+    // Merge dHash sections that Claude identified as the same cover design
+    const merged = new Map<number, { clusterRep: string | null; groups: CoverGroup[] }>()
+    for (const section of dHashSections) {
+      const finalId = section.clusterRep != null
+        ? (aiMergeMap.get(section.clusterRep) ?? dHashSections.indexOf(section))
+        : dHashSections.indexOf(section)
+      if (!merged.has(finalId)) {
+        merged.set(finalId, { clusterRep: section.clusterRep, groups: [] })
+      }
+      merged.get(finalId)!.groups.push(...section.groups)
+    }
+
+    return Array.from(merged.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([, section]) => section)
+  }, [dHashSections, aiMergeMap])
 
   const hasActiveFilters = publisherFilter.size > 0 || yearFilter.size > 0 || titleFilter.size > 0
 
@@ -441,7 +491,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
                 onClick={() => setGroupBy('visual')}
               >
                 Visual
-                {groupBy === 'visual' && hashesLoading && (
+                {groupBy === 'visual' && (hashesLoading || aiCheckLoading) && (
                   <Loader2 className="h-3 w-3 animate-spin" />
                 )}
               </button>
