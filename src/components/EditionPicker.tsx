@@ -111,7 +111,7 @@ function MultiSelectDropdown<T extends string | number>({
               {count > 0 && (
                 <button
                   onClick={() => onChange(new Set())}
-                  className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground mb-0.5"
+                  className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground mb-0.5"
                 >
                   <X className="h-3 w-3" /> Clear
                 </button>
@@ -164,7 +164,7 @@ function EditionCard({
       className={`relative rounded-lg p-2 text-left transition-all border-2 ${isPrimary ? 'border-amber-500 bg-amber-50' : isSelected ? 'border-primary bg-primary/5' : 'border-transparent hover:border-border'}`}
     >
       {isSelected && (
-        <div className={`absolute top-2 right-2 rounded-full px-1.5 py-0.5 z-10 flex items-center gap-0.5 text-[10px] font-semibold leading-none ${isPrimary ? 'bg-amber-500 text-white' : 'bg-primary text-primary-foreground'}`}>
+        <div className={`absolute top-2 right-2 rounded-full px-1.5 py-0.5 z-10 flex items-center gap-0.5 text-xs font-semibold leading-none ${isPrimary ? 'bg-amber-500 text-white' : 'bg-primary text-primary-foreground'}`}>
           {isPrimary && <Star className="h-2.5 w-2.5 fill-white" />}
           {isPrimary ? 'Top' : `#${selIdx + 1}`}
         </div>
@@ -190,12 +190,12 @@ function EditionCard({
         {rep.publisher && <div className="text-muted-foreground line-clamp-2">{rep.publisher}</div>}
         <div className="flex justify-between items-baseline gap-1">
           <span className="text-muted-foreground">{rep.publish_year ?? ''}</span>
-          <span className="text-[10px] text-muted-foreground/60 shrink-0">{rep.isbn}</span>
+          <span className="text-xs text-muted-foreground/60 shrink-0">{rep.isbn}</span>
         </div>
-        {rep.pages && <div className="text-muted-foreground text-xs">{rep.pages} pp</div>}
+        {rep.pages && <div className="text-muted-foreground text-sm">{rep.pages} pp</div>}
         <div className="flex flex-wrap gap-1 pt-0.5">
           {group.formats.filter((f) => f !== 'any').map((f) => (
-            <span key={f} className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground capitalize">
+            <span key={f} className="text-sm px-2 py-0.5 rounded bg-muted text-muted-foreground capitalize">
               {f === 'hardcover' ? 'HC' : 'PB'}
             </span>
           ))}
@@ -226,7 +226,7 @@ function SectionHeader({
         {someSelected && <div className="h-0.5 w-2 bg-primary rounded-full" />}
       </div>
       <span className="text-sm font-medium text-foreground flex-1">{label}</span>
-      <span className="text-xs text-muted-foreground shrink-0">
+      <span className="text-sm text-muted-foreground shrink-0">
         {selectedCount > 0 ? `${selectedCount} / ${groupKeys.length} selected` : `${groupKeys.length} edition${groupKeys.length !== 1 ? 's' : ''}`}
       </span>
     </button>
@@ -585,7 +585,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
           <DialogTitle>Choose editions — {book?.title}</DialogTitle>
         </DialogHeader>
 
-        <p className="text-xs text-muted-foreground shrink-0 -mt-1">
+        <p className="text-sm text-muted-foreground shrink-0 -mt-1">
           Pick one or more editions you&apos;d accept. First picked = top preference. All are searched for the best price.
         </p>
 
@@ -601,7 +601,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
               {FORMAT_LABELS[f]}
             </Button>
           ))}
-          <div className="ml-auto flex gap-1 border rounded-md overflow-hidden text-xs">
+          <div className="ml-auto flex gap-1 border rounded-md overflow-hidden text-sm">
             <button
               className={`px-3 py-1.5 transition-colors ${language === 'eng' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
               onClick={() => setLanguage('eng')}
@@ -642,13 +642,13 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
           {hasActiveFilters && (
             <button
               onClick={clearAllFilters}
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
             >
               <X className="h-3 w-3" /> Clear filters
             </button>
           )}
           <div className="ml-auto flex items-center gap-2">
-            <div className="flex gap-0 border rounded-md overflow-hidden text-xs">
+            <div className="flex gap-0 border rounded-md overflow-hidden text-sm">
               <button
                 className={`px-2.5 py-1.5 transition-colors ${groupBy === 'publisher' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
                 onClick={() => setGroupBy('publisher')}
@@ -666,7 +666,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
               </button>
             </div>
             {!loading && (
-              <span className="text-xs text-muted-foreground">
+              <span className="text-sm text-muted-foreground">
                 {sorted.length} edition{sorted.length !== 1 ? 's' : ''}
               </span>
             )}
@@ -743,7 +743,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
 
         <div className="flex gap-2 shrink-0 pt-2 border-t items-center">
           {selectedCount > 0 && (
-            <span className="text-xs text-muted-foreground">
+            <span className="text-sm text-muted-foreground">
               {selectedCount} edition{selectedCount !== 1 ? 's' : ''} selected
               {primaryKey && (() => {
                 const g = coverGroups.find((g) => g.key === primaryKey)

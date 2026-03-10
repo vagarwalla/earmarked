@@ -63,7 +63,7 @@ function EditionStrip({
         })}
         <button
           onClick={() => onChangeCover(item)}
-          className="text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2 shrink-0"
+          className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 shrink-0"
         >
           edit
         </button>
@@ -159,13 +159,14 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
           )}
         </button>
         <button
-          className="mt-1 w-20 flex justify-center gap-1 items-center text-[10px] text-muted-foreground hover:text-foreground"
+          className="mt-1 w-20 flex justify-center gap-1 items-center text-xs text-muted-foreground hover:text-foreground"
           onClick={() => onChangeCover(item)}
           title="Change edition"
         >
           <RefreshCw className="h-3 w-3" />
           <span>edition</span>
         </button>
+
       </div>
 
       {/* Details */}
@@ -187,7 +188,7 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
 
         <div className="flex flex-wrap gap-2 items-center">
           {/* Condition multi-select */}
-          <div className="flex gap-0.5 border rounded-md overflow-hidden text-xs">
+          <div className="flex gap-0.5 border rounded-md overflow-hidden text-sm">
             {CONDITIONS.map((c) => {
               const active = (item.conditions ?? []).includes(c.value)
               return (
@@ -203,7 +204,7 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
           </div>
 
           {/* Format toggle */}
-          <div className="flex gap-0.5 border rounded-md overflow-hidden text-xs">
+          <div className="flex gap-0.5 border rounded-md overflow-hidden text-sm">
             {formatOptions.map((f) => (
               <button
                 key={f}
@@ -218,7 +219,7 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
           {/* Flexible */}
           <button
             onClick={() => patch({ flexible: !item.flexible })}
-            className={`text-xs px-2 py-1 rounded border transition-colors ${
+            className={`text-sm px-2 py-1 rounded border transition-colors ${
               item.flexible ? 'bg-blue-50 text-blue-700 border-blue-200' : 'text-muted-foreground hover:bg-muted'
             }`}
           >
@@ -247,12 +248,12 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
             >
               <Plus className="h-3 w-3" />
             </Button>
-            <span className="text-xs text-muted-foreground ml-1">cop{item.quantity === 1 ? 'y' : 'ies'}</span>
+            <span className="text-sm text-muted-foreground ml-1">cop{item.quantity === 1 ? 'y' : 'ies'}</span>
           </div>
           <div className="flex items-center gap-1">
-            <span className="text-xs text-muted-foreground">max</span>
+            <span className="text-sm text-muted-foreground">max</span>
             <div className="relative">
-              <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">$</span>
+              <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
               <input
                 type="number"
                 min="0"
@@ -266,12 +267,12 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
                     patch({ max_price: val })
                   }
                 }}
-                className="h-6 w-16 pl-4 pr-1 text-xs border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                className="h-7 w-16 pl-4 pr-1 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-ring"
               />
             </div>
           </div>
           {item.isbn_preferred && (!item.isbns_candidates || item.isbns_candidates.length < 2) && (
-            <Badge variant="outline" className="text-[10px] font-normal">
+            <Badge variant="outline" className="text-xs font-normal">
               ISBN {item.isbn_preferred}
             </Badge>
           )}

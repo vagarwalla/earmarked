@@ -27,7 +27,7 @@ function ListingRow({ listing }: { listing: Listing }) {
       href={listing.url}
       target="_blank"
       rel="noopener noreferrer"
-      className="flex items-center gap-2 py-1 px-2 rounded hover:bg-muted/60 transition-colors group text-xs"
+      className="flex items-center gap-2 py-1 px-2 rounded hover:bg-muted/60 transition-colors group text-sm"
     >
       <span className="truncate text-muted-foreground group-hover:text-foreground flex-1">
         {listing.seller_name}
@@ -54,13 +54,13 @@ function BookListings({ item, listings }: { item: CartItem; listings: Listing[] 
 
   return (
     <div className="space-y-0.5">
-      <div className="flex items-center justify-between text-xs mb-0.5">
+      <div className="flex items-center justify-between text-sm mb-0.5">
         <span className="font-medium truncate">{item.title}</span>
         <div className="flex items-center gap-2 shrink-0 ml-2">
           {rest.length > 0 && (
             <button
               onClick={() => setExpanded(!expanded)}
-              className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground"
+              className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
             >
               {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
               {expanded ? 'Show less' : `${rest.length} more listing${rest.length !== 1 ? 's' : ''}`}
@@ -168,7 +168,7 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
       </Button>
 
       {hasUnpricedItems && (
-        <p className="text-xs text-muted-foreground text-center">
+        <p className="text-sm text-muted-foreground text-center">
           Some books don&apos;t have an edition selected — choose an edition to get accurate pricing.
         </p>
       )}
@@ -189,12 +189,12 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
       {/* Missing books warning */}
       {searched && missingItems.length > 0 && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 space-y-1">
-          <div className="flex items-center gap-1.5 text-xs font-medium text-amber-800">
+          <div className="flex items-center gap-1.5 text-sm font-medium text-amber-800">
             <AlertCircle className="h-3 w-3" />
             No AbeBooks listings found for:
           </div>
           {missingItems.map(({ item }) => (
-            <div key={item.id} className="text-xs text-amber-700 pl-4">
+            <div key={item.id} className="text-sm text-amber-700 pl-4">
               • {item.title}
               {item.isbn_preferred && (
                 <a
@@ -219,7 +219,7 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
               <div className="font-semibold text-green-900">
                 Best deal: ${result.grand_total.toFixed(2)}
               </div>
-              <div className="text-xs text-green-700">incl. estimated shipping</div>
+              <div className="text-sm text-green-700">incl. estimated shipping</div>
             </div>
             {result.savings > 0.5 && (
               <Badge className="bg-green-600 text-white">
@@ -233,7 +233,7 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
             <Card key={group.seller_id} className="overflow-hidden">
               <CardHeader className="py-2 px-3 bg-muted/50 flex-row items-center justify-between space-y-0">
                 <CardTitle className="text-sm font-medium">{group.seller_name}</CardTitle>
-                <span className="text-xs text-muted-foreground">
+                <span className="text-sm text-muted-foreground">
                   {group.assignments.length} book{group.assignments.length !== 1 ? 's' : ''}
                 </span>
               </CardHeader>
@@ -252,11 +252,11 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
                       {quantity > 1 && (
                         <Badge variant="outline" className="text-xs shrink-0">×{quantity}</Badge>
                       )}
-                      <Badge variant="secondary" className="text-[10px] shrink-0 capitalize">
+                      <Badge variant="secondary" className="text-xs shrink-0 capitalize">
                         {conditionLabel(listing.condition_normalized)}
                       </Badge>
                       {listing.isbn !== item.isbn_preferred && (
-                        <Badge variant="outline" className="text-[10px] shrink-0 text-muted-foreground">
+                        <Badge variant="outline" className="text-xs shrink-0 text-muted-foreground">
                           alt. edition
                         </Badge>
                       )}
@@ -264,7 +264,7 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
                     <span className="shrink-0 font-medium ml-2">${subtotal.toFixed(2)}</span>
                   </div>
                 ))}
-                <div className="border-t pt-1.5 flex justify-between text-xs text-muted-foreground">
+                <div className="border-t pt-1.5 flex justify-between text-sm text-muted-foreground">
                   <span>Shipping (est.): ${group.shipping.toFixed(2)}</span>
                   <span className="font-semibold text-foreground">
                     Group total: ${group.group_total.toFixed(2)}
@@ -273,7 +273,7 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
                 <Button
                   size="sm"
                   variant="outline"
-                  className="w-full mt-1 h-7 text-xs"
+                  className="w-full mt-1 h-8 text-sm"
                   onClick={() => openGroup(group.assignments.map((a) => a.listing.url))}
                 >
                   <ExternalLink className="h-3 w-3 mr-1.5" />
@@ -283,7 +283,7 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
             </Card>
           ))}
 
-          <p className="text-[10px] text-muted-foreground text-center">
+          <p className="text-xs text-muted-foreground text-center">
             Shipping estimated at $3.99 first book + $1.99 each additional from same seller. Actual rates may vary.
           </p>
         </div>

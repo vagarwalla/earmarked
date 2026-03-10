@@ -103,7 +103,7 @@ export default function HomePage() {
                         <Badge variant="secondary">
                           {cart.item_count ?? 0} {cart.item_count === 1 ? 'book' : 'books'}
                         </Badge>
-                        <span className="text-xs text-muted-foreground">
+                        <span className="text-sm text-muted-foreground">
                           {new Date(cart.created_at).toLocaleDateString()}
                         </span>
                       </div>
