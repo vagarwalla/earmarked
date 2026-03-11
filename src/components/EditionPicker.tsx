@@ -28,32 +28,28 @@ function groupCombinedScore(group: CoverGroup, popularityMap: Record<string, num
   return Math.max(...group.editions.map((e) => combinedScore(e, popularityMap)))
 }
 
-function scoreToDots(score: number): number {
-  if (score <= 20) return 1
-  if (score <= 45) return 2
-  if (score <= 70) return 3
-  if (score <= 95) return 4
-  return 5
+/** Best (max) OCLC holdings across all editions in a group */
+function groupHoldings(group: CoverGroup, popularityMap: Record<string, number>): number | null {
+  let best: number | null = null
+  for (const e of group.editions) {
+    const h = popularityMap[e.isbn]
+    if (h !== undefined && (best === null || h > best)) best = h
+  }
+  return best
 }
 
-function PopularityDots({ score, loading }: { score: number; loading: boolean }) {
+function LibraryCount({ holdings, loading }: { holdings: number | null; loading: boolean }) {
   if (loading) {
-    return (
-      <div className="flex gap-0.5 pt-1">
-        <div className="h-1.5 w-10 rounded bg-muted animate-pulse" />
-      </div>
-    )
+    return <div className="h-3 w-14 rounded bg-muted animate-pulse" />
   }
-  const dots = scoreToDots(score)
+  if (holdings === null || holdings === 0) return null
+  const label = holdings >= 1000
+    ? `${(holdings / 1000).toFixed(holdings >= 10000 ? 0 : 1)}k`
+    : String(holdings)
   return (
-    <div className="flex gap-0.5 pt-1" title={`Popularity estimate: ${dots}/5`}>
-      {[1, 2, 3, 4, 5].map((i) => (
-        <div
-          key={i}
-          className={`h-1.5 w-1.5 rounded-full ${i <= dots ? 'bg-amber-400' : 'bg-muted'}`}
-        />
-      ))}
-    </div>
+    <span className="text-xs text-muted-foreground/70 whitespace-nowrap" title={`${holdings.toLocaleString()} libraries hold this edition`}>
+      {label} libraries
+    </span>
   )
 }
 
@@ -347,7 +343,7 @@ function EditionCard({
   const isSelected = selIdx !== -1
   const isPrimary = selIdx === 0
   const isFirstEdition = group.key === firstEditionKey
-  const popScore = groupCombinedScore(group, popularityMap)
+  const holdings = groupHoldings(group, popularityMap)
   const popIsLoading = popularityLoading && Object.keys(popularityMap).length === 0
   return (
     <button
@@ -392,7 +388,7 @@ function EditionCard({
               </span>
             ))}
           </div>
-          <PopularityDots score={popScore} loading={popIsLoading} />
+          <LibraryCount holdings={holdings} loading={popIsLoading} />
         </div>
       </div>
     </button>
