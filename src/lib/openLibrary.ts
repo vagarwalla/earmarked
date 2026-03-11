@@ -5,7 +5,7 @@ const COVERS = 'https://covers.openlibrary.org'
 const GB_KEY = process.env.GOOGLE_BOOKS_API_KEY ? `&key=${process.env.GOOGLE_BOOKS_API_KEY}` : ''
 
 export async function searchBooks(query: string): Promise<BookSearchResult[]> {
-  const olUrl = `${BASE}/search.json?q=${encodeURIComponent(query)}&fields=title,author_name,key,cover_i,cover_edition_key,first_publish_year,series_name,series_key,series_position&limit=10`
+  const olUrl = `${BASE}/search.json?q=${encodeURIComponent(query)}&fields=title,author_name,key,cover_i,first_publish_year,series_name,series_key,series_position&limit=10`
   const olRes = await fetch(olUrl, { next: { revalidate: 3600 } })
   if (!olRes.ok) return []
   const olData = await olRes.json()
@@ -18,22 +18,12 @@ export async function searchBooks(query: string): Promise<BookSearchResult[]> {
     const primaryCoverId = doc.cover_i as number | null
     const primaryCoverUrl = primaryCoverId ? `${COVERS}/b/id/${primaryCoverId}-M.jpg` : null
 
-    // cover_edition_key is an array of edition keys whose covers differ — use up to 2 extra
-    const altEditionKeys = Array.isArray(doc.cover_edition_key) ? (doc.cover_edition_key as string[]) : []
-    const coverUrls: string[] = primaryCoverUrl ? [primaryCoverUrl] : []
-    for (const edKey of altEditionKeys.slice(0, 5)) {
-      // OL edition keys look like "/books/OL7353617M" — strip the "/books/" prefix to get the OL ID
-      const olid = edKey.replace('/books/', '')
-      const url = `${COVERS}/b/olid/${olid}-M.jpg`
-      if (!coverUrls.includes(url) && coverUrls.length < 3) coverUrls.push(url)
-    }
-
     return {
       title: doc.title as string,
       author: Array.isArray(doc.author_name) ? (doc.author_name as string[])[0] : 'Unknown',
       work_id: doc.key as string,
       cover_url: primaryCoverUrl,
-      cover_urls: coverUrls,
+      cover_urls: primaryCoverUrl ? [primaryCoverUrl] : [],
       first_publish_year: doc.first_publish_year as number | null,
       series: olSeriesName ?? null,
       series_number: olSeriesPos ? String(parseInt(olSeriesPos)) : null,
