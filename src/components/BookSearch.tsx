@@ -1,9 +1,11 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Search, Loader2 } from 'lucide-react'
+import { Search, Loader2, Star } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import type { BookSearchResult } from '@/lib/types'
+import type { GoodreadsData } from '@/lib/goodreads'
+import { formatRatingsCount } from '@/lib/goodreads'
 
 const OL_COVERS = 'https://covers.openlibrary.org'
 
@@ -31,6 +33,8 @@ export function BookSearch({ onSelect }: Props) {
   const [open, setOpen] = useState(false)
   // work_id → array of cover URLs (lazy-loaded after results render)
   const [coverMap, setCoverMap] = useState<Record<string, string[]>>({})
+  // work_id → Goodreads data (lazy-loaded after results render)
+  const [goodreadsMap, setGoodreadsMap] = useState<Record<string, GoodreadsData | null>>({})
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -38,6 +42,7 @@ export function BookSearch({ onSelect }: Props) {
     if (query.length < 2) {
       setResults([])
       setCoverMap({})
+      setGoodreadsMap({})
       setOpen(false)
       return
     }
@@ -48,14 +53,24 @@ export function BookSearch({ onSelect }: Props) {
       const data: BookSearchResult[] = await res.json()
       setResults(data)
       setCoverMap({})
+      setGoodreadsMap({})
       setOpen(true)
       setLoading(false)
 
-      // Lazily fetch multiple cover images for each result from OL works API
+      // Lazily fetch covers and Goodreads data in parallel for each result
       const fetchAll = data.map(async (book) => {
-        const covers = await fetchWorkCovers(book.work_id)
-        if (covers.length > 0) {
-          setCoverMap((prev) => ({ ...prev, [book.work_id]: covers }))
+        const [covers, grRes] = await Promise.allSettled([
+          fetchWorkCovers(book.work_id),
+          fetch(`/api/goodreads?title=${encodeURIComponent(book.title)}&author=${encodeURIComponent(book.author)}`),
+        ])
+
+        if (covers.status === 'fulfilled' && covers.value.length > 0) {
+          setCoverMap((prev) => ({ ...prev, [book.work_id]: covers.value }))
+        }
+
+        if (grRes.status === 'fulfilled' && grRes.value.ok) {
+          const grData: GoodreadsData | null = await grRes.value.json().catch(() => null)
+          setGoodreadsMap((prev) => ({ ...prev, [book.work_id]: grData }))
         }
       })
       await Promise.allSettled(fetchAll)
@@ -98,6 +113,7 @@ export function BookSearch({ onSelect }: Props) {
           {results.map((book) => {
             // Use lazily-fetched covers once available, fall back to the single cover from search
             const covers = coverMap[book.work_id] ?? (book.cover_url ? [book.cover_url] : [])
+            const gr = goodreadsMap[book.work_id]
             return (
               <button
                 key={book.work_id}
@@ -127,8 +143,15 @@ export function BookSearch({ onSelect }: Props) {
                       {book.series}{book.series_number ? ` #${book.series_number}` : ''}
                     </div>
                   )}
-                  <div className="text-sm text-muted-foreground">
-                    {book.author}{book.first_publish_year ? ` · ${book.first_publish_year}` : ''}
+                  <div className="text-sm text-muted-foreground flex items-center gap-1.5 flex-wrap">
+                    <span>{book.author}{book.first_publish_year ? ` · ${book.first_publish_year}` : ''}</span>
+                    {gr && (
+                      <span className="flex items-center gap-0.5 text-amber-500">
+                        <Star className="h-3 w-3 fill-amber-500" />
+                        <span className="text-xs font-medium">{gr.rating.toFixed(2)}</span>
+                        <span className="text-xs text-muted-foreground">({formatRatingsCount(gr.ratings_count)})</span>
+                      </span>
+                    )}
                   </div>
                 </div>
               </button>

@@ -6,6 +6,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button'
 import type { BookSearchResult, Condition, Edition, Format, Listing } from '@/lib/types'
 import { CONDITION_ORDER, CONDITION_LABELS } from '@/lib/relaxation'
+import type { GoodreadsData } from '@/lib/goodreads'
+import { formatRatingsCount } from '@/lib/goodreads'
 
 // ─── Listings cache (localStorage, 2-hour TTL) ───────────────────────────────
 
@@ -556,6 +558,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
   const [statsLoading, setStatsLoading] = useState(false)
   const [, setTick] = useState(0)
   const [hideNoListings, setHideNoListings] = useState(true)
+  const [goodreadsData, setGoodreadsData] = useState<GoodreadsData | null>(null)
 
   useEffect(() => {
     if (!book || !open) return
@@ -575,6 +578,14 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
     setLastFetchedAt(null)
     setStatsLoading(false)
     setHideNoListings(true)
+    setGoodreadsData(null)
+
+    // Lazily fetch Goodreads rating in parallel
+    fetch(`/api/goodreads?title=${encodeURIComponent(book.title)}&author=${encodeURIComponent(book.author)}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data: GoodreadsData | null) => setGoodreadsData(data))
+      .catch(() => {})
+
     fetch(`/api/editions?workId=${encodeURIComponent(book.work_id)}&language=${language}`)
       .then((r) => r.json())
       .then((data: Edition[]) => {
@@ -940,7 +951,23 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-6xl w-[95vw] max-h-[90vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle>Choose editions — {book?.title}</DialogTitle>
+          <DialogTitle className="flex items-center gap-2 flex-wrap">
+            <span>Choose editions — {book?.title}</span>
+            {goodreadsData && (
+              <a
+                href={goodreadsData.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="inline-flex items-center gap-1 text-sm font-normal text-amber-600 hover:text-amber-700 transition-colors shrink-0"
+                title="View on Goodreads"
+              >
+                <Star className="h-3.5 w-3.5 fill-amber-500 text-amber-500" />
+                <span className="font-medium">{goodreadsData.rating.toFixed(2)}</span>
+                <span className="text-muted-foreground">({formatRatingsCount(goodreadsData.ratings_count)} ratings)</span>
+              </a>
+            )}
+          </DialogTitle>
         </DialogHeader>
 
         <p className="text-sm text-muted-foreground shrink-0 -mt-1">
