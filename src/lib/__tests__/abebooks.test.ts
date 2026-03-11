@@ -144,6 +144,30 @@ describe('fetchListingsByISBN — HTML parsing', () => {
     expect(listings[0].listing_id).toBe('11111')
   })
 
+  it('uses listing-optional-condition for quality when present', async () => {
+    // AbeBooks puts the actual quality in listing-optional-condition ("Condition: Very good")
+    // while listing-book-condition only shows the format ("Used - Hardcover").
+    const html = `<li data-test-id="listing-item">
+      <button data-listingid="99999" data-csa-c-cost="5.00" data-csa-c-shipping-cost="0.00"></button>
+      <span data-test-id="listing-book-condition">Used - Hardcover</span>
+      <span class="opt-subcondition" data-test-id="listing-optional-condition">Condition: Very good</span>
+      <span class="seller-name">Quality Books</span>
+      <a href="/book/id/99999/bd"></a>
+    </li>`
+    mockFetch(html)
+    const [listing] = await fetchListingsByISBN(ISBN)
+    expect(listing.condition).toBe('Very good')
+    expect(listing.condition_normalized).toBe('very_good')
+  })
+
+  it('falls back to listing-book-condition when optional condition is absent', async () => {
+    const html = makeHtmlListing({ listingId: '88888', sellerName: 'S1', price: '7.00', condition: 'Used - Like New' })
+    mockFetch(html)
+    const [listing] = await fetchListingsByISBN(ISBN)
+    expect(listing.condition).toBe('Used - Like New')
+    expect(listing.condition_normalized).toBe('like_new')
+  })
+
   it('parses multiple listings', async () => {
     const html = `<ul>
       ${makeHtmlListing({ listingId: 'L1', sellerName: 'Seller One', price: '5.00', condition: 'Good' })}

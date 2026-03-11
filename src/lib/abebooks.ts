@@ -72,6 +72,9 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
   const costRe = /data-csa-c-cost="([\d.]+)"/
   const shipRe = /data-csa-c-shipping-cost="([\d.]+)"/
   const condRe = /data-test-id="listing-book-condition"[^>]*>([\s\S]*?)<\/span>/
+  // listing-optional-condition holds the actual quality ("Condition: Very good", "Condition: Fair", etc.)
+  // It is more precise than listing-book-condition which often only says "Used - Hardcover"
+  const optCondRe = /data-test-id="listing-optional-condition"[^>]*>([\s\S]*?)<\/span>/
   const sellerRe = /seller-name">([^<]+)/
   const hrefRe = /href="(\/[^"]+\/\d+\/bd)"/
   const sfRe = /href="\/[^"]+\/(\d+)\/sf(?:\?[^"]*)?"/
@@ -89,6 +92,7 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
     const idMatch = idRe.exec(block)
     const shipMatch = shipRe.exec(block)
     const condMatch = condRe.exec(block)
+    const optCondMatch = optCondRe.exec(block)
     const sellerMatch = sellerRe.exec(block)
     const hrefMatch = hrefRe.exec(block)
     const sfMatch = sfRe.exec(block)
@@ -96,7 +100,13 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
     const listingId = idMatch ? idMatch[1] : undefined
     const sellerId = sfMatch ? sfMatch[1] : undefined
     const shipping = shipMatch ? parseFloat(shipMatch[1]) : 0
-    const condition = condMatch ? condMatch[1].trim() : 'Good'
+
+    // Prefer listing-optional-condition (e.g. "Condition: Very good") over
+    // listing-book-condition (e.g. "Used - Hardcover") — the latter is a format
+    // label and often omits quality info entirely.
+    const rawCond = condMatch ? condMatch[1].trim() : 'Good'
+    const optCond = optCondMatch ? optCondMatch[1].trim().replace(/^Condition:\s*/i, '') : null
+    const condition = optCond ?? rawCond
 
     // Skip non-book media — check condition text for format keywords
     // (AbeBooks lists CDs, DVDs, etc. in the same search results for ISBN lookups)
