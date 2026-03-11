@@ -313,6 +313,16 @@ function hasNonLatinScript(text: string): boolean {
   return /[\u0400-\u04FF\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF\u0600-\u06FF\u0590-\u05FF\u0900-\u097F\u0386-\u03CE\u0E00-\u0E7F]/.test(text)
 }
 
+/** Return true if this OL entry appears to be an audio edition (audiobook, CD, cassette, etc.) */
+function isAudioEdition(entry: Record<string, unknown>): boolean {
+  const AUDIO_RE = /\baudio\b|audiobook|audio\s*cd|compact\s*disc|cassette|unabridged|abridged|\bmp3\b|\bcd\b/i
+  const title = (entry.title as string) ?? ''
+  const publisher = (entry.publishers as string[] | undefined)?.[0] ?? ''
+  const physFormat = (entry.physical_format as string) ?? ''
+  const editionName = (entry.edition_name as string) ?? ''
+  return AUDIO_RE.test(title) || AUDIO_RE.test(publisher) || AUDIO_RE.test(physFormat) || AUDIO_RE.test(editionName)
+}
+
 function computePopularityScore(params: {
   ocaid: string | null
   coverId: number | null
@@ -400,6 +410,9 @@ export async function getEditions(workId: string, language = 'eng'): Promise<Edi
     const rawCoverId = (entry.covers as number[] | undefined)?.[0]
     const coverId = rawCoverId && rawCoverId > 0 ? rawCoverId : null
     const coverUrl = coverId ? `${COVERS}/b/id/${coverId}-M.jpg` : null
+
+    // Skip audio editions regardless of language
+    if (isAudioEdition(entry)) continue
 
     if (language) {
       const langs = (entry.languages as { key: string }[]) || []
