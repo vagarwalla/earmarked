@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { fetchListingsByISBN } from '@/lib/abebooks'
-import type { Listing, PriceResponse } from '@/lib/types'
+import { fetchBookFinderListings } from '@/lib/bookfinder'
+import type { Listing, PriceResponse, SourceInfo } from '@/lib/types'
 
 const CACHE_TTL_HOURS = 6
 
@@ -29,8 +30,12 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Fetch fresh from AbeBooks
-    const listings = await fetchListingsByISBN(isbn)
+    // Fetch from AbeBooks and BookFinder (ThriftBooks + Better World Books) in parallel
+    const [abeListings, bookfinderListings] = await Promise.all([
+      fetchListingsByISBN(isbn),
+      fetchBookFinderListings(isbn),
+    ])
+    const listings = [...abeListings, ...bookfinderListings]
     allListings[isbn] = listings
 
     // Only cache real results (non-empty)
@@ -43,14 +48,28 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Build per-source summary (AbeBooks only for now — ThriftBooks and BetterWorldBooks
-  // use Cloudflare/AWS WAF protection that blocks server-side requests)
-  const totalFound = Object.values(allListings).reduce((n, ls) => n + ls.length, 0)
-  const sources = [{
-    name: 'AbeBooks',
-    search_url: `https://www.abebooks.com/servlet/SearchResults?isbn=${isbns[0]}&sortby=17`,
-    found: totalFound,
-  }]
+  const allFlat = Object.values(allListings).flat()
+  const abeFound = allFlat.filter(l => l.seller_id !== 'thriftbooks' && l.seller_id !== 'betterworldbooks').length
+  const tbFound = allFlat.filter(l => l.seller_id === 'thriftbooks').length
+  const bwbFound = allFlat.filter(l => l.seller_id === 'betterworldbooks').length
+
+  const sources: SourceInfo[] = [
+    {
+      name: 'AbeBooks',
+      search_url: `https://www.abebooks.com/servlet/SearchResults?isbn=${isbns[0]}&sortby=17`,
+      found: abeFound,
+    },
+    {
+      name: 'ThriftBooks',
+      search_url: `https://www.thriftbooks.com/browse/?b.search=${isbns[0]}`,
+      found: tbFound,
+    },
+    {
+      name: 'Better World Books',
+      search_url: `https://www.betterworldbooks.com/search/results?q=${isbns[0]}`,
+      found: bwbFound,
+    },
+  ]
 
   return NextResponse.json({ listings: allListings, sources } satisfies PriceResponse)
 }

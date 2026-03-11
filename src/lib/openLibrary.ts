@@ -436,7 +436,22 @@ export async function getEditions(workId: string, language = 'eng'): Promise<Edi
     // Skip audio editions regardless of language
     if (isAudioEdition(entry)) continue
 
-    if (language) {
+    if (language === 'other') {
+      // Show only editions that are definitively non-English
+      const langs = (entry.languages as { key: string }[]) || []
+      if (langs.length > 0) {
+        // OL has explicit language data — include only if it's not English
+        const isEnglish = langs.some((l) => l.key === `/languages/eng`)
+        if (isEnglish) continue
+        confirmed.push(buildEdition(isbn, entry, coverId, coverUrl))
+      } else {
+        // No OL language tag — use heuristics: only include if there's a positive
+        // signal it's non-English (non-Latin script or non-English ISBN)
+        const title = (entry.title as string) || ''
+        if (!hasNonLatinScript(title) && !isNonEnglishIsbn(isbn)) continue
+        confirmed.push(buildEdition(isbn, entry, coverId, coverUrl))
+      }
+    } else if (language) {
       const langs = (entry.languages as { key: string }[]) || []
       if (langs.length > 0) {
         // OL has explicit language data — exclude if it doesn't match, no exceptions
