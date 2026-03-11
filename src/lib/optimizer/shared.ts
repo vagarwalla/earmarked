@@ -55,7 +55,10 @@ export function buildBookOptions(
     const qualified = rawListings.filter(
       (l) =>
         (item.conditions ?? []).includes(l.condition_normalized) &&
-        (item.max_price == null || l.price <= item.max_price)
+        (item.max_price == null || l.price <= item.max_price) &&
+        (!item.signed_only || l.signed) &&
+        (!item.first_edition_only || l.first_edition) &&
+        (!item.dust_jacket_only || l.dust_jacket)
     )
     // Sort by total standalone cost (price + shipping_base) so candidate selection
     // in all strategies considers actual cost, not just book price.

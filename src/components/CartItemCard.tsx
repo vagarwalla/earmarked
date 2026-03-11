@@ -82,9 +82,9 @@ interface Props {
 
 const CONDITIONS: { value: Condition; label: string }[] = [
   { value: 'new', label: 'New' },
-  { value: 'like_new', label: 'Like New' },
-  { value: 'very_good', label: 'Very Good' },
-  { value: 'good', label: 'Good' },
+  { value: 'fine', label: 'Fine or Near Fine' },
+  { value: 'good', label: 'Very Good or Good' },
+  { value: 'fair', label: 'Fair or Poor' },
 ]
 
 function toggleCondition(current: Condition[], value: Condition): Condition[] {
@@ -225,6 +225,26 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
           >
             {item.flexible ? 'Flexible ✓' : 'Flexible'}
           </button>
+
+          {/* Collectible attribute filters */}
+          <div className="flex gap-0.5 border rounded-md overflow-hidden text-sm">
+            {([
+              { key: 'signed_only', label: 'Signed' },
+              { key: 'first_edition_only', label: '1st Ed' },
+              { key: 'dust_jacket_only', label: 'DJ' },
+            ] as { key: 'signed_only' | 'first_edition_only' | 'dust_jacket_only'; label: string }[]).map(({ key, label }) => (
+              <button
+                key={key}
+                className={`px-2 py-1 transition-colors ${
+                  item[key] ? 'bg-amber-100 text-amber-800' : 'text-muted-foreground hover:bg-muted'
+                }`}
+                onClick={() => patch({ [key]: !item[key] })}
+                title={item[key] ? `Only ${label} copies` : `Any (click to require ${label})`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Quantity + max price */}

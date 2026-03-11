@@ -11,9 +11,9 @@ interface Props {
 
 const CONDITIONS: { value: Condition; label: string }[] = [
   { value: 'new', label: 'New' },
-  { value: 'like_new', label: 'Like New' },
-  { value: 'very_good', label: 'Very Good' },
-  { value: 'good', label: 'Good' },
+  { value: 'fine', label: 'Fine or Near Fine' },
+  { value: 'good', label: 'Very Good or Good' },
+  { value: 'fair', label: 'Fair or Poor' },
 ]
 
 function toggleCondition(current: Condition[], value: Condition): Condition[] {
@@ -39,7 +39,7 @@ export function CartDefaults({ cart, slug, onUpdate }: Props) {
     onUpdate(updated)
   }
 
-  const conditions = cart.default_conditions ?? ['new', 'like_new', 'very_good', 'good']
+  const conditions = cart.default_conditions ?? ['new', 'fine', 'good']
   const format: Format = cart.default_format ?? 'any'
 
   return (
@@ -93,6 +93,23 @@ export function CartDefaults({ cart, slug, onUpdate }: Props) {
             className="h-6 w-16 pl-4 pr-1 border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-ring"
           />
         </div>
+      </div>
+
+      <div className="flex gap-0.5 border rounded-md overflow-hidden">
+        {([
+          { key: 'default_signed_only', label: 'Signed' },
+          { key: 'default_first_edition_only', label: '1st Ed' },
+          { key: 'default_dust_jacket_only', label: 'DJ' },
+        ] as { key: 'default_signed_only' | 'default_first_edition_only' | 'default_dust_jacket_only'; label: string }[]).map(({ key, label }) => (
+          <button
+            key={key}
+            className={`px-2 py-1 transition-colors ${cart[key] ? 'bg-amber-100 text-amber-800' : 'hover:bg-muted'}`}
+            onClick={() => patch({ [key]: !cart[key] })}
+            title={cart[key] ? `Default: ${label} only` : `Default: any (click to require ${label})`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
     </div>
   )

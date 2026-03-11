@@ -1,5 +1,5 @@
 export type Format = 'hardcover' | 'paperback' | 'any'
-export type Condition = 'new' | 'like_new' | 'very_good' | 'good'
+export type Condition = 'new' | 'fine' | 'good' | 'fair'
 
 export interface Cart {
   id: string
@@ -10,6 +10,9 @@ export interface Cart {
   default_conditions: Condition[]
   default_format: Format
   default_max_price: number | null
+  default_signed_only: boolean
+  default_first_edition_only: boolean
+  default_dust_jacket_only: boolean
 }
 
 export interface CartItem {
@@ -24,6 +27,9 @@ export interface CartItem {
   conditions: Condition[]
   max_price: number | null
   flexible: boolean
+  signed_only: boolean
+  first_edition_only: boolean
+  dust_jacket_only: boolean
   quantity: number
   sort_order: number
   created_at: string
@@ -64,6 +70,9 @@ export interface Listing {
   shipping_per_additional: number
   condition: string
   condition_normalized: Condition
+  signed: boolean
+  first_edition: boolean
+  dust_jacket: boolean
   url: string
   isbn: string
 }

@@ -5,7 +5,10 @@ CREATE TABLE carts (
   created_at TIMESTAMPTZ DEFAULT now(),
   default_conditions TEXT[] DEFAULT ARRAY['new', 'like_new'],
   default_format TEXT DEFAULT 'any',
-  default_max_price NUMERIC DEFAULT NULL
+  default_max_price NUMERIC DEFAULT NULL,
+  default_signed_only BOOLEAN DEFAULT false,
+  default_first_edition_only BOOLEAN DEFAULT false,
+  default_dust_jacket_only BOOLEAN DEFAULT false
 );
 
 CREATE TABLE cart_items (
@@ -20,6 +23,9 @@ CREATE TABLE cart_items (
   conditions TEXT[] DEFAULT ARRAY['new', 'like_new'], -- acceptable conditions
   max_price NUMERIC DEFAULT NULL,
   flexible BOOLEAN DEFAULT false,
+  signed_only BOOLEAN DEFAULT false,
+  first_edition_only BOOLEAN DEFAULT false,
+  dust_jacket_only BOOLEAN DEFAULT false,
   quantity INT DEFAULT 1,
   sort_order INT DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT now()

@@ -4,18 +4,18 @@ const SEARCH_URL = 'https://www.abebooks.com/servlet/SearchResults'
 
 export function normalizeCondition(cond: string): Condition {
   const c = cond.toLowerCase()
-  if (c.includes('new') && !c.includes('like') && !c.includes('as')) return 'new'
-  if (c.includes('like new') || c.includes('as new') || c.includes('fine')) return 'like_new'
-  if (c.includes('very good')) return 'very_good'
-  if (c.includes('good')) return 'good'
+  if (c.includes('new') && !c.includes('like') && !c.includes('as') && !c.includes('near')) return 'new'
+  if (c.includes('like new') || c.includes('as new') || c.includes('near fine') || c.includes('fine')) return 'fine'
+  if (c.includes('very good') || c.includes('good')) return 'good'
+  if (c.includes('acceptable') || c.includes('fair') || c.includes('poor')) return 'fair'
   return 'good'
 }
 
 const CONDITION_RANK: Record<Condition, number> = {
   new: 4,
-  like_new: 3,
-  very_good: 2,
-  good: 1,
+  fine: 3,
+  good: 2,
+  fair: 1,
 }
 
 export function conditionMeets(actual: Condition, minimum: Condition): boolean {
@@ -64,6 +64,9 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
   // - Shipping:          data-csa-c-shipping-cost="0.0"
   // - Listing ID:        data-listingid="32405132647"
   // - Condition:         data-test-id="listing-book-condition">Used - Softcover</span>
+  // - Signed:            data-test-id="listing-signed">Signed</span>  (only present if signed)
+  // - First Edition:     data-test-id="listing-firstedition">First Edition</span>  (only if FE)
+  // - Dust Jacket:       no dedicated element — appears as "With dust jacket" in listing-description
   // - Seller name:       seller-name">World of Books
   // - Book detail URL:   href="/{slug}/{listingId}/bd"
 
@@ -75,6 +78,9 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
   // listing-optional-condition holds the actual quality ("Condition: Very good", "Condition: Fair", etc.)
   // It is more precise than listing-book-condition which often only says "Used - Hardcover"
   const optCondRe = /data-test-id="listing-optional-condition"[^>]*>([\s\S]*?)<\/span>/
+  const signedRe = /data-test-id="listing-signed"/
+  const firstEditionRe = /data-test-id="listing-firstedition"/
+  const descRe = /data-test-id="listing-description"[^>]*>([\s\S]*?)<\/p>/
   const sellerRe = /seller-name">([^<]+)/
   const hrefRe = /href="(\/[^"]+\/\d+\/bd)"/
   const sfRe = /href="\/[^"]+\/(\d+)\/sf(?:\?[^"]*)?"/
@@ -100,6 +106,10 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
     const listingId = idMatch ? idMatch[1] : undefined
     const sellerId = sfMatch ? sfMatch[1] : undefined
     const shipping = shipMatch ? parseFloat(shipMatch[1]) : 0
+    const signed = signedRe.test(block)
+    const first_edition = firstEditionRe.test(block)
+    const descMatch = descRe.exec(block)
+    const dust_jacket = descMatch ? /with dust jacket/i.test(descMatch[1]) : false
 
     // Prefer listing-optional-condition (e.g. "Condition: Very good") over
     // listing-book-condition (e.g. "Used - Hardcover") — the latter is a format
@@ -128,6 +138,9 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
       shipping_per_additional: 1.99,
       condition,
       condition_normalized: normalizeCondition(condition),
+      signed,
+      first_edition,
+      dust_jacket,
       url,
       isbn,
     })
