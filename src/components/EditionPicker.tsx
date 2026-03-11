@@ -40,16 +40,23 @@ function groupHoldings(group: CoverGroup, popularityMap: Record<string, number>)
 
 function LibraryCount({ holdings, loading }: { holdings: number | null; loading: boolean }) {
   if (loading) {
-    return <div className="h-3 w-14 rounded bg-muted animate-pulse" />
+    return (
+      <div className="flex items-center gap-1 pt-1">
+        <div className="h-3 w-20 rounded bg-muted animate-pulse" />
+      </div>
+    )
   }
   if (holdings === null || holdings === 0) return null
-  const label = holdings >= 1000
-    ? `${(holdings / 1000).toFixed(holdings >= 10000 ? 0 : 1)}k`
+  const label = holdings >= 10000
+    ? `${Math.round(holdings / 1000)}k`
+    : holdings >= 1000
+    ? `${(holdings / 1000).toFixed(1)}k`
     : String(holdings)
   return (
-    <span className="text-xs text-muted-foreground/70 whitespace-nowrap" title={`${holdings.toLocaleString()} libraries hold this edition`}>
-      {label} libraries
-    </span>
+    <div className="flex items-center gap-1 pt-1" title={`${holdings.toLocaleString()} libraries worldwide hold this edition (via OCLC)`}>
+      <span className="text-xs text-muted-foreground">📚</span>
+      <span className="text-xs text-muted-foreground font-medium">{label} libraries</span>
+    </div>
   )
 }
 
@@ -380,16 +387,14 @@ function EditionCard({
           <span className="text-xs text-muted-foreground/60 shrink-0">{rep.isbn}</span>
         </div>
         {rep.pages && <div className="text-muted-foreground text-sm">{rep.pages} pp</div>}
-        <div className="flex items-center justify-between gap-1 pt-0.5">
-          <div className="flex flex-wrap gap-1">
-            {group.formats.filter((f) => f !== 'any').map((f) => (
-              <span key={f} className="text-sm px-2 py-0.5 rounded bg-muted text-muted-foreground capitalize">
-                {f === 'hardcover' ? 'HC' : 'PB'}
-              </span>
-            ))}
-          </div>
-          <LibraryCount holdings={holdings} loading={popIsLoading} />
+        <div className="flex flex-wrap gap-1 pt-0.5">
+          {group.formats.filter((f) => f !== 'any').map((f) => (
+            <span key={f} className="text-sm px-2 py-0.5 rounded bg-muted text-muted-foreground capitalize">
+              {f === 'hardcover' ? 'HC' : 'PB'}
+            </span>
+          ))}
         </div>
+        <LibraryCount holdings={holdings} loading={popIsLoading} />
       </div>
     </button>
   )

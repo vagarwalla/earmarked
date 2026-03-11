@@ -2,13 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30 days
-const BATCH_SIZE = 5 // parallel OCLC requests per batch
-const MAX_ISBNS = 150
+const MAX_ISBNS = 50 // fetch all in parallel — keep total well under route timeout
 
 async function fetchOCLCHoldings(isbn: string): Promise<number> {
   try {
     const url = `https://classify.oclc.org/classify2/Classify?isbn=${isbn}&summary=true`
-    const res = await fetch(url, { signal: AbortSignal.timeout(8000) })
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
     if (!res.ok) return 0
     const xml = await res.text()
     // Matches <work ... holdings="N" ...> — works for response codes 0 (single) and 2 (multiple)
@@ -38,20 +37,18 @@ export async function POST(req: NextRequest) {
 
   const uncached = isbns.filter((isbn) => !(isbn in result))
 
-  // Fetch uncached ISBNs from OCLC in small parallel batches
-  for (let i = 0; i < uncached.length; i += BATCH_SIZE) {
-    const batch = uncached.slice(i, i + BATCH_SIZE)
-    const holdings = await Promise.all(batch.map(fetchOCLCHoldings))
-    const rows = batch.map((isbn, j) => ({
+  if (uncached.length > 0) {
+    // Fetch all uncached ISBNs in parallel — total time = slowest single request, not sum
+    const holdings = await Promise.all(uncached.map(fetchOCLCHoldings))
+    const rows = uncached.map((isbn, i) => ({
       isbn,
-      holdings: holdings[j],
+      holdings: holdings[i],
       cached_at: new Date().toISOString(),
     }))
     for (const row of rows) result[row.isbn] = row.holdings
-    // Cache results (upsert so re-fetches update the timestamp)
-    await supabase
-      .from('isbn_popularity')
-      .upsert(rows, { onConflict: 'isbn' })
+
+    // Cache results fire-and-forget — don't block the response on the write
+    supabase.from('isbn_popularity').upsert(rows, { onConflict: 'isbn' })
   }
 
   return NextResponse.json(result)
