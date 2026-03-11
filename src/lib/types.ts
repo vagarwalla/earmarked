@@ -35,6 +35,7 @@ export interface BookSearchResult {
   author: string
   work_id: string // Open Library work ID e.g. "/works/OL45804W"
   cover_url: string | null
+  cover_urls: string[] // up to 3 distinct edition covers (includes cover_url if present)
   first_publish_year: number | null
   series: string | null
   series_number: string | null

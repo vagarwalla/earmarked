@@ -68,6 +68,7 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
       author: item.author || '',
       work_id: item.work_id,
       cover_url: item.cover_url,
+      cover_urls: item.cover_url ? [item.cover_url] : [],
       first_publish_year: null,
       series: null,
       series_number: null,

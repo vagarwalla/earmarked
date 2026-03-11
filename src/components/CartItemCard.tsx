@@ -251,14 +251,14 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
             <span className="text-sm text-muted-foreground ml-1">cop{item.quantity === 1 ? 'y' : 'ies'}</span>
           </div>
           <div className="flex items-center gap-1">
-            <span className="text-sm text-muted-foreground">max</span>
+            <span className="text-sm text-muted-foreground" title="Max total per book incl. shipping">max</span>
             <div className="relative">
               <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
               <input
                 type="number"
                 min="0"
                 step="0.01"
-                placeholder="—"
+                placeholder="15"
                 value={maxPriceInput}
                 onChange={(e) => setMaxPriceInput(e.target.value)}
                 onBlur={() => {

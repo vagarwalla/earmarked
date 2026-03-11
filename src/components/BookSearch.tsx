@@ -67,30 +67,44 @@ export function BookSearch({ onSelect }: Props) {
       </div>
       {open && results.length > 0 && (
         <div className="absolute z-50 top-full mt-1 w-full bg-white border rounded-lg shadow-lg max-h-80 overflow-y-auto">
-          {results.map((book) => (
-            <button
-              key={book.work_id}
-              className="w-full flex items-center gap-3 px-3 py-2 hover:bg-muted text-left"
-              onClick={() => handleSelect(book)}
-            >
-              {book.cover_url ? (
-                <img src={book.cover_url} alt="" className="h-10 w-7 object-cover rounded shrink-0" />
-              ) : (
-                <div className="h-10 w-7 bg-muted rounded shrink-0 flex items-center justify-center text-xs text-muted-foreground">?</div>
-              )}
-              <div className="min-w-0">
-                <div className="font-medium text-base truncate">{book.title}</div>
-                {book.series && (
-                  <div className="text-sm text-muted-foreground italic truncate">
-                    {book.series}{book.series_number ? ` #${book.series_number}` : ''}
-                  </div>
-                )}
-                <div className="text-sm text-muted-foreground">
-                  {book.author}{book.first_publish_year ? ` · ${book.first_publish_year}` : ''}
+          {results.map((book) => {
+            const covers = book.cover_urls?.length ? book.cover_urls : (book.cover_url ? [book.cover_url] : [])
+            return (
+              <button
+                key={book.work_id}
+                className="w-full flex items-center gap-3 px-3 py-2 hover:bg-muted text-left"
+                onClick={() => handleSelect(book)}
+              >
+                {/* Cover strip: primary + up to 2 alt edition covers */}
+                <div className="flex items-center gap-0.5 shrink-0">
+                  {covers.length > 0 ? (
+                    covers.slice(0, 3).map((url, i) => (
+                      <img
+                        key={i}
+                        src={url}
+                        alt=""
+                        className={`object-cover rounded ${i === 0 ? 'h-12 w-8' : 'h-10 w-6 opacity-60'}`}
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                      />
+                    ))
+                  ) : (
+                    <div className="h-10 w-7 bg-muted rounded flex items-center justify-center text-xs text-muted-foreground">?</div>
+                  )}
                 </div>
-              </div>
-            </button>
-          ))}
+                <div className="min-w-0">
+                  <div className="font-medium text-base truncate">{book.title}</div>
+                  {book.series && (
+                    <div className="text-sm text-muted-foreground italic truncate">
+                      {book.series}{book.series_number ? ` #${book.series_number}` : ''}
+                    </div>
+                  )}
+                  <div className="text-sm text-muted-foreground">
+                    {book.author}{book.first_publish_year ? ` · ${book.first_publish_year}` : ''}
+                  </div>
+                </div>
+              </button>
+            )
+          })}
         </div>
       )}
     </div>

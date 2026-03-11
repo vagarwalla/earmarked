@@ -894,14 +894,39 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
 
         <div className="flex gap-2 shrink-0 pt-2 border-t items-center">
           {selectedCount > 0 && (
-            <span className="text-sm text-muted-foreground">
-              {selectedCount} edition{selectedCount !== 1 ? 's' : ''} selected
-              {primaryKey && (() => {
-                const g = coverGroups.find((g) => g.key === primaryKey)
-                const rep = g ? bestEdition(g, effectiveFormat) : null
-                return rep ? ` · top: ${rep.publisher || rep.publish_year || 'selected'}` : ''
-              })()}
-            </span>
+            <div className="flex items-center gap-2 min-w-0">
+              {/* Cover thumbnails for selected editions */}
+              <div className="flex items-center gap-0.5 shrink-0">
+                {selectedKeys.map((key, i) => {
+                  const g = coverGroups.find((g) => g.key === key)
+                  if (!g) return null
+                  const isPrimary = i === 0
+                  const rep = bestEdition(g, effectiveFormat)
+                  return g.cover_url ? (
+                    <img
+                      key={key}
+                      src={g.cover_url}
+                      alt=""
+                      title={rep.publisher ?? rep.publish_year?.toString() ?? ''}
+                      className={`object-cover rounded border-2 ${isPrimary ? 'h-10 w-7 border-amber-500' : 'h-8 w-5 border-border opacity-75'}`}
+                    />
+                  ) : (
+                    <div
+                      key={key}
+                      className={`rounded border-2 bg-muted flex items-center justify-center text-xs text-muted-foreground ${isPrimary ? 'h-10 w-7 border-amber-500' : 'h-8 w-5 border-border opacity-75'}`}
+                    >?</div>
+                  )
+                })}
+              </div>
+              <span className="text-sm text-muted-foreground truncate">
+                {selectedCount} edition{selectedCount !== 1 ? 's' : ''}
+                {primaryKey && (() => {
+                  const g = coverGroups.find((g) => g.key === primaryKey)
+                  const rep = g ? bestEdition(g, effectiveFormat) : null
+                  return rep ? ` · top: ${rep.publisher || rep.publish_year || 'selected'}` : ''
+                })()}
+              </span>
+            </div>
           )}
           <div className="ml-auto flex gap-2">
             <Button variant="outline" onClick={() => onOpenChange(false)}>
