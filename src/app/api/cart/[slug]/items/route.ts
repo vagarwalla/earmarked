@@ -26,6 +26,9 @@ function normalizeItem(item: Record<string, unknown>) {
   if (!item.conditions) item.conditions = ['new', 'fine', 'good']
   if (item.max_price === undefined) item.max_price = null
   if (item.isbns_candidates === undefined) item.isbns_candidates = null
+  if (item.signed_only === undefined || item.signed_only === null) item.signed_only = false
+  if (item.first_edition_only === undefined || item.first_edition_only === null) item.first_edition_only = false
+  if (item.dust_jacket_only === undefined || item.dust_jacket_only === null) item.dust_jacket_only = false
   return item
 }
 

@@ -33,7 +33,10 @@ function computeListings(
     isbns.flatMap((isbn) => byIsbn[isbn] ?? []).map((l) => [l.listing_id, l])
   ).values()].filter((l) =>
     conditions.includes(l.condition_normalized) &&
-    (maxPrice == null || l.price <= maxPrice)
+    (maxPrice == null || l.price <= maxPrice) &&
+    (!item.signed_only || l.signed) &&
+    (!item.first_edition_only || l.first_edition) &&
+    (!item.dust_jacket_only || l.dust_jacket)
   )
 }
 
@@ -44,7 +47,7 @@ function findSuggestion(
   conditions: Condition[],
   maxPrice: number | null,
 ): RelaxSuggestion | null {
-  // First check: are there ANY raw listings for these ISBNs at all?
+  // First check: are there ANY raw listings for these ISBNs at all (ignoring condition/price)?
   const anyRaw = computeListings(item, byIsbn, CONDITION_ORDER, null)
   if (anyRaw.length === 0) return null  // needs editions relaxation
 
@@ -72,7 +75,7 @@ function findSuggestion(
   return null
 }
 
-/** If current cheapest listing > $20, find the minimal relaxation that would save money. */
+/** If cheapest listing > $20, find the minimal relaxation that would yield cheaper options. */
 function findCheaperSuggestion(
   item: CartItem,
   byIsbn: Record<string, Listing[]>,
@@ -136,12 +139,13 @@ function ListingRow({ listing }: { listing: Listing }) {
 }
 
 function BookListings({
-  item, listings, cheaper, onAcceptCheaper,
+  item, listings, cheaper, onAcceptCheaper, onTryOtherEditions,
 }: {
   item: CartItem
   listings: Listing[]
   cheaper: { addedLabels: string[]; newConditions: Condition[]; cheaperPrice: number } | null
   onAcceptCheaper: (newConditions: Condition[]) => void
+  onTryOtherEditions: (() => void) | null
 }) {
   const [expanded, setExpanded] = useState(false)
   const sorted = [...listings].sort((a, b) => totalCost(a) - totalCost(b)).slice(0, 20)
@@ -159,7 +163,7 @@ function BookListings({
               className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
             >
               {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-              {expanded ? 'Show less' : `${rest.length} more listing${rest.length !== 1 ? 's' : ''}`}
+              {expanded ? 'Show less' : `${rest.length} more`}
             </button>
           )}
           <span className="text-green-700">{listings.length} listing{listings.length !== 1 ? 's' : ''}</span>
@@ -167,27 +171,42 @@ function BookListings({
       </div>
       {preview.map((l) => <ListingRow key={l.listing_id} listing={l} />)}
       {expanded && rest.map((l) => <ListingRow key={l.listing_id} listing={l} />)}
-      {cheaper && (
-        <div className="flex items-center justify-between gap-2 mt-1.5 px-2 py-1.5 rounded-md bg-amber-50 border border-amber-200 text-sm">
-          <div className="flex items-center gap-1.5 text-amber-800 min-w-0">
-            <Lightbulb className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">
-              From <span className="font-medium">${cheaper.cheaperPrice.toFixed(2)}</span> accepting {cheaper.addedLabels.join(' or ')}
-            </span>
-          </div>
-          <button
-            onClick={() => onAcceptCheaper(cheaper.newConditions)}
-            className="shrink-0 text-xs font-medium text-amber-700 hover:text-amber-900 underline"
-          >
-            Accept
-          </button>
+
+      {/* Hints footer */}
+      {(cheaper || onTryOtherEditions) && (
+        <div className="mt-1.5 space-y-1">
+          {cheaper && (
+            <div className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-md bg-amber-50 border border-amber-200 text-sm">
+              <div className="flex items-center gap-1.5 text-amber-800 min-w-0">
+                <Lightbulb className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">
+                  From <span className="font-medium">${cheaper.cheaperPrice.toFixed(2)}</span> accepting {cheaper.addedLabels.join(' or ')}
+                </span>
+              </div>
+              <button
+                onClick={() => onAcceptCheaper(cheaper.newConditions)}
+                className="shrink-0 text-xs font-medium text-amber-700 hover:text-amber-900 underline"
+              >
+                Accept
+              </button>
+            </div>
+          )}
+          {onTryOtherEditions && (
+            <button
+              onClick={onTryOtherEditions}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2"
+            >
+              <BookOpen className="h-3 w-3" />
+              Try other editions
+            </button>
+          )}
         </div>
       )}
     </div>
   )
 }
 
-// ─── Edition picker (inline, shown when "Try other editions" is clicked) ─────
+// ─── Edition picker (inline) ─────────────────────────────────────────────────
 
 function EditionPickerInline({
   item,
@@ -247,7 +266,6 @@ function EditionPickerInline({
 
     setSaving(true)
     try {
-      // Fetch prices for the new ISBNs
       const priceRes = await fetch('/api/prices', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -256,7 +274,6 @@ function EditionPickerInline({
       const priceData: PriceResponse = await priceRes.json()
       const mergedListings = { ...listingsByIsbn, ...(priceData.listings ?? {}) }
 
-      // Build updated candidate overrides (accumulate with existing)
       const existingCandidates = isbnCandidateOverrides[item.id] ?? item.isbns_candidates ?? []
       const allCandidates = [...new Set([...existingCandidates, ...newIsbns])]
       const newIsbnOverrides = { ...isbnCandidateOverrides, [item.id]: allCandidates }
@@ -268,7 +285,6 @@ function EditionPickerInline({
         body: JSON.stringify({ isbns_candidates: allCandidates }),
       }).catch(() => {})
 
-      // Re-optimize with all overrides applied for this item
       const effectiveItem: CartItem = {
         ...item,
         conditions: conditionOverrides[item.id] ?? item.conditions,
@@ -292,29 +308,29 @@ function EditionPickerInline({
 
   if (loadState === 'loading') {
     return (
-      <div className="flex items-center gap-2 text-xs text-amber-700 mt-1">
+      <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1 px-2">
         <Loader2 className="h-3 w-3 animate-spin" /> Loading editions…
       </div>
     )
   }
 
   if (loadState === 'error') {
-    return <p className="text-xs text-amber-700 italic mt-1">Failed to load editions.</p>
+    return <p className="text-xs text-muted-foreground italic mt-1 px-2">Failed to load editions.</p>
   }
 
   if (editions.length === 0) {
-    return <p className="text-xs text-amber-700 italic mt-1">No other editions found for this book.</p>
+    return <p className="text-xs text-muted-foreground italic mt-1 px-2">No other editions found for this book.</p>
   }
 
   return (
-    <div className="mt-2 space-y-2">
-      <p className="text-xs font-medium text-amber-800">Select editions to search ({editions.length} found):</p>
+    <div className="mt-2 mx-2 rounded-md border bg-muted/30 p-2.5 space-y-2">
+      <p className="text-xs font-medium">Select editions to search ({editions.length} found):</p>
       <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
         {editions.map((ed) => (
           <label key={ed.isbn} className="flex items-start gap-2 text-xs cursor-pointer">
             <input
               type="checkbox"
-              className="mt-0.5 shrink-0 accent-amber-600"
+              className="mt-0.5 shrink-0"
               checked={selected.has(ed.isbn)}
               onChange={(e) => {
                 const next = new Set(selected)
@@ -323,35 +339,30 @@ function EditionPickerInline({
                 setSelected(next)
               }}
             />
-            <span className="text-amber-900 leading-snug">
+            <span className="leading-snug">
               {ed.publisher ?? 'Unknown publisher'}
               {ed.publish_year ? ` (${ed.publish_year})` : ''}
               {ed.format !== 'any' && (
-                <span className="ml-1 text-amber-600/70">
+                <span className="ml-1 text-muted-foreground">
                   {ed.format === 'hardcover' ? 'HC' : 'PB'}
                 </span>
               )}
-              {ed.pages ? <span className="ml-1 text-amber-600/60">{ed.pages}pp</span> : null}
-              {ed.ocaid && (
-                <span className="ml-1 text-sky-600 font-medium">· Digitized</span>
-              )}
+              {ed.pages ? <span className="ml-1 text-muted-foreground">{ed.pages}pp</span> : null}
+              {ed.ocaid && <span className="ml-1 text-sky-600 font-medium">· Digitized</span>}
             </span>
           </label>
         ))}
       </div>
-      <div className="flex items-center gap-2 pt-0.5">
+      <div className="flex items-center gap-2">
         <button
           disabled={saving || selected.size === 0}
           onClick={handleSave}
-          className="text-xs font-medium px-2.5 py-1 rounded bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50 flex items-center gap-1"
+          className="text-xs font-medium px-2.5 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 flex items-center gap-1"
         >
           {saving && <Loader2 className="h-3 w-3 animate-spin" />}
           Search {selected.size} edition{selected.size !== 1 ? 's' : ''}
         </button>
-        <button
-          onClick={onCancel}
-          className="text-xs text-amber-700 hover:text-amber-900 underline"
-        >
+        <button onClick={onCancel} className="text-xs text-muted-foreground hover:text-foreground underline">
           Cancel
         </button>
       </div>
@@ -503,8 +514,9 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
           {itemListingCounts.map(({ item, listings, conditions, maxPrice }) => {
             if (listings.length === 0) return null
             const cheaper = findCheaperSuggestion(item, listingsByIsbn, listings, conditions, maxPrice)
+            const showEditionPicker = editionPickerFor === item.id
             return (
-              <div key={item.id} className="px-3 py-2">
+              <div key={item.id} className="px-3 py-2 space-y-1">
                 <BookListings
                   item={item}
                   listings={listings}
@@ -513,7 +525,25 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
                     const next = { ...conditionOverrides, [item.id]: newConditions }
                     applyRelaxation(item.id, next, maxPriceOverrides)
                   }}
+                  onTryOtherEditions={item.work_id ? () => setEditionPickerFor(showEditionPicker ? null : item.id) : null}
                 />
+                {showEditionPicker && (
+                  <EditionPickerInline
+                    item={item}
+                    cartSlug={cartSlug}
+                    listingsByIsbn={listingsByIsbn}
+                    conditionOverrides={conditionOverrides}
+                    maxPriceOverrides={maxPriceOverrides}
+                    isbnCandidateOverrides={isbnCandidateOverrides}
+                    onSaved={(newIsbnOverrides, newListings, newResult) => {
+                      setIsbnCandidateOverrides(newIsbnOverrides)
+                      setListingsByIsbn(newListings)
+                      setResult(newResult)
+                      setEditionPickerFor(null)
+                    }}
+                    onCancel={() => setEditionPickerFor(null)}
+                  />
+                )}
               </div>
             )
           })}
@@ -525,7 +555,7 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
         <div className="rounded-lg border border-amber-200 bg-amber-50 divide-y divide-amber-100">
           <div className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-amber-800">
             <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-            No listings found — try relaxing constraints
+            No listings found for {missingItems.length === 1 ? 'this book' : `${missingItems.length} books`} — try relaxing constraints
           </div>
           {missingItems.map(({ item, conditions, maxPrice }) => {
             const suggestion = findSuggestion(item, listingsByIsbn, conditions, maxPrice)
@@ -609,7 +639,7 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
         </div>
       )}
 
-      {/* Re-optimizing spinner overlay on results */}
+      {/* Re-optimizing spinner */}
       {relaxing && result && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />

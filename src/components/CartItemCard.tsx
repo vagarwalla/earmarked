@@ -42,13 +42,11 @@ function EditionStrip({
                 className="w-full h-full object-cover"
                 onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
               />
-              {/* Primary badge */}
               {isPrimary && (
                 <div className="absolute bottom-0 left-0 right-0 bg-amber-500/80 flex justify-center py-0.5">
                   <Star className="h-2 w-2 text-white fill-white" />
                 </div>
               )}
-              {/* Remove button for non-primary */}
               {!isPrimary && (
                 <button
                   onClick={() => onRemoveCandidate(isbn)}
@@ -76,28 +74,21 @@ interface Props {
   item: CartItem
   onUpdate: (id: string, patch: Partial<CartItem>) => void
   onRemove: (id: string) => void
-  onChangeCover: (item: CartItem) => void  // change edition + cover
-  onPickCover: (item: CartItem) => void    // change cover image only
+  onChangeCover: (item: CartItem) => void
+  onPickCover: (item: CartItem) => void
 }
 
 const CONDITIONS: { value: Condition; label: string }[] = [
   { value: 'new', label: 'New' },
-  { value: 'fine', label: 'As New / Fine' },
-  { value: 'good', label: 'VG / Good' },
-  { value: 'fair', label: 'Fair / Poor' },
+  { value: 'fine', label: 'Fine' },
+  { value: 'good', label: 'Good' },
+  { value: 'fair', label: 'Fair' },
 ]
-
-// Cycle: null (any) → true (only) → false (exclude) → null
-function cycleCollectible(current: boolean | null): boolean | null {
-  if (current === null) return true
-  if (current === true) return false
-  return null
-}
 
 function toggleCondition(current: Condition[], value: Condition): Condition[] {
   if (current.includes(value)) {
     const next = current.filter((c) => c !== value)
-    return next.length === 0 ? current : next // require at least one
+    return next.length === 0 ? current : next
   }
   return [...current, value]
 }
@@ -118,7 +109,8 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
 
   async function patch(updates: Partial<CartItem>) {
     setSaving(true)
-    const res = await fetch(`/api/cart/${encodeURIComponent(window.location.pathname.split('/').pop()!)}/items/${item.id}`, {
+    const slug = window.location.pathname.split('/').pop()!
+    const res = await fetch(`/api/cart/${encodeURIComponent(slug)}/items/${item.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
@@ -173,11 +165,11 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
           <RefreshCw className="h-3 w-3" />
           <span>edition</span>
         </button>
-
       </div>
 
       {/* Details */}
       <div className="flex-1 min-w-0 space-y-2">
+        {/* Title row */}
         <div className="flex items-start justify-between gap-2">
           <div>
             <div className="font-medium text-base leading-tight">{item.title}</div>
@@ -193,8 +185,9 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2 items-center">
-          {/* Condition multi-select */}
+        {/* Condition */}
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground w-14 shrink-0">Condition</span>
           <div className="flex gap-0.5 border rounded-md overflow-hidden text-sm">
             {CONDITIONS.map((c) => {
               const active = (item.conditions ?? []).includes(c.value)
@@ -203,105 +196,94 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
                   key={c.value}
                   className={`px-2 py-1 transition-colors ${active ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
                   onClick={() => patch({ conditions: toggleCondition(item.conditions ?? [], c.value) })}
+                  title={`${active ? 'Remove' : 'Include'} ${c.label} condition`}
                 >
                   {c.label}
                 </button>
               )
             })}
           </div>
+        </div>
 
-          {/* Format toggle */}
+        {/* Format */}
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground w-14 shrink-0">Format</span>
           <div className="flex gap-0.5 border rounded-md overflow-hidden text-sm">
             {formatOptions.map((f) => (
               <button
                 key={f}
-                className={`px-2 py-1 capitalize ${item.format === f ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
+                className={`px-2 py-1 capitalize ${item.format === f ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
                 onClick={() => patch({ format: f })}
               >
-                {f === 'any' ? 'Any' : f === 'hardcover' ? 'HC' : 'PB'}
+                {f === 'any' ? 'Any' : f === 'hardcover' ? 'Hardcover' : 'Paperback'}
               </button>
             ))}
           </div>
+        </div>
 
-          {/* Flexible */}
-          <button
-            onClick={() => patch({ flexible: !item.flexible })}
-            className={`text-sm px-2 py-1 rounded border transition-colors ${
-              item.flexible ? 'bg-blue-50 text-blue-700 border-blue-200' : 'text-muted-foreground hover:bg-muted'
-            }`}
-          >
-            {item.flexible ? 'Flexible ✓' : 'Flexible'}
-          </button>
-
-          {/* Collectible attribute filters: null=any, true=only, false=exclude */}
+        {/* Special filters */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-muted-foreground w-14 shrink-0">Only</span>
           <div className="flex gap-0.5 border rounded-md overflow-hidden text-sm">
             {([
               { key: 'signed_only', label: 'Signed' },
-              { key: 'first_edition_only', label: '1st Ed' },
-              { key: 'dust_jacket_only', label: 'DJ' },
-            ] as { key: 'signed_only' | 'first_edition_only' | 'dust_jacket_only'; label: string }[]).map(({ key, label }) => {
-              const val = item[key]
-              return (
-                <button
-                  key={key}
-                  className={`px-2 py-1 transition-colors ${
-                    val === true  ? 'bg-amber-100 text-amber-800' :
-                    val === false ? 'bg-red-50 text-red-600 line-through' :
-                    'text-muted-foreground hover:bg-muted'
-                  }`}
-                  onClick={() => patch({ [key]: cycleCollectible(val) })}
-                  title={val === true ? `Only ${label} — click to exclude` : val === false ? `Excluding ${label} — click to clear` : `Any — click to require ${label}`}
-                >
-                  {label}
-                </button>
-              )
-            })}
+              { key: 'first_edition_only', label: '1st edition' },
+              { key: 'dust_jacket_only', label: 'Dust jacket' },
+            ] as { key: 'signed_only' | 'first_edition_only' | 'dust_jacket_only'; label: string }[]).map(({ key, label }) => (
+              <button
+                key={key}
+                className={`px-2 py-1 transition-colors ${
+                  item[key] ? 'bg-amber-100 text-amber-800' : 'text-muted-foreground hover:bg-muted'
+                }`}
+                onClick={() => patch({ [key]: !item[key] })}
+                title={item[key] ? `Showing only ${label} — click to remove filter` : `Click to require ${label}`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
+          <button
+            onClick={() => patch({ flexible: !item.flexible })}
+            className={`text-sm px-2 py-1 rounded border transition-colors ${
+              item.flexible ? 'bg-blue-50 text-blue-700 border-blue-200' : 'text-muted-foreground hover:bg-muted border-border'
+            }`}
+            title="Flexible: also accept looser conditions if exact match unavailable"
+          >
+            Flexible
+          </button>
         </div>
 
         {/* Quantity + max price */}
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap">
           <div className="flex items-center gap-1">
-            <Button
-              variant="outline"
-              size="icon"
-              className="h-6 w-6"
-              disabled={item.quantity <= 1}
-              onClick={() => patch({ quantity: item.quantity - 1 })}
-            >
+            <Button variant="outline" size="icon" className="h-6 w-6" disabled={item.quantity <= 1}
+              onClick={() => patch({ quantity: item.quantity - 1 })}>
               <Minus className="h-3 w-3" />
             </Button>
             <span className="text-sm w-6 text-center">{item.quantity}</span>
-            <Button
-              variant="outline"
-              size="icon"
-              className="h-6 w-6"
-              onClick={() => patch({ quantity: item.quantity + 1 })}
-            >
+            <Button variant="outline" size="icon" className="h-6 w-6"
+              onClick={() => patch({ quantity: item.quantity + 1 })}>
               <Plus className="h-3 w-3" />
             </Button>
-            <span className="text-sm text-muted-foreground ml-1">cop{item.quantity === 1 ? 'y' : 'ies'}</span>
+            <span className="text-xs text-muted-foreground ml-1">cop{item.quantity === 1 ? 'y' : 'ies'}</span>
           </div>
           <div className="flex items-center gap-1">
-            <span className="text-sm text-muted-foreground" title="Max total per book incl. shipping">max</span>
-            <div className="relative">
-              <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="15"
-                value={maxPriceInput}
-                onChange={(e) => setMaxPriceInput(e.target.value)}
-                onBlur={() => {
-                  const val = maxPriceInput.trim() === '' ? null : parseFloat(maxPriceInput)
-                  if (val === null || (!isNaN(val) && val >= 0)) {
-                    patch({ max_price: val })
-                  }
-                }}
-                className="h-7 w-16 pl-4 pr-1 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-              />
-            </div>
+            <span className="text-xs text-muted-foreground" title="Max price per copy incl. shipping">Max $</span>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="—"
+              value={maxPriceInput}
+              onChange={(e) => setMaxPriceInput(e.target.value)}
+              onBlur={() => {
+                const val = maxPriceInput.trim() === '' ? null : parseFloat(maxPriceInput)
+                if (val === null || (!isNaN(val) && val >= 0)) {
+                  patch({ max_price: val })
+                }
+              }}
+              className="h-7 w-16 px-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+            />
           </div>
           {item.isbn_preferred && (!item.isbns_candidates || item.isbns_candidates.length < 2) && (
             <Badge variant="outline" className="text-xs font-normal">
@@ -310,7 +292,7 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
           )}
         </div>
 
-        {/* Edition strip — shown when multiple candidates selected */}
+        {/* Edition strip */}
         <EditionStrip
           item={item}
           onRemoveCandidate={removeCandidate}
