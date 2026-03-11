@@ -313,13 +313,12 @@ function computePopularityScore(params: {
 }): number {
   let score = 0
   if (params.ocaid) score += 30         // digitized by Internet Archive → widely read
-  if (params.coverId) score += 20       // cover scanned and catalogued
   if (params.publisher) score += 10     // has publisher metadata
   if (params.publishYear) score += 5    // has year metadata
   if (params.pages && params.pages > 0) score += 5  // has page count
   if (params.editionName) score += 5    // has named edition (e.g. "Penguin Classics")
   if (params.publishYear && params.publishYear > 1980) score += 5  // modern printing = more likely in circulation
-  return Math.min(80, score)
+  return Math.min(60, score)
 }
 
 function buildEdition(
