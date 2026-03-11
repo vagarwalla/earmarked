@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { Loader2, Star, ChevronDown, X, Check, RefreshCw, Sparkles } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import type { BookSearchResult, Edition, Format } from '@/lib/types'
+import type { BookSearchResult, Edition, Format, Listing } from '@/lib/types'
 
 // ─── Popularity helpers ───────────────────────────────────────────────────────
 
@@ -307,8 +307,10 @@ function MultiSelectDropdown<T extends string | number>({
   )
 }
 
+type EditionStats = { count: number; cheapest: number; condition: string } | null | undefined
+
 function EditionCard({
-  group, formatFilter, selectedKeys, firstEditionKey, onToggle, popularityMap, onHover, onUnhover,
+  group, formatFilter, selectedKeys, firstEditionKey, onToggle, popularityMap, onHover, onUnhover, stats,
 }: {
   group: CoverGroup
   formatFilter: Format
@@ -318,6 +320,7 @@ function EditionCard({
   popularityMap: Record<string, number>
   onHover: (group: CoverGroup) => void
   onUnhover: () => void
+  stats: EditionStats
 }) {
   const rep = bestEdition(group, formatFilter)
   const selIdx = selectedKeys.indexOf(group.key)
@@ -371,6 +374,19 @@ function EditionCard({
           {isDigitized && (
             <span className="text-xs px-1.5 py-0.5 rounded bg-sky-100 text-sky-700 font-medium" title="A copy of this edition is preserved in the Internet Archive">
               Digitized
+            </span>
+          )}
+        </div>
+        <div className="pt-1">
+          {stats === undefined && (
+            <span className="text-xs text-muted-foreground">Checking…</span>
+          )}
+          {stats === null && (
+            <span className="text-xs text-muted-foreground italic">No listings</span>
+          )}
+          {stats && (
+            <span className="text-xs text-green-700 font-medium">
+              {stats.count} listing{stats.count !== 1 ? 's' : ''} · from ${stats.cheapest.toFixed(2)} ({stats.condition})
             </span>
           )}
         </div>
@@ -471,6 +487,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
   const [popularityLoading, setPopularityLoading] = useState(false)
   const [olReads, setOlReads] = useState<number | null>(null)
   const [hoveredGroup, setHoveredGroup] = useState<CoverGroup | null>(null)
+  const [listingStats, setListingStats] = useState<Record<string, { count: number; cheapest: number; condition: string } | null>>({})
 
   useEffect(() => {
     if (!book || !open) return
@@ -486,6 +503,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
     setPopularityMap({})
     setPopularityLoading(false)
     setOlReads(null)
+    setListingStats({})
     fetch(`/api/editions?workId=${encodeURIComponent(book.work_id)}&language=${language}`)
       .then((r) => r.json())
       .then((data: Edition[]) => {
@@ -524,6 +542,34 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
         setPopularityLoading(false)
       })
       .catch(() => setPopularityLoading(false))
+  }, [editions])
+
+  // Fetch AbeBooks listing counts + cheapest price per cover group
+  useEffect(() => {
+    if (editions.length === 0) return
+    const groups = groupEditionsBycover(editions)
+    const allIsbns = [...new Set(editions.map((e) => e.isbn))]
+    fetch('/api/prices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isbns: allIsbns }),
+    })
+      .then((r) => r.json())
+      .then((data: { listings: Record<string, Listing[]> }) => {
+        const byIsbn = data.listings ?? {}
+        const stats: Record<string, { count: number; cheapest: number; condition: string } | null> = {}
+        for (const group of groups) {
+          const allListings = group.editions.flatMap((e) => byIsbn[e.isbn] ?? [])
+          if (allListings.length > 0) {
+            const cheapest = allListings.reduce((a, b) => a.price <= b.price ? a : b)
+            stats[group.key] = { count: allListings.length, cheapest: cheapest.price, condition: cheapest.condition.replace('Used - ', '') }
+          } else {
+            stats[group.key] = null
+          }
+        }
+        setListingStats(stats)
+      })
+      .catch(() => {})
   }, [editions])
 
   // Fallback: fetch work-level "already read" count from Open Library
@@ -899,7 +945,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
                   <SectionHeader label={label} groups={groups} selectedKeys={selectedKeys} onToggleGroup={toggleGroup} />
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 p-3">
                     {groups.map((group) => (
-                      <EditionCard key={group.key} group={group} formatFilter={effectiveFormat} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} popularityMap={popularityMap} onHover={(g) => setHoveredGroup(g)} onUnhover={() => setHoveredGroup(null)} />
+                      <EditionCard key={group.key} group={group} formatFilter={effectiveFormat} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} popularityMap={popularityMap} onHover={(g) => setHoveredGroup(g)} onUnhover={() => setHoveredGroup(null)} stats={group.key in listingStats ? listingStats[group.key] : undefined} />
                     ))}
                   </div>
                 </div>
@@ -934,7 +980,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
                     <SectionHeader label={sectionLabel} groups={section.groups} selectedKeys={selectedKeys} onToggleGroup={toggleGroup} />
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 p-3">
                       {section.groups.map((group) => (
-                        <EditionCard key={group.key} group={group} formatFilter={effectiveFormat} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} popularityMap={popularityMap} onHover={(g) => setHoveredGroup(g)} onUnhover={() => setHoveredGroup(null)} />
+                        <EditionCard key={group.key} group={group} formatFilter={effectiveFormat} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} popularityMap={popularityMap} onHover={(g) => setHoveredGroup(g)} onUnhover={() => setHoveredGroup(null)} stats={group.key in listingStats ? listingStats[group.key] : undefined} />
                       ))}
                     </div>
                   </div>
