@@ -82,10 +82,17 @@ interface Props {
 
 const CONDITIONS: { value: Condition; label: string }[] = [
   { value: 'new', label: 'New' },
-  { value: 'fine', label: 'Fine or Near Fine' },
-  { value: 'good', label: 'Very Good or Good' },
-  { value: 'fair', label: 'Fair or Poor' },
+  { value: 'fine', label: 'As New / Fine' },
+  { value: 'good', label: 'VG / Good' },
+  { value: 'fair', label: 'Fair / Poor' },
 ]
+
+// Cycle: null (any) → true (only) → false (exclude) → null
+function cycleCollectible(current: boolean | null): boolean | null {
+  if (current === null) return true
+  if (current === true) return false
+  return null
+}
 
 function toggleCondition(current: Condition[], value: Condition): Condition[] {
   if (current.includes(value)) {
@@ -226,24 +233,29 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
             {item.flexible ? 'Flexible ✓' : 'Flexible'}
           </button>
 
-          {/* Collectible attribute filters */}
+          {/* Collectible attribute filters: null=any, true=only, false=exclude */}
           <div className="flex gap-0.5 border rounded-md overflow-hidden text-sm">
             {([
               { key: 'signed_only', label: 'Signed' },
               { key: 'first_edition_only', label: '1st Ed' },
               { key: 'dust_jacket_only', label: 'DJ' },
-            ] as { key: 'signed_only' | 'first_edition_only' | 'dust_jacket_only'; label: string }[]).map(({ key, label }) => (
-              <button
-                key={key}
-                className={`px-2 py-1 transition-colors ${
-                  item[key] ? 'bg-amber-100 text-amber-800' : 'text-muted-foreground hover:bg-muted'
-                }`}
-                onClick={() => patch({ [key]: !item[key] })}
-                title={item[key] ? `Only ${label} copies` : `Any (click to require ${label})`}
-              >
-                {label}
-              </button>
-            ))}
+            ] as { key: 'signed_only' | 'first_edition_only' | 'dust_jacket_only'; label: string }[]).map(({ key, label }) => {
+              const val = item[key]
+              return (
+                <button
+                  key={key}
+                  className={`px-2 py-1 transition-colors ${
+                    val === true  ? 'bg-amber-100 text-amber-800' :
+                    val === false ? 'bg-red-50 text-red-600 line-through' :
+                    'text-muted-foreground hover:bg-muted'
+                  }`}
+                  onClick={() => patch({ [key]: cycleCollectible(val) })}
+                  title={val === true ? `Only ${label} — click to exclude` : val === false ? `Excluding ${label} — click to clear` : `Any — click to require ${label}`}
+                >
+                  {label}
+                </button>
+              )
+            })}
           </div>
         </div>
 

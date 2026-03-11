@@ -10,9 +10,9 @@ export interface Cart {
   default_conditions: Condition[]
   default_format: Format
   default_max_price: number | null
-  default_signed_only: boolean
-  default_first_edition_only: boolean
-  default_dust_jacket_only: boolean
+  default_signed_only: boolean | null
+  default_first_edition_only: boolean | null
+  default_dust_jacket_only: boolean | null
 }
 
 export interface CartItem {
@@ -27,9 +27,9 @@ export interface CartItem {
   conditions: Condition[]
   max_price: number | null
   flexible: boolean
-  signed_only: boolean
-  first_edition_only: boolean
-  dust_jacket_only: boolean
+  signed_only: boolean | null       // null = any, true = only signed, false = exclude signed
+  first_edition_only: boolean | null
+  dust_jacket_only: boolean | null
   quantity: number
   sort_order: number
   created_at: string

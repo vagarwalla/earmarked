@@ -11,10 +11,16 @@ interface Props {
 
 const CONDITIONS: { value: Condition; label: string }[] = [
   { value: 'new', label: 'New' },
-  { value: 'fine', label: 'Fine or Near Fine' },
-  { value: 'good', label: 'Very Good or Good' },
-  { value: 'fair', label: 'Fair or Poor' },
+  { value: 'fine', label: 'As New / Fine' },
+  { value: 'good', label: 'VG / Good' },
+  { value: 'fair', label: 'Fair / Poor' },
 ]
+
+function cycleCollectible(current: boolean | null): boolean | null {
+  if (current === null) return true
+  if (current === true) return false
+  return null
+}
 
 function toggleCondition(current: Condition[], value: Condition): Condition[] {
   if (current.includes(value)) {
@@ -100,16 +106,23 @@ export function CartDefaults({ cart, slug, onUpdate }: Props) {
           { key: 'default_signed_only', label: 'Signed' },
           { key: 'default_first_edition_only', label: '1st Ed' },
           { key: 'default_dust_jacket_only', label: 'DJ' },
-        ] as { key: 'default_signed_only' | 'default_first_edition_only' | 'default_dust_jacket_only'; label: string }[]).map(({ key, label }) => (
-          <button
-            key={key}
-            className={`px-2 py-1 transition-colors ${cart[key] ? 'bg-amber-100 text-amber-800' : 'hover:bg-muted'}`}
-            onClick={() => patch({ [key]: !cart[key] })}
-            title={cart[key] ? `Default: ${label} only` : `Default: any (click to require ${label})`}
-          >
-            {label}
-          </button>
-        ))}
+        ] as { key: 'default_signed_only' | 'default_first_edition_only' | 'default_dust_jacket_only'; label: string }[]).map(({ key, label }) => {
+          const val = cart[key]
+          return (
+            <button
+              key={key}
+              className={`px-2 py-1 transition-colors ${
+                val === true  ? 'bg-amber-100 text-amber-800' :
+                val === false ? 'bg-red-50 text-red-600 line-through' :
+                'hover:bg-muted'
+              }`}
+              onClick={() => patch({ [key]: cycleCollectible(val) })}
+              title={val === true ? `Default: ${label} only` : val === false ? `Default: exclude ${label}` : `Default: any ${label}`}
+            >
+              {label}
+            </button>
+          )
+        })}
       </div>
     </div>
   )
