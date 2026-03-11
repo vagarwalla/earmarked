@@ -17,9 +17,6 @@ function totalCost(l: Listing) {
   return l.price + l.shipping_base
 }
 
-function conditionLabel(c: string) {
-  return c.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase())
-}
 
 function ListingRow({ listing }: { listing: Listing }) {
   return (
@@ -256,7 +253,7 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
                         <Badge variant="outline" className="text-xs shrink-0">×{quantity}</Badge>
                       )}
                       <Badge variant="secondary" className="text-xs shrink-0 capitalize">
-                        {conditionLabel(listing.condition_normalized)}
+                        {listing.condition.replace('Used - ', '')}
                       </Badge>
                       {listing.isbn !== item.isbn_preferred && (
                         <Badge variant="outline" className="text-xs shrink-0 text-muted-foreground">
