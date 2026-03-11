@@ -252,6 +252,10 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
         open={pickerOpen}
         onOpenChange={setPickerOpen}
         onConfirm={handleEditionConfirm}
+        initialIsbns={editingItem ? [
+          ...(editingItem.isbn_preferred ? [editingItem.isbn_preferred] : []),
+          ...(editingItem.isbns_candidates ?? []).filter((i) => i !== editingItem.isbn_preferred),
+        ] : undefined}
       />
 
       <CoverPicker

@@ -64,6 +64,7 @@ interface Props {
   open: boolean
   onOpenChange: (v: boolean) => void
   onConfirm: (editions: Edition[]) => void
+  initialIsbns?: string[]
 }
 
 const FORMAT_LABELS: Record<Format, string> = {
@@ -427,7 +428,7 @@ function SectionHeader({
 }
 
 
-export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
+export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbns }: Props) {
   const [editions, setEditions] = useState<Edition[]>([])
   const [loading, setLoading] = useState(false)
   const [formatFilter, setFormatFilter] = useState<Set<Format>>(new Set())
@@ -458,9 +459,23 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm }: Props) {
     setPopularityLoading(false)
     fetch(`/api/editions?workId=${encodeURIComponent(book.work_id)}&language=${language}`)
       .then((r) => r.json())
-      .then((data) => {
+      .then((data: Edition[]) => {
         setEditions(data)
         setLoading(false)
+        if (initialIsbns && initialIsbns.length > 0) {
+          const groups = groupEditionsBycover(data)
+          const isbnToKey = new Map<string, string>()
+          for (const g of groups) {
+            for (const e of g.editions) isbnToKey.set(e.isbn, g.key)
+          }
+          const keys: string[] = []
+          const seen = new Set<string>()
+          for (const isbn of initialIsbns) {
+            const key = isbnToKey.get(isbn)
+            if (key && !seen.has(key)) { seen.add(key); keys.push(key) }
+          }
+          if (keys.length > 0) setSelectedKeys(keys)
+        }
       })
   }, [book, open, language])
 
