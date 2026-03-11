@@ -126,7 +126,7 @@ function CoverThumb({ url, isbn }: { url: string | null; isbn: string }) {
   const src = url ?? `https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg`
   if (failed) {
     return (
-      <div className="w-10 h-14 bg-muted rounded shrink-0 flex items-center justify-center text-[10px] text-muted-foreground text-center leading-tight px-0.5">
+      <div className="w-20 h-28 bg-muted rounded shrink-0 flex items-center justify-center text-[10px] text-muted-foreground text-center leading-tight px-1">
         No cover
       </div>
     )
@@ -135,7 +135,7 @@ function CoverThumb({ url, isbn }: { url: string | null; isbn: string }) {
     <img
       src={src}
       alt=""
-      className="w-10 h-14 object-cover rounded shrink-0"
+      className="w-20 h-28 object-cover rounded shrink-0"
       onError={() => setFailed(true)}
     />
   )
@@ -170,6 +170,7 @@ function EditionPickerInline({
   const [editions, setEditions] = useState<Edition[]>([])
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [saving, setSaving] = useState(false)
+  const [editionStats, setEditionStats] = useState<Record<string, { count: number; cheapest: number; condition: string } | null>>({})
 
   useEffect(() => {
     if (!item.work_id) { setLoadState('done'); return }
@@ -189,6 +190,31 @@ function EditionPickerInline({
         setEditions(fresh)
         setSelected(new Set(fresh.map((e) => e.isbn)))
         setLoadState('done')
+
+        // Fetch listing counts + prices for all fresh editions
+        const isbns = fresh.map((e) => e.isbn)
+        if (isbns.length === 0) return
+        fetch('/api/prices', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ isbns }),
+        })
+          .then((r) => r.json())
+          .then((priceData: PriceResponse) => {
+            if (cancelled) return
+            const stats: Record<string, { count: number; cheapest: number; condition: string } | null> = {}
+            for (const isbn of isbns) {
+              const listings = (priceData.listings ?? {})[isbn] ?? []
+              if (listings.length > 0) {
+                const cheapest = listings.reduce((a, b) => a.price <= b.price ? a : b)
+                stats[isbn] = { count: listings.length, cheapest: cheapest.price, condition: cheapest.condition.replace('Used - ', '') }
+              } else {
+                stats[isbn] = null
+              }
+            }
+            setEditionStats(stats)
+          })
+          .catch(() => {})
       })
       .catch(() => { if (!cancelled) setLoadState('error') })
     return () => { cancelled = true }
@@ -280,14 +306,25 @@ function EditionPickerInline({
               }}
             />
             <CoverThumb url={ed.cover_url} isbn={ed.isbn} />
-            <span className="text-xs leading-snug flex-1 min-w-0">
+            <span className="text-xs leading-snug flex-1 min-w-0 space-y-0.5">
               <span className="font-medium block truncate">{ed.publisher ?? 'Unknown publisher'}</span>
-              <span className="text-muted-foreground">
+              <span className="text-muted-foreground block">
                 {ed.publish_year ? `${ed.publish_year} · ` : ''}
                 {ed.format !== 'any' ? (ed.format === 'hardcover' ? 'HC' : 'PB') : ''}
                 {ed.pages ? ` · ${ed.pages}pp` : ''}
               </span>
               {ed.ocaid && <span className="block text-sky-600 font-medium text-[10px]">Digitized</span>}
+              {ed.isbn in editionStats ? (
+                editionStats[ed.isbn] ? (
+                  <span className="block text-green-700 font-medium text-[11px] leading-tight">
+                    {editionStats[ed.isbn]!.count} listing{editionStats[ed.isbn]!.count !== 1 ? 's' : ''} · from ${editionStats[ed.isbn]!.cheapest.toFixed(2)} ({editionStats[ed.isbn]!.condition})
+                  </span>
+                ) : (
+                  <span className="block text-muted-foreground italic text-[11px]">No listings</span>
+                )
+              ) : (
+                <span className="block text-muted-foreground text-[11px]">Checking…</span>
+              )}
             </span>
           </label>
         ))}

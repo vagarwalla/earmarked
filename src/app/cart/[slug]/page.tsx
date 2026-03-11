@@ -196,7 +196,7 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
     <main className="min-h-screen bg-background">
       {/* Header */}
       <header className="border-b bg-background sticky top-0 z-10">
-        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3">
           <Link href="/">
             <Button variant="ghost" size="icon" className="h-8 w-8">
               <ArrowLeft className="h-4 w-4" />
@@ -220,7 +220,7 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
         </div>
       </header>
 
-      <div className="max-w-5xl mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
+      <div className="max-w-7xl mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-[1fr_640px] gap-6">
         {/* Left: Book list */}
         <div className="space-y-4">
           <BookSearch onSelect={handleBookSelect} />
