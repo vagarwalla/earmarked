@@ -1,18 +1,18 @@
 'use client'
 
-import { useState } from 'react'
-import { Loader2, ExternalLink, TrendingDown, Copy, Check, AlertCircle, ChevronDown, ChevronUp, Lightbulb } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Loader2, ExternalLink, TrendingDown, Copy, Check, AlertCircle, ChevronDown, ChevronUp, Lightbulb, BookOpen } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import type { CartItem, Condition, Listing, OptimizationResult, PriceResponse } from '@/lib/types'
+import type { CartItem, Condition, Edition, Listing, OptimizationResult, PriceResponse } from '@/lib/types'
 
 // ─── Constraint relaxation helpers ───────────────────────────────────────────
 
-const CONDITION_ORDER: Condition[] = ['new', 'like_new', 'very_good', 'good', 'acceptable']
+const CONDITION_ORDER: Condition[] = ['new', 'fine', 'good', 'fair']
 const CONDITION_LABELS: Record<Condition, string> = {
-  new: 'New', like_new: 'Like New', very_good: 'Very Good', good: 'Good', acceptable: 'Acceptable',
+  new: 'New', fine: 'Fine', good: 'Good', fair: 'Fair',
 }
 
 type RelaxSuggestion =
@@ -187,6 +187,180 @@ function BookListings({
   )
 }
 
+// ─── Edition picker (inline, shown when "Try other editions" is clicked) ─────
+
+function EditionPickerInline({
+  item,
+  cartSlug,
+  listingsByIsbn,
+  conditionOverrides,
+  maxPriceOverrides,
+  isbnCandidateOverrides,
+  onSaved,
+  onCancel,
+}: {
+  item: CartItem
+  cartSlug: string
+  listingsByIsbn: Record<string, Listing[]>
+  conditionOverrides: Record<string, Condition[]>
+  maxPriceOverrides: Record<string, number | null>
+  isbnCandidateOverrides: Record<string, string[]>
+  onSaved: (
+    newIsbnOverrides: Record<string, string[]>,
+    newListingsByIsbn: Record<string, Listing[]>,
+    newResult: OptimizationResult,
+  ) => void
+  onCancel: () => void
+}) {
+  const [loadState, setLoadState] = useState<'loading' | 'done' | 'error'>('loading')
+  const [editions, setEditions] = useState<Edition[]>([])
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!item.work_id) { setLoadState('done'); return }
+    let cancelled = false
+    fetch(`/api/editions?workId=${encodeURIComponent(item.work_id)}`)
+      .then((r) => r.json())
+      .then((all: Edition[]) => {
+        if (cancelled) return
+        const knownIsbns = new Set([
+          ...(item.isbn_preferred ? [item.isbn_preferred] : []),
+          ...(isbnCandidateOverrides[item.id] ?? item.isbns_candidates ?? []),
+        ])
+        const fresh = all
+          .filter((e) => !knownIsbns.has(e.isbn))
+          .sort((a, b) => b.popularity_score - a.popularity_score)
+          .slice(0, 8)
+        setEditions(fresh)
+        setSelected(new Set(fresh.map((e) => e.isbn)))
+        setLoadState('done')
+      })
+      .catch(() => { if (!cancelled) setLoadState('error') })
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item.id])
+
+  async function handleSave() {
+    const newIsbns = [...selected]
+    if (newIsbns.length === 0) { onCancel(); return }
+
+    setSaving(true)
+    try {
+      // Fetch prices for the new ISBNs
+      const priceRes = await fetch('/api/prices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isbns: newIsbns }),
+      })
+      const priceData: PriceResponse = await priceRes.json()
+      const mergedListings = { ...listingsByIsbn, ...(priceData.listings ?? {}) }
+
+      // Build updated candidate overrides (accumulate with existing)
+      const existingCandidates = isbnCandidateOverrides[item.id] ?? item.isbns_candidates ?? []
+      const allCandidates = [...new Set([...existingCandidates, ...newIsbns])]
+      const newIsbnOverrides = { ...isbnCandidateOverrides, [item.id]: allCandidates }
+
+      // Save to Supabase (fire and forget)
+      fetch(`/api/cart/${cartSlug}/items/${item.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isbns_candidates: allCandidates }),
+      }).catch(() => {})
+
+      // Re-optimize with all overrides applied for this item
+      const effectiveItem: CartItem = {
+        ...item,
+        conditions: conditionOverrides[item.id] ?? item.conditions,
+        max_price: item.id in maxPriceOverrides ? maxPriceOverrides[item.id] : item.max_price,
+        isbns_candidates: allCandidates,
+      }
+      const optRes = await fetch('/api/optimize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: [effectiveItem], listingsByIsbn: mergedListings }),
+      })
+      const newResult: OptimizationResult = await optRes.json()
+
+      onSaved(newIsbnOverrides, mergedListings, newResult)
+    } catch (err) {
+      toast.error('Failed: ' + (err as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loadState === 'loading') {
+    return (
+      <div className="flex items-center gap-2 text-xs text-amber-700 mt-1">
+        <Loader2 className="h-3 w-3 animate-spin" /> Loading editions…
+      </div>
+    )
+  }
+
+  if (loadState === 'error') {
+    return <p className="text-xs text-amber-700 italic mt-1">Failed to load editions.</p>
+  }
+
+  if (editions.length === 0) {
+    return <p className="text-xs text-amber-700 italic mt-1">No other editions found for this book.</p>
+  }
+
+  return (
+    <div className="mt-2 space-y-2">
+      <p className="text-xs font-medium text-amber-800">Select editions to search ({editions.length} found):</p>
+      <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+        {editions.map((ed) => (
+          <label key={ed.isbn} className="flex items-start gap-2 text-xs cursor-pointer">
+            <input
+              type="checkbox"
+              className="mt-0.5 shrink-0 accent-amber-600"
+              checked={selected.has(ed.isbn)}
+              onChange={(e) => {
+                const next = new Set(selected)
+                if (e.target.checked) next.add(ed.isbn)
+                else next.delete(ed.isbn)
+                setSelected(next)
+              }}
+            />
+            <span className="text-amber-900 leading-snug">
+              {ed.publisher ?? 'Unknown publisher'}
+              {ed.publish_year ? ` (${ed.publish_year})` : ''}
+              {ed.format !== 'any' && (
+                <span className="ml-1 text-amber-600/70">
+                  {ed.format === 'hardcover' ? 'HC' : 'PB'}
+                </span>
+              )}
+              {ed.pages ? <span className="ml-1 text-amber-600/60">{ed.pages}pp</span> : null}
+              {ed.ocaid && (
+                <span className="ml-1 text-sky-600 font-medium">· Digitized</span>
+              )}
+            </span>
+          </label>
+        ))}
+      </div>
+      <div className="flex items-center gap-2 pt-0.5">
+        <button
+          disabled={saving || selected.size === 0}
+          onClick={handleSave}
+          className="text-xs font-medium px-2.5 py-1 rounded bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50 flex items-center gap-1"
+        >
+          {saving && <Loader2 className="h-3 w-3 animate-spin" />}
+          Search {selected.size} edition{selected.size !== 1 ? 's' : ''}
+        </button>
+        <button
+          onClick={onCancel}
+          className="text-xs text-amber-700 hover:text-amber-900 underline"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export function OptimizationPanel({ items, cartSlug }: Props) {
   const [loading, setLoading] = useState(false)
   const [relaxing, setRelaxing] = useState(false)
@@ -196,6 +370,8 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
   const [copied, setCopied] = useState(false)
   const [conditionOverrides, setConditionOverrides] = useState<Record<string, Condition[]>>({})
   const [maxPriceOverrides, setMaxPriceOverrides] = useState<Record<string, number | null>>({})
+  const [isbnCandidateOverrides, setIsbnCandidateOverrides] = useState<Record<string, string[]>>({})
+  const [editionPickerFor, setEditionPickerFor] = useState<string | null>(null)
 
   async function findDeals() {
     if (items.length === 0) return
@@ -205,6 +381,8 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
     setSearched(false)
     setConditionOverrides({})
     setMaxPriceOverrides({})
+    setIsbnCandidateOverrides({})
+    setEditionPickerFor(null)
 
     try {
       const isbns = [...new Set(
@@ -244,11 +422,11 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
     setMaxPriceOverrides(newMaxPriceOverrides)
     setRelaxing(true)
     try {
-      // Build items with overrides applied so the optimizer sees the new constraints
       const overriddenItems = itemsWithIsbn.map((i) => ({
         ...i,
         conditions: newCondOverrides[i.id] ?? i.conditions,
         max_price: i.id in newMaxPriceOverrides ? newMaxPriceOverrides[i.id] : i.max_price,
+        isbns_candidates: isbnCandidateOverrides[i.id] ?? i.isbns_candidates,
       }))
       const optRes = await fetch('/api/optimize', {
         method: 'POST',
@@ -257,7 +435,7 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
       })
       setResult(await optRes.json())
     } catch {
-      // silent — listings display already updated via state
+      // silent
     } finally {
       setRelaxing(false)
     }
@@ -281,8 +459,12 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
   const itemListingCounts = itemsWithIsbn.map((item) => {
     const conditions = conditionOverrides[item.id] ?? item.conditions ?? []
     const maxPrice = item.id in maxPriceOverrides ? maxPriceOverrides[item.id] : item.max_price
-    const listings = computeListings(item, listingsByIsbn, conditions, maxPrice)
-    return { item, listings, conditions, maxPrice }
+    const effectiveItem: CartItem = {
+      ...item,
+      isbns_candidates: isbnCandidateOverrides[item.id] ?? item.isbns_candidates,
+    }
+    const listings = computeListings(effectiveItem, listingsByIsbn, conditions, maxPrice)
+    return { item: effectiveItem, listings, conditions, maxPrice }
   })
 
   const missingItems = itemListingCounts.filter((x) => x.listings.length === 0)
@@ -347,6 +529,7 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
           </div>
           {missingItems.map(({ item, conditions, maxPrice }) => {
             const suggestion = findSuggestion(item, listingsByIsbn, conditions, maxPrice)
+            const showEditionPicker = editionPickerFor === item.id
             return (
               <div key={item.id} className="px-3 py-2 space-y-1.5">
                 <div className="flex items-start justify-between gap-2">
@@ -362,6 +545,7 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
                     </a>
                   )}
                 </div>
+
                 {suggestion ? (
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs text-amber-700">
@@ -387,10 +571,37 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
                       Accept
                     </button>
                   </div>
+                ) : showEditionPicker ? (
+                  <EditionPickerInline
+                    item={item}
+                    cartSlug={cartSlug}
+                    listingsByIsbn={listingsByIsbn}
+                    conditionOverrides={conditionOverrides}
+                    maxPriceOverrides={maxPriceOverrides}
+                    isbnCandidateOverrides={isbnCandidateOverrides}
+                    onSaved={(newIsbnOverrides, newListings, newResult) => {
+                      setIsbnCandidateOverrides(newIsbnOverrides)
+                      setListingsByIsbn(newListings)
+                      setResult(newResult)
+                      setEditionPickerFor(null)
+                    }}
+                    onCancel={() => setEditionPickerFor(null)}
+                  />
                 ) : (
-                  <p className="text-xs text-amber-700 italic">
-                    No listings found even with all conditions — try other editions.
-                  </p>
+                  <div className="flex items-center gap-3">
+                    <p className="text-xs text-amber-700 italic">
+                      No listings found for this edition.
+                    </p>
+                    {item.work_id && (
+                      <button
+                        onClick={() => setEditionPickerFor(item.id)}
+                        className="shrink-0 text-xs font-medium text-amber-700 hover:text-amber-900 flex items-center gap-1 underline"
+                      >
+                        <BookOpen className="h-3 w-3" />
+                        Try other editions
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
             )
