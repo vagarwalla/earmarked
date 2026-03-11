@@ -45,10 +45,9 @@ function formatCount(n: number): string {
 }
 
 function LibraryCount({
-  holdings, olReads, loading,
+  holdings, loading,
 }: {
   holdings: number | null
-  olReads: number | null
   loading: boolean
 }) {
   if (loading) {
@@ -64,14 +63,6 @@ function LibraryCount({
       <div className="flex items-center gap-1 pt-1" title={`${holdings.toLocaleString()} libraries hold this edition (OCLC)`}>
         <span className="text-xs text-muted-foreground">📚</span>
         <span className="text-xs text-muted-foreground font-medium">{formatCount(holdings)} libraries</span>
-      </div>
-    )
-  }
-  if (olReads && olReads > 0) {
-    return (
-      <div className="flex items-center gap-1 pt-1" title={`${olReads.toLocaleString()} people have read this book (Open Library)`}>
-        <span className="text-xs text-muted-foreground">📖</span>
-        <span className="text-xs text-muted-foreground font-medium">{formatCount(olReads)} reads</span>
       </div>
     )
   }
@@ -353,7 +344,7 @@ function MultiSelectDropdown<T extends string | number>({
 }
 
 function EditionCard({
-  group, formatFilter, selectedKeys, firstEditionKey, onToggle, popularityMap, popularityLoading, olReads,
+  group, formatFilter, selectedKeys, firstEditionKey, onToggle, popularityMap, popularityLoading,
 }: {
   group: CoverGroup
   formatFilter: Format
@@ -362,7 +353,6 @@ function EditionCard({
   onToggle: (key: string) => void
   popularityMap: Record<string, number>
   popularityLoading: boolean
-  olReads: number | null
 }) {
   const rep = bestEdition(group, formatFilter)
   const selIdx = selectedKeys.indexOf(group.key)
@@ -413,7 +403,7 @@ function EditionCard({
             </span>
           ))}
         </div>
-        <LibraryCount holdings={holdings} olReads={olReads} loading={popIsLoading} />
+        <LibraryCount holdings={holdings} loading={popIsLoading} />
       </div>
     </button>
   )
@@ -459,6 +449,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
   const [yearRange, setYearRange] = useState<{ min: number | null; max: number | null }>({ min: null, max: null })
   const [titleFilter, setTitleFilter] = useState<Set<string>>(new Set())
   const [groupBy, setGroupBy] = useState<'publisher' | 'visual'>('publisher')
+  const [sortBy, setSortBy] = useState<'year' | 'popularity'>('year')
   const [clusterMap, setClusterMap] = useState<Record<string, string>>({})
   const [hashesLoading, setHashesLoading] = useState(false)
   const [popularityMap, setPopularityMap] = useState<Record<string, number>>({})
@@ -585,6 +576,9 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
   }, [coverGroups, formatFilter, publisherFilter, yearRange, titleFilter])
 
   const sorted = useMemo(() => {
+    if (sortBy === 'popularity') {
+      return [...filtered].sort((a, b) => groupCombinedScore(b, popularityMap) - groupCombinedScore(a, popularityMap))
+    }
     const earliestYear = (group: CoverGroup) =>
       group.editions.reduce((min, e) =>
         e.publish_year && (min === null || e.publish_year < min) ? e.publish_year : min
@@ -597,7 +591,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
       if (yb === null) return -1
       return ya - yb
     })
-  }, [filtered])
+  }, [filtered, sortBy, popularityMap])
 
   const firstEditionKey = sorted[0]?.key ?? null
 
@@ -614,18 +608,21 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
       map.get(key)!.groups.push(group)
     }
     const sections = Array.from(map.values())
-    // Sort editions within each section by popularity (desc)
-    for (const section of sections) {
-      section.groups.sort((a, b) => groupCombinedScore(b, popularityMap) - groupCombinedScore(a, popularityMap))
+    if (sortBy === 'popularity') {
+      // Sort editions within each section by popularity (desc)
+      for (const section of sections) {
+        section.groups.sort((a, b) => groupCombinedScore(b, popularityMap) - groupCombinedScore(a, popularityMap))
+      }
+      // Sort sections by the best score in each section (desc)
+      sections.sort((a, b) => {
+        const sA = Math.max(...a.groups.map((g) => groupCombinedScore(g, popularityMap)))
+        const sB = Math.max(...b.groups.map((g) => groupCombinedScore(g, popularityMap)))
+        return sB - sA
+      })
     }
-    // Sort sections by the best score in each section (desc)
-    sections.sort((a, b) => {
-      const sA = Math.max(...a.groups.map((g) => groupCombinedScore(g, popularityMap)))
-      const sB = Math.max(...b.groups.map((g) => groupCombinedScore(g, popularityMap)))
-      return sB - sA
-    })
+    // When sortBy === 'year', sections and editions keep the year-ordered iteration from `sorted`
     return sections
-  }, [sorted, formatFilter, popularityMap])
+  }, [sorted, formatFilter, popularityMap, sortBy])
 
   function fetchClusters(force = false) {
     const coverUrls = [...new Set(
@@ -663,26 +660,39 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
       return { group, clusterRep: rep }
     })
 
-    // Best popularity score per cluster (used to rank clusters against each other)
+    // Best popularity score per cluster (for popularity sort)
     const clusterBestScore = new Map<string | null, number>()
+    // Lowest cover_id per cluster (for year sort — lower OL id = older/earlier)
+    const clusterOrder = new Map<string | null, number>()
     for (const { group, clusterRep } of withCluster) {
       const s = groupCombinedScore(group, popularityMap)
       if (!clusterBestScore.has(clusterRep) || s > clusterBestScore.get(clusterRep)!) {
         clusterBestScore.set(clusterRep, s)
       }
+      if (!clusterOrder.has(clusterRep)) {
+        const coverId = group.key.startsWith('id:') ? parseInt(group.key.slice(3), 10) : Infinity
+        clusterOrder.set(clusterRep, coverId)
+      }
     }
 
     return [...withCluster]
       .sort((a, b) => {
-        // Primary: sort clusters by their best popularity score (desc)
-        const ca = clusterBestScore.get(a.clusterRep) ?? 0
-        const cb = clusterBestScore.get(b.clusterRep) ?? 0
-        if (ca !== cb) return cb - ca
-        // Secondary: within a cluster, sort by individual score (desc)
-        return groupCombinedScore(b.group, popularityMap) - groupCombinedScore(a.group, popularityMap)
+        if (sortBy === 'popularity') {
+          const ca = clusterBestScore.get(a.clusterRep) ?? 0
+          const cb = clusterBestScore.get(b.clusterRep) ?? 0
+          if (ca !== cb) return cb - ca
+          return groupCombinedScore(b.group, popularityMap) - groupCombinedScore(a.group, popularityMap)
+        }
+        // Year sort: order clusters by lowest cover_id, then editions within cluster likewise
+        const oa = clusterOrder.get(a.clusterRep) ?? Infinity
+        const ob = clusterOrder.get(b.clusterRep) ?? Infinity
+        if (oa !== ob) return oa - ob
+        const ia = a.group.key.startsWith('id:') ? parseInt(a.group.key.slice(3), 10) : Infinity
+        const ib = b.group.key.startsWith('id:') ? parseInt(b.group.key.slice(3), 10) : Infinity
+        return ia - ib
       })
       .map(({ group }) => group)
-  }, [clusterMap, filtered, popularityMap])
+  }, [clusterMap, filtered, popularityMap, sortBy])
 
   // Build visual sections from visualSorted for rendering
   const visualSections = useMemo((): { clusterRep: string | null; groups: CoverGroup[] }[] => {
@@ -758,6 +768,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
 
         <p className="text-sm text-muted-foreground shrink-0 -mt-1">
           Pick one or more editions you&apos;d accept. First picked = top preference. All are searched for the best price.
+          {olReads && olReads > 0 ? ` · ${formatCount(olReads)} readers on Open Library` : ''}
         </p>
 
         {/* Filters: single row */}
@@ -811,6 +822,20 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
             </button>
           )}
           <div className="ml-auto flex items-center gap-2 shrink-0">
+            <div className="flex gap-0 border rounded-md overflow-hidden text-sm shrink-0">
+              <button
+                className={`px-2.5 py-1.5 transition-colors whitespace-nowrap ${sortBy === 'year' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
+                onClick={() => setSortBy('year')}
+              >
+                Year
+              </button>
+              <button
+                className={`px-2.5 py-1.5 transition-colors whitespace-nowrap ${sortBy === 'popularity' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
+                onClick={() => setSortBy('popularity')}
+              >
+                Popular
+              </button>
+            </div>
             <div className="flex gap-0 border rounded-md overflow-hidden text-sm">
               <button
                 className={`px-2.5 py-1.5 transition-colors whitespace-nowrap ${groupBy === 'publisher' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
@@ -856,7 +881,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
                   <SectionHeader label={label} groups={groups} selectedKeys={selectedKeys} onToggleGroup={toggleGroup} />
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 p-3">
                     {groups.map((group) => (
-                      <EditionCard key={group.key} group={group} formatFilter={effectiveFormat} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} popularityMap={popularityMap} popularityLoading={popularityLoading} olReads={olReads} />
+                      <EditionCard key={group.key} group={group} formatFilter={effectiveFormat} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} popularityMap={popularityMap} popularityLoading={popularityLoading} />
                     ))}
                   </div>
                 </div>
@@ -891,7 +916,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
                     <SectionHeader label={sectionLabel} groups={section.groups} selectedKeys={selectedKeys} onToggleGroup={toggleGroup} />
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 p-3">
                       {section.groups.map((group) => (
-                        <EditionCard key={group.key} group={group} formatFilter={effectiveFormat} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} popularityMap={popularityMap} popularityLoading={popularityLoading} olReads={olReads} />
+                        <EditionCard key={group.key} group={group} formatFilter={effectiveFormat} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} popularityMap={popularityMap} popularityLoading={popularityLoading} />
                       ))}
                     </div>
                   </div>
