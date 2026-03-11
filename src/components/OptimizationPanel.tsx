@@ -238,12 +238,17 @@ function EditionPickerInline({
   return (
     <div className="mt-2 mx-2 rounded-md border bg-muted/30 p-2.5 space-y-2">
       <p className="text-xs font-medium">Select editions to search ({editions.length} found):</p>
-      <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+      <div className="grid grid-cols-2 gap-2 max-h-72 overflow-y-auto pr-1">
         {editions.map((ed) => (
-          <label key={ed.isbn} className="flex items-start gap-2 text-xs cursor-pointer">
+          <label
+            key={ed.isbn}
+            className={`flex gap-2 cursor-pointer rounded-md border p-1.5 transition-colors ${
+              selected.has(ed.isbn) ? 'border-primary bg-primary/5' : 'border-border hover:border-border/80 hover:bg-muted/40'
+            }`}
+          >
             <input
               type="checkbox"
-              className="mt-0.5 shrink-0"
+              className="sr-only"
               checked={selected.has(ed.isbn)}
               onChange={(e) => {
                 const next = new Set(selected)
@@ -252,16 +257,26 @@ function EditionPickerInline({
                 setSelected(next)
               }}
             />
-            <span className="leading-snug">
-              {ed.publisher ?? 'Unknown publisher'}
-              {ed.publish_year ? ` (${ed.publish_year})` : ''}
-              {ed.format !== 'any' && (
-                <span className="ml-1 text-muted-foreground">
-                  {ed.format === 'hardcover' ? 'HC' : 'PB'}
-                </span>
-              )}
-              {ed.pages ? <span className="ml-1 text-muted-foreground">{ed.pages}pp</span> : null}
-              {ed.ocaid && <span className="ml-1 text-sky-600 font-medium">· Digitized</span>}
+            {ed.cover_url ? (
+              <img
+                src={ed.cover_url}
+                alt=""
+                className="w-10 h-14 object-cover rounded shrink-0"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+              />
+            ) : (
+              <div className="w-10 h-14 bg-muted rounded shrink-0 flex items-center justify-center text-[10px] text-muted-foreground text-center leading-tight px-0.5">
+                No cover
+              </div>
+            )}
+            <span className="text-xs leading-snug flex-1 min-w-0">
+              <span className="font-medium block truncate">{ed.publisher ?? 'Unknown publisher'}</span>
+              <span className="text-muted-foreground">
+                {ed.publish_year ? `${ed.publish_year} · ` : ''}
+                {ed.format !== 'any' ? (ed.format === 'hardcover' ? 'HC' : 'PB') : ''}
+                {ed.pages ? ` · ${ed.pages}pp` : ''}
+              </span>
+              {ed.ocaid && <span className="block text-sky-600 font-medium text-[10px]">Digitized</span>}
             </span>
           </label>
         ))}
