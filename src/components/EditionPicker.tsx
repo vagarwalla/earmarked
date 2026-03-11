@@ -38,7 +38,19 @@ function groupHoldings(group: CoverGroup, popularityMap: Record<string, number>)
   return best
 }
 
-function LibraryCount({ holdings, loading }: { holdings: number | null; loading: boolean }) {
+function formatCount(n: number): string {
+  if (n >= 10000) return `${Math.round(n / 1000)}k`
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
+}
+
+function LibraryCount({
+  holdings, olReads, loading,
+}: {
+  holdings: number | null
+  olReads: number | null
+  loading: boolean
+}) {
   if (loading) {
     return (
       <div className="flex items-center gap-1 pt-1">
@@ -46,18 +58,24 @@ function LibraryCount({ holdings, loading }: { holdings: number | null; loading:
       </div>
     )
   }
-  if (holdings === null || holdings === 0) return null
-  const label = holdings >= 10000
-    ? `${Math.round(holdings / 1000)}k`
-    : holdings >= 1000
-    ? `${(holdings / 1000).toFixed(1)}k`
-    : String(holdings)
-  return (
-    <div className="flex items-center gap-1 pt-1" title={`${holdings.toLocaleString()} libraries worldwide hold this edition (via OCLC)`}>
-      <span className="text-xs text-muted-foreground">📚</span>
-      <span className="text-xs text-muted-foreground font-medium">{label} libraries</span>
-    </div>
-  )
+  // Prefer OCLC per-edition library count; fall back to OL work-level reads
+  if (holdings && holdings > 0) {
+    return (
+      <div className="flex items-center gap-1 pt-1" title={`${holdings.toLocaleString()} libraries hold this edition (OCLC)`}>
+        <span className="text-xs text-muted-foreground">📚</span>
+        <span className="text-xs text-muted-foreground font-medium">{formatCount(holdings)} libraries</span>
+      </div>
+    )
+  }
+  if (olReads && olReads > 0) {
+    return (
+      <div className="flex items-center gap-1 pt-1" title={`${olReads.toLocaleString()} people have read this book (Open Library)`}>
+        <span className="text-xs text-muted-foreground">📖</span>
+        <span className="text-xs text-muted-foreground font-medium">{formatCount(olReads)} reads</span>
+      </div>
+    )
+  }
+  return null
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -335,7 +353,7 @@ function MultiSelectDropdown<T extends string | number>({
 }
 
 function EditionCard({
-  group, formatFilter, selectedKeys, firstEditionKey, onToggle, popularityMap, popularityLoading,
+  group, formatFilter, selectedKeys, firstEditionKey, onToggle, popularityMap, popularityLoading, olReads,
 }: {
   group: CoverGroup
   formatFilter: Format
@@ -344,6 +362,7 @@ function EditionCard({
   onToggle: (key: string) => void
   popularityMap: Record<string, number>
   popularityLoading: boolean
+  olReads: number | null
 }) {
   const rep = bestEdition(group, formatFilter)
   const selIdx = selectedKeys.indexOf(group.key)
@@ -394,7 +413,7 @@ function EditionCard({
             </span>
           ))}
         </div>
-        <LibraryCount holdings={holdings} loading={popIsLoading} />
+        <LibraryCount holdings={holdings} olReads={olReads} loading={popIsLoading} />
       </div>
     </button>
   )
@@ -444,6 +463,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
   const [hashesLoading, setHashesLoading] = useState(false)
   const [popularityMap, setPopularityMap] = useState<Record<string, number>>({})
   const [popularityLoading, setPopularityLoading] = useState(false)
+  const [olReads, setOlReads] = useState<number | null>(null)
 
   useEffect(() => {
     if (!book || !open) return
@@ -458,6 +478,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
     setHashesLoading(false)
     setPopularityMap({})
     setPopularityLoading(false)
+    setOlReads(null)
     fetch(`/api/editions?workId=${encodeURIComponent(book.work_id)}&language=${language}`)
       .then((r) => r.json())
       .then((data: Edition[]) => {
@@ -483,7 +504,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
   // Lazily fetch OCLC library-holdings for all edition ISBNs (Tier-2 popularity)
   useEffect(() => {
     if (editions.length === 0) return
-    const isbns = [...new Set(editions.map((e) => e.isbn))].slice(0, 150)
+    const isbns = [...new Set(editions.map((e) => e.isbn))].slice(0, 50)
     setPopularityLoading(true)
     fetch('/api/popularity', {
       method: 'POST',
@@ -497,6 +518,19 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
       })
       .catch(() => setPopularityLoading(false))
   }, [editions])
+
+  // Fallback: fetch work-level "already read" count from Open Library
+  // This is guaranteed to work (same origin as the editions API) and fires immediately.
+  useEffect(() => {
+    if (!book) return
+    fetch(`https://openlibrary.org${book.work_id}/bookshelves.json`)
+      .then((r) => r.json())
+      .then((data) => {
+        const count = data?.counts?.already_read ?? 0
+        if (count > 0) setOlReads(count)
+      })
+      .catch(() => {})
+  }, [book])
 
   const coverGroups = useMemo(() => groupEditionsBycover(editions), [editions])
 
@@ -822,7 +856,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
                   <SectionHeader label={label} groups={groups} selectedKeys={selectedKeys} onToggleGroup={toggleGroup} />
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 p-3">
                     {groups.map((group) => (
-                      <EditionCard key={group.key} group={group} formatFilter={effectiveFormat} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} popularityMap={popularityMap} popularityLoading={popularityLoading} />
+                      <EditionCard key={group.key} group={group} formatFilter={effectiveFormat} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} popularityMap={popularityMap} popularityLoading={popularityLoading} olReads={olReads} />
                     ))}
                   </div>
                 </div>
@@ -857,7 +891,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
                     <SectionHeader label={sectionLabel} groups={section.groups} selectedKeys={selectedKeys} onToggleGroup={toggleGroup} />
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 p-3">
                       {section.groups.map((group) => (
-                        <EditionCard key={group.key} group={group} formatFilter={effectiveFormat} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} popularityMap={popularityMap} popularityLoading={popularityLoading} />
+                        <EditionCard key={group.key} group={group} formatFilter={effectiveFormat} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} popularityMap={popularityMap} popularityLoading={popularityLoading} olReads={olReads} />
                       ))}
                     </div>
                   </div>

@@ -8,6 +8,9 @@
     },
     "src/app/api/cover-groups/route.ts": {
       "maxDuration": 60
+    },
+    "src/app/api/popularity/route.ts": {
+      "maxDuration": 30
     }
   }
 }
