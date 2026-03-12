@@ -2,13 +2,18 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Plus, ShoppingCart, ExternalLink } from 'lucide-react'
+import { Plus, ShoppingCart } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { CreateCartDialog } from '@/components/CreateCartDialog'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import type { Cart } from '@/lib/types'
+
+const SPINE_COLORS = [
+  'bg-amber-800', 'bg-emerald-800', 'bg-red-900', 'bg-indigo-800',
+  'bg-stone-600', 'bg-teal-800', 'bg-rose-900', 'bg-violet-900',
+  'bg-orange-800', 'bg-cyan-900', 'bg-lime-800', 'bg-fuchsia-900',
+]
+const SPINE_HEIGHTS = ['h-36', 'h-40', 'h-32', 'h-44', 'h-36', 'h-44', 'h-32', 'h-40']
 
 export default function HomePage() {
   const [carts, setCarts] = useState<Cart[]>([])
@@ -102,50 +107,45 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Stacks gallery */}
+      {/* Stacks as books on a shelf */}
       <section className="max-w-5xl mx-auto px-4 pb-16 flex-1 w-full">
         {loading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {[...Array(3)].map((_, i) => (
-              <Card key={i} className="animate-pulse">
-                <CardHeader><div className="h-5 bg-muted rounded w-3/4" /></CardHeader>
-                <CardContent><div className="h-4 bg-muted rounded w-1/4" /></CardContent>
-              </Card>
-            ))}
-          </div>
-        ) : carts.length === 0 ? (
-          <div className="text-center py-16 text-muted-foreground">
-            <span className="text-5xl block mb-4">📚</span>
-            <p className="text-lg">No stacks yet. Create one to get started.</p>
-          </div>
-        ) : (
-          <div>
-            <h2 className="text-lg font-semibold mb-4">All stacks <span className="text-muted-foreground font-normal text-sm">— visible to everyone</span></h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {carts.map((cart) => (
-                <Link key={cart.id} href={`/stack/${cart.slug}`}>
-                  <Card className="hover:shadow-md transition-shadow cursor-pointer h-full">
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-base flex items-start justify-between gap-2">
-                        <span>{cart.name}</span>
-                        <ExternalLink className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="flex items-center gap-2">
-                        <Badge variant="secondary">
-                          {cart.item_count ?? 0} {cart.item_count === 1 ? 'book' : 'books'}
-                        </Badge>
-                        <span className="text-sm text-muted-foreground">
-                          {new Date(cart.created_at).toLocaleDateString()}
-                        </span>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </Link>
+          <>
+            <div className="bookcase-interior min-h-[196px] flex items-end gap-2">
+              {[...Array(5)].map((_, i) => (
+                <div key={i} className={`shrink-0 w-14 rounded-sm bg-muted/60 animate-pulse ${SPINE_HEIGHTS[i % SPINE_HEIGHTS.length]}`} />
               ))}
             </div>
-          </div>
+            <div className="shelf-plank" />
+          </>
+        ) : carts.length === 0 ? (
+          <>
+            <div className="bookcase-interior min-h-[196px] flex items-center justify-center">
+              <p className="text-muted-foreground text-sm italic">Your shelf is empty — start a stack!</p>
+            </div>
+            <div className="shelf-plank" />
+          </>
+        ) : (
+          <>
+            <h2 className="text-lg font-semibold mb-4">All stacks <span className="text-muted-foreground font-normal text-sm">— visible to everyone</span></h2>
+            <div className="bookcase-interior">
+              <div className="flex gap-2 items-end overflow-x-auto">
+                {carts.map((cart, i) => (
+                  <Link key={cart.id} href={`/stack/${cart.slug}`} title={`${cart.name} · ${cart.item_count ?? 0} books`}>
+                    <div className={`shrink-0 w-14 rounded-sm flex items-center justify-center cursor-pointer hover:brightness-110 hover:-translate-y-2 transition-all duration-150 ${SPINE_COLORS[i % SPINE_COLORS.length]} ${SPINE_HEIGHTS[i % SPINE_HEIGHTS.length]}`}>
+                      <span
+                        className="text-xs font-semibold text-white/90 px-1 leading-tight w-full text-center line-clamp-4"
+                        style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+                      >
+                        {cart.name}
+                      </span>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </div>
+            <div className="shelf-plank" />
+          </>
         )}
       </section>
 
