@@ -59,46 +59,15 @@ export default function HomePage() {
       </header>
 
       {/* Hero */}
-      <section className="max-w-5xl mx-auto px-4 pt-16 pb-10 text-center">
-        <h1 className="text-5xl sm:text-6xl font-bold tracking-tight mb-5 leading-tight">
+      <section className="max-w-5xl mx-auto px-4 pt-6 pb-4 text-center">
+        <h1 className="text-4xl sm:text-5xl font-bold tracking-tight mb-1 leading-tight">
           Stack more books.
         </h1>
+        <p className="text-muted-foreground text-base mb-4">Build a wishlist, pick your editions, order in one go.</p>
         <Button size="lg" className="text-base px-8 h-12" onClick={() => setOpen(true)}>
           <ShoppingCart className="h-5 w-5 mr-2" />
           Start a Stack
         </Button>
-        <div className="mt-12 flex justify-center">
-          <img
-            src="https://66.media.tumblr.com/tumblr_lnyexmyOR71qc3reoo1_500.gif"
-            alt="Harry Potter receiving a stack of books at Flourish and Blotts"
-            className="rounded-2xl shadow-xl w-full max-w-2xl"
-          />
-        </div>
-      </section>
-
-      {/* How it works */}
-      <section className="max-w-5xl mx-auto px-4 pb-14">
-        <h2 className="text-2xl font-bold text-center mb-8">How it works</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-          <div className="text-center p-7 rounded-2xl bg-muted/50">
-            <div className="text-4xl mb-4">🔍</div>
-            <h3 className="font-semibold text-lg mb-2">Build your stack</h3>
-            <p className="text-muted-foreground text-sm leading-relaxed">Search for books by title or author and add them to your stack. Go on, add them all.</p>
-          </div>
-          <div className="text-center p-7 rounded-2xl bg-muted/50">
-            <div className="text-4xl mb-4">📖</div>
-            <h3 className="font-semibold text-lg mb-2">Pick your edition</h3>
-            <p className="text-muted-foreground text-sm leading-relaxed">Choose your preferred edition and cover for each book. First editions, beloved paperbacks — your call.</p>
-          </div>
-          <div className="text-center p-7 rounded-2xl bg-muted/50">
-            <div className="text-4xl mb-4">📦</div>
-            <h3 className="font-semibold text-lg mb-2">Order in one go</h3>
-            <p className="text-muted-foreground text-sm leading-relaxed">Books get grouped by seller so you place the fewest orders possible. No twelve separate checkouts.</p>
-          </div>
-        </div>
-        <div className="mt-8 p-4 rounded-xl border bg-muted/30 text-sm text-center max-w-2xl mx-auto">
-          🌍 Outside the US? Listings come from <strong>ThriftBooks</strong>, <strong>Better World Books</strong>, and <strong>AbeBooks</strong> — all US-based. They do ship internationally, though shipping will be a bit pricier.
-        </div>
       </section>
 
       {/* Stacks list */}
@@ -131,6 +100,38 @@ export default function HomePage() {
             </div>
           </div>
         )}
+      </section>
+
+      {/* How it works */}
+      <section className="max-w-5xl mx-auto px-4 pb-14">
+        <h2 className="text-2xl font-bold text-center mb-8">How it works</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+          <div className="text-center p-7 rounded-2xl bg-muted/50">
+            <div className="text-4xl mb-4">🔍</div>
+            <h3 className="font-semibold text-lg mb-2">Build your stack</h3>
+            <p className="text-muted-foreground text-sm leading-relaxed">Search for books by title or author and add them to your stack. Go on, add them all.</p>
+          </div>
+          <div className="text-center p-7 rounded-2xl bg-muted/50">
+            <div className="text-4xl mb-4">📖</div>
+            <h3 className="font-semibold text-lg mb-2">Pick your edition</h3>
+            <p className="text-muted-foreground text-sm leading-relaxed">Choose your preferred edition and cover for each book. First editions, beloved paperbacks — your call.</p>
+          </div>
+          <div className="text-center p-7 rounded-2xl bg-muted/50">
+            <div className="text-4xl mb-4">📦</div>
+            <h3 className="font-semibold text-lg mb-2">Order in one go</h3>
+            <p className="text-muted-foreground text-sm leading-relaxed">Books get grouped by seller so you place the fewest orders possible. No twelve separate checkouts.</p>
+          </div>
+        </div>
+        <div className="mt-8 p-4 rounded-xl border bg-muted/30 text-sm text-center max-w-2xl mx-auto">
+          🌍 Outside the US? Listings come from <strong>ThriftBooks</strong>, <strong>Better World Books</strong>, and <strong>AbeBooks</strong> — all US-based. They do ship internationally, though shipping will be a bit pricier.
+        </div>
+        <div className="mt-10 flex justify-center">
+          <img
+            src="https://66.media.tumblr.com/tumblr_lnyexmyOR71qc3reoo1_500.gif"
+            alt="Harry Potter receiving a stack of books at Flourish and Blotts"
+            className="rounded-2xl shadow-xl w-full max-w-2xl"
+          />
+        </div>
       </section>
 
       {/* Footer */}
