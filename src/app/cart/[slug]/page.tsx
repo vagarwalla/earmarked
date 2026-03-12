@@ -4,7 +4,7 @@ import { useEffect, useState, use } from 'react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, BookOpen, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeft, BookOpen, Check, Link2, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { BookSearch } from '@/components/BookSearch'
@@ -26,6 +26,14 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
   const [loading, setLoading] = useState(true)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  async function handleCopyLink() {
+    await navigator.clipboard.writeText(`${window.location.origin}/cart/${slug}`)
+    setCopied(true)
+    toast.success('Cart link copied!')
+    setTimeout(() => setCopied(false), 2000)
+  }
 
   // Edition picker state
   const [pickerBook, setPickerBook] = useState<BookSearchResult | null>(null)
@@ -204,7 +212,16 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
           </Link>
           <BookOpen className="h-5 w-5 text-primary" />
           <div className="flex-1 min-w-0">
-            <h1 className="font-semibold text-base leading-tight">{cart.name}</h1>
+            <div className="flex items-center gap-1.5">
+              <h1 className="font-semibold text-base leading-tight truncate">{cart.name}</h1>
+              <button
+                onClick={handleCopyLink}
+                title="Copy cart link"
+                className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {copied ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Link2 className="h-3.5 w-3.5" />}
+              </button>
+            </div>
             <p className="text-xs text-muted-foreground">{items.length} book{items.length !== 1 ? 's' : ''}</p>
           </div>
           <ThemeToggle />

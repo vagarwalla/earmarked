@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Loader2, ExternalLink, TrendingDown, Copy, Check, AlertCircle, ChevronDown, ChevronUp, Lightbulb, BookOpen } from 'lucide-react'
+import { Loader2, ExternalLink, TrendingDown, AlertCircle, ChevronDown, ChevronUp, Lightbulb, BookOpen } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -382,7 +382,6 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
   const [resultsBySource, setResultsBySource] = useState<Partial<Record<SourceId, OptimizationResult>>>({})
   const [listingsByIsbn, setListingsByIsbn] = useState<Record<string, Listing[]>>({})
   const [searched, setSearched] = useState(false)
-  const [copied, setCopied] = useState(false)
   const [conditionOverrides, setConditionOverrides] = useState<Record<string, Condition[]>>({})
   const [maxPriceOverrides, setMaxPriceOverrides] = useState<Record<string, number | null>>({})
   const [isbnCandidateOverrides, setIsbnCandidateOverrides] = useState<Record<string, string[]>>({})
@@ -460,15 +459,7 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
     urls.forEach((url) => window.open(url, '_blank', 'noopener'))
   }
 
-  async function copyShareUrl() {
-    const url = `${window.location.origin}/cart/${cartSlug}`
-    await navigator.clipboard.writeText(url)
-    setCopied(true)
-    toast.success('Cart link copied!')
-    setTimeout(() => setCopied(false), 2000)
-  }
-
-  const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
+const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
   const itemsWithIsbn = items.filter((i) => i.isbn_preferred)
 
   const itemListingCounts = itemsWithIsbn.map((item) => {
@@ -487,12 +478,6 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
 
   return (
     <div className="space-y-4">
-      {/* Share */}
-      <Button variant="outline" size="sm" className="w-full" onClick={copyShareUrl}>
-        {copied ? <Check className="h-4 w-4 mr-2" /> : <Copy className="h-4 w-4 mr-2" />}
-        {copied ? 'Copied!' : 'Copy cart link'}
-      </Button>
-
       {/* Find deals CTA */}
       <Button
         className="w-full"
