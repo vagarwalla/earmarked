@@ -132,31 +132,141 @@
   }
 }
 
-/* Bookshelf visual — clean, minimal */
-.book-shelf-area {
-  background: oklch(0.945 0.020 70 / 0.55);
-  border: 1px solid oklch(0.84 0.022 68);
-  border-bottom: none;
+/* Multi-shelf bookcase — one shelf per book */
+
+.bookcase-outer {
+  display: flex;
   border-radius: 6px 6px 0 0;
-  padding: 8px 8px 4px;
-  box-shadow: inset 0 4px 10px oklch(0 0 0 / 7%);
+  overflow: hidden;
 }
 
-.book-shelf-edge {
+.bookcase-wall-l {
+  width: 18px;
+  flex-shrink: 0;
+  background: linear-gradient(to right, oklch(0.56 0.054 49), oklch(0.70 0.044 56) 55%, oklch(0.65 0.042 53));
+  border-top: 2px solid oklch(0.54 0.050 47);
+  border-left: 2px solid oklch(0.52 0.048 46);
+  border-right: 1px solid oklch(0.62 0.042 52);
+  box-shadow: inset -4px 0 8px oklch(0 0 0 / 22%);
+}
+
+.bookcase-wall-r {
+  width: 18px;
+  flex-shrink: 0;
+  background: linear-gradient(to left, oklch(0.56 0.054 49), oklch(0.70 0.044 56) 55%, oklch(0.65 0.042 53));
+  border-top: 2px solid oklch(0.54 0.050 47);
+  border-right: 2px solid oklch(0.52 0.048 46);
+  border-left: 1px solid oklch(0.62 0.042 52);
+  box-shadow: inset 4px 0 8px oklch(0 0 0 / 22%);
+}
+
+.bookcase-scroll {
+  flex: 1;
+  min-width: 0;
+  background: oklch(0.940 0.018 72);
+  border-top: 2px solid oklch(0.54 0.050 47);
+  overflow-y: auto;
+}
+
+.bookcase-book-bay {
+  padding: 8px 8px 6px;
+}
+
+/* Per-shelf plank: lit top face + darker front face */
+.bookcase-shelf-top {
   height: 5px;
-  background: oklch(0.60 0.044 52);
-  border-radius: 0 0 4px 4px;
-  box-shadow: 0 3px 7px oklch(0 0 0 / 18%);
-  margin-bottom: 4px;
+  background: oklch(0.73 0.046 58);
+  border-top: 1px solid oklch(0.80 0.044 60);
 }
 
-.dark .book-shelf-area {
-  background: oklch(0.148 0.016 50 / 0.7);
-  border-color: oklch(0.28 0.026 50);
-  box-shadow: inset 0 4px 10px oklch(0 0 0 / 25%);
+.bookcase-shelf-face {
+  height: 14px;
+  background: oklch(0.55 0.056 50);
+  border-bottom: 1px solid oklch(0.44 0.046 46);
+  box-shadow: 0 5px 13px oklch(0 0 0 / 28%);
+  position: relative;
+  overflow: hidden;
 }
 
-.dark .book-shelf-edge {
-  background: oklch(0.30 0.036 50);
-  box-shadow: 0 3px 7px oklch(0 0 0 / 32%);
+.bookcase-shelf-face::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 8%;
+  width: 16%;
+  height: 1.5px;
+  background: oklch(1 0 0 / 14%);
+  border-radius: 2px;
+}
+
+/* Bottom closure */
+.bookcase-bottom {
+  display: flex;
+}
+
+.bookcase-bottom-wall-l {
+  width: 18px;
+  flex-shrink: 0;
+  background: linear-gradient(to right, oklch(0.50 0.052 47), oklch(0.62 0.040 52));
+  border-left: 2px solid oklch(0.52 0.048 46);
+  border-bottom: 2px solid oklch(0.48 0.046 46);
+  border-radius: 0 0 0 5px;
+}
+
+.bookcase-bottom-wall-r {
+  width: 18px;
+  flex-shrink: 0;
+  background: linear-gradient(to left, oklch(0.50 0.052 47), oklch(0.62 0.040 52));
+  border-right: 2px solid oklch(0.52 0.048 46);
+  border-bottom: 2px solid oklch(0.48 0.046 46);
+  border-radius: 0 0 5px 0;
+}
+
+.bookcase-bottom-plank {
+  flex: 1;
+  height: 10px;
+  background: oklch(0.52 0.056 49);
+  border-bottom: 2px solid oklch(0.42 0.044 45);
+  box-shadow: 0 6px 16px oklch(0 0 0 / 34%);
+}
+
+/* Dark mode */
+.dark .bookcase-wall-l {
+  background: linear-gradient(to right, oklch(0.20 0.030 48), oklch(0.30 0.026 52) 55%, oklch(0.27 0.024 50));
+  border-top-color: oklch(0.24 0.028 47);
+  border-left-color: oklch(0.22 0.026 46);
+  border-right-color: oklch(0.26 0.024 50);
+}
+
+.dark .bookcase-wall-r {
+  background: linear-gradient(to left, oklch(0.20 0.030 48), oklch(0.30 0.026 52) 55%, oklch(0.27 0.024 50));
+  border-top-color: oklch(0.24 0.028 47);
+  border-right-color: oklch(0.22 0.026 46);
+  border-left-color: oklch(0.26 0.024 50);
+}
+
+.dark .bookcase-scroll {
+  background: oklch(0.148 0.016 50);
+  border-top-color: oklch(0.24 0.028 47);
+}
+
+.dark .bookcase-shelf-top {
+  background: oklch(0.32 0.034 52);
+  border-top-color: oklch(0.38 0.034 54);
+}
+
+.dark .bookcase-shelf-face {
+  background: oklch(0.24 0.030 49);
+  border-bottom-color: oklch(0.18 0.024 46);
+}
+
+.dark .bookcase-bottom-wall-l,
+.dark .bookcase-bottom-wall-r {
+  background: oklch(0.20 0.028 48);
+  border-color: oklch(0.22 0.026 46);
+}
+
+.dark .bookcase-bottom-plank {
+  background: oklch(0.22 0.030 49);
+  border-bottom-color: oklch(0.17 0.024 45);
 }

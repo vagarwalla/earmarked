@@ -233,21 +233,34 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
             </div>
           ) : (
             <>
-              <div className="book-shelf-area">
-                <div className="space-y-2 max-h-[calc(100vh-240px)] overflow-y-auto pr-1">
+              {/* Bookcase: side walls + one shelf plank per book */}
+              <div className="bookcase-outer">
+                <div className="bookcase-wall-l" />
+                <div className="bookcase-scroll max-h-[calc(100vh-240px)]">
                   {items.map((item) => (
-                    <CartItemCard
-                      key={item.id}
-                      item={item}
-                      onUpdate={handleUpdateItem}
-                      onRemove={handleRemoveItem}
-                      onChangeCover={handleChangeCover}
-                      onPickCover={handlePickCover}
-                    />
+                    <div key={item.id}>
+                      <div className="bookcase-book-bay">
+                        <CartItemCard
+                          item={item}
+                          onUpdate={handleUpdateItem}
+                          onRemove={handleRemoveItem}
+                          onChangeCover={handleChangeCover}
+                          onPickCover={handlePickCover}
+                        />
+                      </div>
+                      <div className="bookcase-shelf-top" />
+                      <div className="bookcase-shelf-face" />
+                    </div>
                   ))}
                 </div>
+                <div className="bookcase-wall-r" />
               </div>
-              <div className="book-shelf-edge" />
+              {/* Bottom closure */}
+              <div className="bookcase-bottom">
+                <div className="bookcase-bottom-wall-l" />
+                <div className="bookcase-bottom-plank" />
+                <div className="bookcase-bottom-wall-r" />
+              </div>
             </>
           )}
         </div>
