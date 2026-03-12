@@ -71,6 +71,13 @@ export default function HomePage() {
           <ShoppingCart className="h-5 w-5 mr-2" />
           Start a Stack
         </Button>
+        <div className="mt-12 flex justify-center">
+          <img
+            src="https://66.media.tumblr.com/tumblr_lnyexmyOR71qc3reoo1_500.gif"
+            alt="Harry Potter receiving a stack of books at Flourish and Blotts"
+            className="rounded-2xl shadow-lg max-w-sm w-full"
+          />
+        </div>
       </section>
 
       {/* How it works */}
