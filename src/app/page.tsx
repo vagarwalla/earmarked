@@ -64,7 +64,7 @@ export default function HomePage() {
         <div className="flex flex-col lg:flex-row items-center gap-12">
           <div className="flex-1 text-center lg:text-left">
             <h1 className="text-5xl sm:text-6xl font-bold tracking-tight mb-5 leading-tight">
-              Because your TBR deserves a personal shopper.
+              Stack more books.
             </h1>
             <p className="text-muted-foreground text-xl max-w-xl mb-10">
               Tell us what you&apos;re after, pick your preferred edition and cover, and we&apos;ll track down second-hand copies across booksellers — grouped so you can order everything in one go.
