@@ -83,14 +83,14 @@ const FORMAT_LABELS: Record<Format, string> = {
   paperback: 'Paperback',
 }
 
-type CoverGroup = {
+export type CoverGroup = {
   key: string
   cover_url: string | null
   editions: Edition[]
   formats: Format[]
 }
 
-function groupEditionsBycover(editions: Edition[]): CoverGroup[] {
+export function groupEditionsByCover(editions: Edition[]): CoverGroup[] {
   const map = new Map<string, CoverGroup>()
   for (const edition of editions) {
     if (edition.cover_url) {
@@ -109,6 +109,9 @@ function groupEditionsBycover(editions: Edition[]): CoverGroup[] {
   }
   return Array.from(map.values())
 }
+
+// Internal alias (old lowercase name kept for internal calls)
+const groupEditionsBycover = groupEditionsByCover
 
 function bestEdition(group: CoverGroup, formatFilter: Format): Edition {
   if (formatFilter !== 'any') {
