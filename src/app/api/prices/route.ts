@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { fetchListingsByISBN } from '@/lib/abebooks'
-import { fetchBookFinderListings } from '@/lib/bookfinder'
+import { fetchThriftBooksListings } from '@/lib/thriftbooks'
+import { fetchBWBListings } from '@/lib/bwb'
 import type { Listing, PriceResponse, SourceInfo } from '@/lib/types'
 
 const CACHE_TTL_HOURS = 6
@@ -30,12 +31,13 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Fetch from AbeBooks and BookFinder (ThriftBooks + Better World Books) in parallel
-    const [abeListings, bookfinderListings] = await Promise.all([
+    // Fetch from AbeBooks, ThriftBooks, and Better World Books in parallel
+    const [abeListings, tbListings, bwbListings] = await Promise.all([
       fetchListingsByISBN(isbn),
-      fetchBookFinderListings(isbn),
+      fetchThriftBooksListings(isbn),
+      fetchBWBListings(isbn),
     ])
-    const listings = [...abeListings, ...bookfinderListings]
+    const listings = [...abeListings, ...tbListings, ...bwbListings]
     allListings[isbn] = listings
 
     // Only cache real results (non-empty)
