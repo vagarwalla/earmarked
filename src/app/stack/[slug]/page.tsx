@@ -4,7 +4,7 @@ import { useEffect, useState, use } from 'react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, BookOpen, Check, Link2, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeft, BookOpen, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { BookSearch } from '@/components/BookSearch'
@@ -26,14 +26,6 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
   const [loading, setLoading] = useState(true)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const [copied, setCopied] = useState(false)
-
-  async function handleCopyLink() {
-    await navigator.clipboard.writeText(`${window.location.origin}/cart/${slug}`)
-    setCopied(true)
-    toast.success('Cart link copied!')
-    setTimeout(() => setCopied(false), 2000)
-  }
 
   // Edition picker state
   const [pickerBook, setPickerBook] = useState<BookSearchResult | null>(null)
@@ -51,7 +43,7 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
         fetch(`/api/cart/${slug}/items`),
       ])
       if (!cartRes.ok) {
-        toast.error('Cart not found')
+        toast.error('Stack not found')
         setLoading(false)
         return
       }
@@ -193,7 +185,7 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
-          <p className="text-lg font-medium mb-2">Cart not found</p>
+          <p className="text-lg font-medium mb-2">Stack not found</p>
           <Link href="/"><Button variant="outline">Go home</Button></Link>
         </div>
       </div>
@@ -212,16 +204,7 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
           </Link>
           <BookOpen className="h-5 w-5 text-primary" />
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1.5">
-              <h1 className="font-semibold text-base leading-tight truncate">{cart.name}</h1>
-              <button
-                onClick={handleCopyLink}
-                title="Copy cart link"
-                className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {copied ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Link2 className="h-3.5 w-3.5" />}
-              </button>
-            </div>
+            <h1 className="font-semibold text-base leading-tight">{cart.name}</h1>
             <p className="text-xs text-muted-foreground">{items.length} book{items.length !== 1 ? 's' : ''}</p>
           </div>
           <ThemeToggle />
@@ -230,7 +213,7 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
             size="icon"
             className="h-8 w-8 text-muted-foreground hover:text-destructive"
             onClick={() => setDeleteOpen(true)}
-            title="Delete cart"
+            title="Delete stack"
           >
             <Trash2 className="h-4 w-4" />
           </Button>
@@ -246,7 +229,7 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
           {items.length === 0 ? (
             <div className="text-center py-16 text-muted-foreground border-2 border-dashed rounded-lg">
               <Plus className="h-10 w-10 mx-auto mb-3 opacity-20" />
-              <p>Search for a book above to add it to your cart.</p>
+              <p>Search for a book above to add it to your stack.</p>
             </div>
           ) : (
             <div className="space-y-2 max-h-[calc(100vh-220px)] overflow-y-auto pr-1">
@@ -296,14 +279,14 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
             <DialogTitle>Delete &ldquo;{cart.name}&rdquo;?</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            This will permanently delete the cart and all {items.length} book{items.length !== 1 ? 's' : ''} in it. This cannot be undone.
+            This will permanently delete the stack and all {items.length} book{items.length !== 1 ? 's' : ''} in it. This cannot be undone.
           </p>
           <div className="flex gap-2 justify-end pt-2">
             <Button variant="outline" onClick={() => setDeleteOpen(false)} disabled={deleting}>
               Cancel
             </Button>
             <Button variant="destructive" onClick={handleDeleteCart} disabled={deleting}>
-              {deleting ? 'Deleting…' : 'Delete cart'}
+              {deleting ? 'Deleting…' : 'Delete stack'}
             </Button>
           </div>
         </DialogContent>

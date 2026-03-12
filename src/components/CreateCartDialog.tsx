@@ -32,7 +32,7 @@ export function CreateCartDialog({ open, onOpenChange, onCreated }: Props) {
       setName('')
       onCreated(data)
     } catch (err) {
-      toast.error('Failed to create cart: ' + (err as Error).message)
+      toast.error('Failed to create stack: ' + (err as Error).message)
     } finally {
       setLoading(false)
     }
@@ -42,7 +42,7 @@ export function CreateCartDialog({ open, onOpenChange, onCreated }: Props) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>Create a new cart</DialogTitle>
+          <DialogTitle>Create a new stack</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <Input
@@ -52,7 +52,7 @@ export function CreateCartDialog({ open, onOpenChange, onCreated }: Props) {
             autoFocus
           />
           <Button type="submit" className="w-full" disabled={loading || !name.trim()}>
-            {loading ? 'Creating…' : 'Create Cart'}
+            {loading ? 'Creating…' : 'Create Stack'}
           </Button>
         </form>
       </DialogContent>
