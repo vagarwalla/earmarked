@@ -204,8 +204,8 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
           </Link>
           <BookOpen className="h-5 w-5 text-primary" />
           <div className="flex-1 min-w-0">
-            <h1 className="font-serif font-semibold text-base leading-tight">{cart.name}</h1>
-            <p className="text-xs text-muted-foreground">{items.length} book{items.length !== 1 ? 's' : ''}</p>
+            <h1 className="font-serif font-semibold text-lg leading-tight">{cart.name}</h1>
+            <p className="text-sm text-muted-foreground">{items.length} book{items.length !== 1 ? 's' : ''}</p>
           </div>
           <ThemeToggle />
           <Button
@@ -233,7 +233,7 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
             </div>
           ) : (
             <>
-              <div className="bookcase-interior">
+              <div className="book-shelf-area">
                 <div className="space-y-2 max-h-[calc(100vh-240px)] overflow-y-auto pr-1">
                   {items.map((item) => (
                     <CartItemCard
@@ -247,7 +247,7 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
                   ))}
                 </div>
               </div>
-              <div className="shelf-plank" />
+              <div className="book-shelf-edge" />
             </>
           )}
         </div>

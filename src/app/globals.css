@@ -125,46 +125,38 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-size: 1.0625rem; /* 17px base */
   }
   html {
     @apply font-sans;
   }
 }
 
-/* Bookshelf visual */
-.bookcase-interior {
-  background: oklch(0.88 0.032 66);
-  border: 2px solid oklch(0.72 0.045 54);
+/* Bookshelf visual — clean, minimal */
+.book-shelf-area {
+  background: oklch(0.945 0.020 70 / 0.55);
+  border: 1px solid oklch(0.84 0.022 68);
   border-bottom: none;
-  border-radius: 8px 8px 0 0;
-  padding: 10px 10px 6px;
-  box-shadow:
-    inset 4px 0 10px -3px oklch(0 0 0 / 14%),
-    inset -4px 0 10px -3px oklch(0 0 0 / 14%),
-    inset 0 5px 12px -3px oklch(0 0 0 / 20%);
+  border-radius: 6px 6px 0 0;
+  padding: 8px 8px 4px;
+  box-shadow: inset 0 4px 10px oklch(0 0 0 / 7%);
 }
 
-.shelf-plank {
-  height: 14px;
-  background: linear-gradient(to bottom, oklch(0.68 0.055 54), oklch(0.56 0.062 47));
-  border: 2px solid oklch(0.72 0.045 54);
-  border-top: 3px solid oklch(0.76 0.048 57);
-  border-radius: 0 0 6px 6px;
-  box-shadow: 0 4px 10px oklch(0 0 0 / 28%);
+.book-shelf-edge {
+  height: 5px;
+  background: oklch(0.60 0.044 52);
+  border-radius: 0 0 4px 4px;
+  box-shadow: 0 3px 7px oklch(0 0 0 / 18%);
   margin-bottom: 4px;
 }
 
-.dark .bookcase-interior {
-  background: oklch(0.138 0.015 50);
-  border-color: oklch(0.30 0.032 50);
-  box-shadow:
-    inset 4px 0 10px -3px oklch(0 0 0 / 35%),
-    inset -4px 0 10px -3px oklch(0 0 0 / 35%),
-    inset 0 5px 12px -3px oklch(0 0 0 / 45%);
+.dark .book-shelf-area {
+  background: oklch(0.148 0.016 50 / 0.7);
+  border-color: oklch(0.28 0.026 50);
+  box-shadow: inset 0 4px 10px oklch(0 0 0 / 25%);
 }
 
-.dark .shelf-plank {
-  background: linear-gradient(to bottom, oklch(0.30 0.038 50), oklch(0.22 0.038 46));
-  border-color: oklch(0.30 0.032 50);
-  border-top-color: oklch(0.36 0.038 54);
+.dark .book-shelf-edge {
+  background: oklch(0.30 0.036 50);
+  box-shadow: 0 3px 7px oklch(0 0 0 / 32%);
 }
