@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createHash } from 'crypto'
+import Anthropic from '@anthropic-ai/sdk'
 import { supabase } from '@/lib/supabase'
 import { computeDHash } from '@/lib/dhash'
 import { hammingDistance } from '@/lib/clustering'
-import { areSameCover, borderlinePairs } from '@/lib/aiSimilarity'
+import { groupCoversHolistic } from '@/lib/coverGrouping'
 
 const CONCURRENCY = 20
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
 async function withConcurrency<T>(items: T[], fn: (item: T) => Promise<void>): Promise<void> {
   let i = 0
@@ -37,6 +40,11 @@ function buildClusters(urls: string[], samePairs: [string, string][]): Record<st
     if (ra !== rb) parent.set(ra, rb)
   }
   return Object.fromEntries(urls.map(u => [u, find(u)]))
+}
+
+function groupCacheKey(reps: string[]): string {
+  const sorted = [...reps].sort()
+  return createHash('sha256').update(sorted.join('|||')).digest('hex')
 }
 
 export async function POST(req: NextRequest) {
@@ -79,59 +87,66 @@ export async function POST(req: NextRequest) {
     await supabase.from('cover_hashes').upsert(toUpsertHashes, { onConflict: 'cover_url' })
   }
 
-  // 3. Build tier-1 pairs (Hamming ≤ 3 — definitely same)
+  // 3. Build tier-1 pairs (Hamming ≤ 3 — definitely the same cover)
   const urls = Array.from(hashMap.keys())
-  const samePairs: [string, string][] = []
+  const tier1Pairs: [string, string][] = []
   for (let i = 0; i < urls.length; i++) {
     for (let j = i + 1; j < urls.length; j++) {
       const ha = BigInt('0x' + hashMap.get(urls[i])!)
       const hb = BigInt('0x' + hashMap.get(urls[j])!)
       if (hammingDistance(ha, hb) <= 3) {
-        samePairs.push([urls[i], urls[j]])
+        tier1Pairs.push([urls[i], urls[j]])
       }
     }
   }
 
-  // 4. Find borderline pairs (Hamming 4–10), check cache, call AI for uncached
-  const candidates = borderlinePairs(hashMap)
+  // 4. Build tier-1 clusters (fast, no AI)
+  const tier1Clusters = buildClusters(urls, tier1Pairs)
 
-  if (candidates.length > 0) {
-    // Check similarity cache (skipped when force=true)
-    const { data: cachedSim } = force ? { data: [] } : await supabase
-      .from('cover_similarity')
-      .select('cover_url_a, cover_url_b, is_same')
-      .in('cover_url_a', candidates.map(p => p[0]))
+  // 5. Collect one representative URL per tier-1 cluster
+  const clusterReps = Array.from(new Set(Object.values(tier1Clusters)))
 
-    const simCache = new Map<string, boolean>()
-    for (const row of cachedSim ?? []) {
-      simCache.set(`${row.cover_url_a}|||${row.cover_url_b}`, row.is_same)
+  // 6. Holistic AI grouping: send all cluster reps to Claude in one batch
+  //    This catches cases dHash misses (same cover from different sources, Hamming > 3)
+  let finalClusters = tier1Clusters
+
+  if (clusterReps.length >= 2) {
+    const key = groupCacheKey(clusterReps)
+
+    // Check Supabase cache (skipped when force=true)
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+    const { data: cached } = force ? { data: null } : await supabase
+      .from('cover_group_cache')
+      .select('groups')
+      .eq('cache_key', key)
+      .gt('created_at', thirtyDaysAgo)
+      .maybeSingle()
+
+    let holisticGroups: number[]
+    if (cached?.groups) {
+      holisticGroups = cached.groups as number[]
+    } else {
+      holisticGroups = await groupCoversHolistic(clusterReps, client)
+      await supabase
+        .from('cover_group_cache')
+        .upsert({ cache_key: key, groups: holisticGroups }, { onConflict: 'cache_key' })
     }
 
-    const uncached = candidates.filter(([a, b]) => !simCache.has(`${a}|||${b}`))
-    const toUpsertSim: { cover_url_a: string; cover_url_b: string; is_same: boolean }[] = []
-
-    // Call Claude for uncached borderline pairs (parallel)
-    await Promise.all(uncached.map(async ([a, b]) => {
-      const result = await areSameCover(a, b)
-      if (result !== null) {
-        simCache.set(`${a}|||${b}`, result)
-        toUpsertSim.push({ cover_url_a: a, cover_url_b: b, is_same: result })
+    // Build holistic same-pairs: any two cluster reps with the same group ID should merge
+    const holisticSamePairs: [string, string][] = []
+    for (let i = 0; i < clusterReps.length; i++) {
+      for (let j = i + 1; j < clusterReps.length; j++) {
+        if (holisticGroups[i] === holisticGroups[j]) {
+          holisticSamePairs.push([clusterReps[i], clusterReps[j]])
+        }
       }
-    }))
-
-    if (toUpsertSim.length > 0) {
-      await supabase.from('cover_similarity').upsert(toUpsertSim, { onConflict: 'cover_url_a,cover_url_b' })
     }
 
-    // Add AI-confirmed pairs to samePairs
-    for (const [a, b] of candidates) {
-      if (simCache.get(`${a}|||${b}`) === true) {
-        samePairs.push([a, b])
-      }
+    if (holisticSamePairs.length > 0) {
+      // Re-run Union-Find combining tier-1 pairs + holistic merges
+      finalClusters = buildClusters(urls, [...tier1Pairs, ...holisticSamePairs])
     }
   }
 
-  // 5. Build and return cluster assignments
-  const clusters = buildClusters(urls, samePairs)
-  return NextResponse.json({ clusters })
+  return NextResponse.json({ clusters: finalClusters })
 }
