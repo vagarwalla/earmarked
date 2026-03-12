@@ -1,36 +1,62 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Earmarked
 
-## Getting Started
+Find cheap used books and minimize shipping costs. Build a list of books, pick your preferred editions, and Earmarked finds the cheapest way to buy them all by grouping sellers.
 
-First, run the development server:
+## What it does
+
+- Search for books by title or author (powered by Open Library)
+- Pick which edition and cover you want for each book
+- Fetches live listings from ThriftBooks, Better World Books, and AbeBooks
+- Optimizes across sellers to minimize the number of orders (and shipping costs)
+- Supports per-book filters: condition, format, max price, signed/first edition/dust jacket
+
+## Running locally
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Requires a Supabase project — copy `.env.example` to `.env.local` and fill in your Supabase URL and anon key.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Stack
 
-## Learn More
+- Next.js (App Router)
+- Supabase (Postgres)
+- Tailwind CSS + shadcn/ui
+- Open Library API (book search + editions)
+- BookFinder scraper (listings from ThriftBooks, BWB, AbeBooks)
 
-To learn more about Next.js, take a look at the following resources:
+## Naming conventions
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The user-facing term for a list of books is **"stack"** (not "cart"). This rename happened in March 2026.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- UI copy, URLs (`/stack/[slug]`), and button labels all say "stack"
+- Internal code (TypeScript types, variable names, API routes) still uses `cart`/`Cart` — this is intentional to avoid a massive refactor. Don't change the API routes (`/api/cart/...`) or the DB schema.
+- If you add new user-facing copy, use "stack"
 
-## Deploy on Vercel
+## Project structure
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```
+src/
+  app/
+    page.tsx              # Homepage — lists all stacks
+    stack/[slug]/         # Individual stack page
+    api/
+      cart/               # REST API for stacks (named "cart" internally)
+      prices/             # Fetches live listings
+      optimize/           # Seller grouping optimizer
+      editions/           # Book editions from Open Library
+  components/
+    CartItemCard.tsx      # Per-book item in a stack
+    CartDefaults.tsx      # Default filters for a stack
+    OptimizationPanel.tsx # Right panel: find deals + results
+    BookSearch.tsx        # Book search input
+    EditionPicker.tsx     # Choose edition for a book
+  lib/
+    optimizer/            # Seller grouping algorithms
+    relaxation.ts         # Suggests loosening filters when no listings found
+    types.ts              # Shared TypeScript types
+```
