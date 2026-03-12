@@ -162,7 +162,6 @@ function EditionPickerInline({
   onSaved: (
     newIsbnOverrides: Record<string, string[]>,
     newListingsByIsbn: Record<string, Listing[]>,
-    newResult: OptimizationResult,
   ) => void
   onCancel: () => void
 }) {
@@ -252,14 +251,7 @@ function EditionPickerInline({
         max_price: item.id in maxPriceOverrides ? maxPriceOverrides[item.id] : item.max_price,
         isbns_candidates: allCandidates,
       }
-      const optRes = await fetch('/api/optimize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: [effectiveItem], listingsByIsbn: mergedListings }),
-      })
-      const newResult: OptimizationResult = await optRes.json()
-
-      onSaved(newIsbnOverrides, mergedListings, newResult)
+      onSaved(newIsbnOverrides, mergedListings)
     } catch (err) {
       toast.error('Failed: ' + (err as Error).message)
     } finally {
@@ -348,10 +340,46 @@ function EditionPickerInline({
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+type SourceId = 'best' | 'abe' | 'thriftbooks' | 'bwb'
+
+const SOURCE_META: Record<SourceId, { label: string; shortLabel: string; searchUrl: (isbn: string) => string }> = {
+  best:         { label: 'Best Overall',       shortLabel: 'Best',       searchUrl: () => '#' },
+  abe:          { label: 'AbeBooks',           shortLabel: 'AbeBooks',   searchUrl: (isbn) => `https://www.abebooks.com/servlet/SearchResults?isbn=${isbn}&sortby=17` },
+  thriftbooks:  { label: 'ThriftBooks',        shortLabel: 'ThriftBooks',searchUrl: (isbn) => `https://www.thriftbooks.com/browse/?b.search=${isbn}` },
+  bwb:          { label: 'Better World Books', shortLabel: 'BWB',        searchUrl: (isbn) => `https://www.betterworldbooks.com/search/results?q=${isbn}` },
+}
+
+function filterBySource(byIsbn: Record<string, Listing[]>, src: SourceId): Record<string, Listing[]> {
+  if (src === 'best') return byIsbn
+  const out: Record<string, Listing[]> = {}
+  for (const [isbn, ls] of Object.entries(byIsbn)) {
+    out[isbn] = ls.filter((l) =>
+      src === 'abe'
+        ? l.seller_id !== 'thriftbooks' && l.seller_id !== 'betterworldbooks'
+        : src === 'thriftbooks'
+          ? l.seller_id === 'thriftbooks'
+          : l.seller_id === 'betterworldbooks'
+    )
+  }
+  return out
+}
+
+async function runOptimize(itemsToOpt: CartItem[], byIsbn: Record<string, Listing[]>): Promise<OptimizationResult> {
+  const res = await fetch('/api/optimize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items: itemsToOpt, listingsByIsbn: byIsbn }),
+  })
+  return res.json()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export function OptimizationPanel({ items, cartSlug }: Props) {
   const [loading, setLoading] = useState(false)
   const [relaxing, setRelaxing] = useState(false)
-  const [result, setResult] = useState<OptimizationResult | null>(null)
+  const [sourceTab, setSourceTab] = useState<SourceId>('best')
+  const [resultsBySource, setResultsBySource] = useState<Partial<Record<SourceId, OptimizationResult>>>({})
   const [listingsByIsbn, setListingsByIsbn] = useState<Record<string, Listing[]>>({})
   const [searched, setSearched] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -360,10 +388,21 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
   const [isbnCandidateOverrides, setIsbnCandidateOverrides] = useState<Record<string, string[]>>({})
   const [editionPickerFor, setEditionPickerFor] = useState<string | null>(null)
 
+  async function updateAllResults(byIsbn: Record<string, Listing[]>, itemsToOpt: CartItem[]) {
+    const [bestR, abeR, tbR, bwbR] = await Promise.all([
+      runOptimize(itemsToOpt, filterBySource(byIsbn, 'best')),
+      runOptimize(itemsToOpt, filterBySource(byIsbn, 'abe')),
+      runOptimize(itemsToOpt, filterBySource(byIsbn, 'thriftbooks')),
+      runOptimize(itemsToOpt, filterBySource(byIsbn, 'bwb')),
+    ])
+    setResultsBySource({ best: bestR, abe: abeR, thriftbooks: tbR, bwb: bwbR })
+  }
+
   async function findDeals() {
     if (items.length === 0) return
     setLoading(true)
-    setResult(null)
+    setResultsBySource({})
+    setSourceTab('best')
     setListingsByIsbn({})
     setSearched(false)
     setConditionOverrides({})
@@ -386,13 +425,7 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
       setListingsByIsbn(byIsbn)
       setSearched(true)
 
-      const optRes = await fetch('/api/optimize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items, listingsByIsbn: byIsbn }),
-      })
-      const optimized: OptimizationResult = await optRes.json()
-      setResult(optimized)
+      await updateAllResults(byIsbn, items)
     } catch (err) {
       toast.error('Failed to find deals: ' + (err as Error).message)
     } finally {
@@ -415,12 +448,7 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
         max_price: i.id in newMaxPriceOverrides ? newMaxPriceOverrides[i.id] : i.max_price,
         isbns_candidates: isbnCandidateOverrides[i.id] ?? i.isbns_candidates,
       }))
-      const optRes = await fetch('/api/optimize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: overriddenItems, listingsByIsbn }),
-      })
-      setResult(await optRes.json())
+      await updateAllResults(listingsByIsbn, overriddenItems)
     } catch {
       // silent
     } finally {
@@ -473,7 +501,7 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
         disabled={loading || items.length === 0}
       >
         {loading
-          ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Searching AbeBooks…</>
+          ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Searching listings…</>
           : '🔍 Find Best Deals'
         }
       </Button>
@@ -511,11 +539,17 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
                     conditionOverrides={conditionOverrides}
                     maxPriceOverrides={maxPriceOverrides}
                     isbnCandidateOverrides={isbnCandidateOverrides}
-                    onSaved={(newIsbnOverrides, newListings, newResult) => {
+                    onSaved={(newIsbnOverrides, newListings) => {
                       setIsbnCandidateOverrides(newIsbnOverrides)
                       setListingsByIsbn(newListings)
-                      setResult(newResult)
                       setEditionPickerFor(null)
+                      const overriddenItems = itemsWithIsbn.map((i) => ({
+                        ...i,
+                        conditions: conditionOverrides[i.id] ?? i.conditions,
+                        max_price: i.id in maxPriceOverrides ? maxPriceOverrides[i.id] : i.max_price,
+                        isbns_candidates: newIsbnOverrides[i.id] ?? i.isbns_candidates,
+                      }))
+                      updateAllResults(newListings, overriddenItems).catch(() => {})
                     }}
                     onCancel={() => setEditionPickerFor(null)}
                   />
@@ -585,11 +619,17 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
                     conditionOverrides={conditionOverrides}
                     maxPriceOverrides={maxPriceOverrides}
                     isbnCandidateOverrides={isbnCandidateOverrides}
-                    onSaved={(newIsbnOverrides, newListings, newResult) => {
+                    onSaved={(newIsbnOverrides, newListings) => {
                       setIsbnCandidateOverrides(newIsbnOverrides)
                       setListingsByIsbn(newListings)
-                      setResult(newResult)
                       setEditionPickerFor(null)
+                      const overriddenItems = itemsWithIsbn.map((i) => ({
+                        ...i,
+                        conditions: conditionOverrides[i.id] ?? i.conditions,
+                        max_price: i.id in maxPriceOverrides ? maxPriceOverrides[i.id] : i.max_price,
+                        isbns_candidates: newIsbnOverrides[i.id] ?? i.isbns_candidates,
+                      }))
+                      updateAllResults(newListings, overriddenItems).catch(() => {})
                     }}
                     onCancel={() => setEditionPickerFor(null)}
                   />
@@ -616,90 +656,148 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
       )}
 
       {/* Re-optimizing spinner */}
-      {relaxing && result && (
+      {relaxing && Object.keys(resultsBySource).length > 0 && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
           Re-optimizing with relaxed constraints…
         </div>
       )}
 
-      {/* Optimization results */}
-      {result && foundAnyListings && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-            <div>
-              <div className="font-semibold text-green-900">
-                Best deal: ${result.grand_total.toFixed(2)}
-              </div>
-              <div className="text-sm text-green-700">incl. estimated shipping</div>
-            </div>
-            {result.savings > 0.5 && (
-              <Badge className="bg-green-600 text-white">
-                <TrendingDown className="h-3 w-3 mr-1" />
-                Save ${result.savings.toFixed(2)}
-              </Badge>
-            )}
-          </div>
+      {/* Source tabs + optimization results */}
+      {searched && Object.keys(resultsBySource).length > 0 && foundAnyListings && (() => {
+        const activeResult = resultsBySource[sourceTab] ?? null
+        const hasDirectRetailers = activeResult?.groups.some(
+          (g) => g.seller_id === 'thriftbooks' || g.seller_id === 'betterworldbooks'
+        ) ?? false
+        const hasAbeBooksSellers = activeResult?.groups.some(
+          (g) => g.seller_id !== 'thriftbooks' && g.seller_id !== 'betterworldbooks'
+        ) ?? false
+        const shippingNote = hasAbeBooksSellers && hasDirectRetailers
+          ? 'Shipping est.: $3.99/order for ThriftBooks & Better World Books; $3.99 + $1.99/book for AbeBooks sellers.'
+          : hasDirectRetailers
+            ? 'Shipping est.: $3.99 per order (flat rate for direct retailers).'
+            : 'Shipping est.: $3.99 first book + $1.99 each additional from same seller.'
 
-          {result.groups.map((group) => (
-            <Card key={group.seller_id} className="overflow-hidden">
-              <CardHeader className="py-2 px-3 bg-muted/50 flex-row items-center justify-between space-y-0">
-                <CardTitle className="text-sm font-medium">{group.seller_name}</CardTitle>
-                <span className="text-sm text-muted-foreground">
-                  {group.assignments.length} book{group.assignments.length !== 1 ? 's' : ''}
-                </span>
-              </CardHeader>
-              <CardContent className="py-2 px-3 space-y-1.5">
-                {group.assignments.map(({ item, listing, quantity, subtotal }) => (
-                  <div key={item.id} className="flex items-center justify-between text-sm">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <a
-                        href={listing.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="truncate text-sm hover:underline"
-                      >
-                        {item.title}
-                      </a>
-                      {quantity > 1 && (
-                        <Badge variant="outline" className="text-xs shrink-0">×{quantity}</Badge>
-                      )}
-                      <Badge variant="secondary" className="text-xs shrink-0 capitalize">
-                        {listing.condition.replace('Used - ', '')}
-                      </Badge>
-                      {listing.isbn !== item.isbn_preferred && (
-                        <Badge variant="outline" className="text-xs shrink-0 text-muted-foreground">
-                          alt. edition
-                        </Badge>
-                      )}
+        return (
+          <div className="space-y-3">
+            {/* Source comparison tabs */}
+            <div className="grid grid-cols-4 rounded-lg border overflow-hidden text-xs">
+              {(Object.keys(SOURCE_META) as SourceId[]).map((src) => {
+                const r = resultsBySource[src]
+                const hasResult = r && r.groups.length > 0
+                const isActive = sourceTab === src
+                return (
+                  <button
+                    key={src}
+                    onClick={() => hasResult && setSourceTab(src)}
+                    className={`py-2 px-1 text-center transition-colors border-r last:border-r-0 ${
+                      isActive
+                        ? 'bg-primary text-primary-foreground'
+                        : hasResult
+                          ? 'hover:bg-muted text-muted-foreground cursor-pointer'
+                          : 'text-muted-foreground/40 cursor-default bg-muted/30'
+                    }`}
+                  >
+                    <div className="font-medium truncate">{SOURCE_META[src].shortLabel}</div>
+                    <div className={`tabular-nums ${isActive ? 'text-primary-foreground' : hasResult ? 'text-foreground font-semibold' : ''}`}>
+                      {hasResult ? `$${r!.grand_total.toFixed(2)}` : '—'}
                     </div>
-                    <span className="shrink-0 font-medium ml-2">${subtotal.toFixed(2)}</span>
-                  </div>
-                ))}
-                <div className="border-t pt-1.5 flex justify-between text-sm text-muted-foreground">
-                  <span>Shipping (est.): ${group.shipping.toFixed(2)}</span>
-                  <span className="font-semibold text-foreground">
-                    Group total: ${group.group_total.toFixed(2)}
-                  </span>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="w-full mt-1 h-8 text-sm"
-                  onClick={() => openGroup(group.assignments.map((a) => a.listing.url))}
-                >
-                  <ExternalLink className="h-3 w-3 mr-1.5" />
-                  Open {group.assignments.length} listing{group.assignments.length !== 1 ? 's' : ''} on AbeBooks
-                </Button>
-              </CardContent>
-            </Card>
-          ))}
+                  </button>
+                )
+              })}
+            </div>
 
-          <p className="text-xs text-muted-foreground text-center">
-            Shipping estimated at $3.99 first book + $1.99 each additional from same seller. Actual rates may vary.
-          </p>
-        </div>
-      )}
+            {activeResult && activeResult.groups.length > 0 ? (
+              <>
+                <div className="flex items-center justify-between bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+                  <div>
+                    <div className="font-semibold text-green-900">
+                      {SOURCE_META[sourceTab].label}: ${activeResult.grand_total.toFixed(2)}
+                    </div>
+                    <div className="text-sm text-green-700">incl. estimated shipping</div>
+                  </div>
+                  {activeResult.savings > 0.5 && (
+                    <Badge className="bg-green-600 text-white">
+                      <TrendingDown className="h-3 w-3 mr-1" />
+                      Save ${activeResult.savings.toFixed(2)}
+                    </Badge>
+                  )}
+                </div>
+
+                {activeResult.groups.map((group) => (
+                  <Card key={group.seller_id} className="overflow-hidden">
+                    <CardHeader className="py-2 px-3 bg-muted/50 flex-row items-center justify-between space-y-0">
+                      <CardTitle className="text-sm font-medium">{group.seller_name}</CardTitle>
+                      <span className="text-sm text-muted-foreground">
+                        {group.assignments.length} book{group.assignments.length !== 1 ? 's' : ''}
+                      </span>
+                    </CardHeader>
+                    <CardContent className="py-2 px-3 space-y-1.5">
+                      {group.assignments.map(({ item, listing, quantity, subtotal }) => (
+                        <div key={item.id} className="flex items-center justify-between text-sm">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <a
+                              href={listing.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="truncate text-sm hover:underline"
+                            >
+                              {item.title}
+                            </a>
+                            {quantity > 1 && (
+                              <Badge variant="outline" className="text-xs shrink-0">×{quantity}</Badge>
+                            )}
+                            <Badge variant="secondary" className="text-xs shrink-0 capitalize">
+                              {listing.condition.replace('Used - ', '')}
+                            </Badge>
+                            {listing.isbn !== item.isbn_preferred && (
+                              <Badge variant="outline" className="text-xs shrink-0 text-muted-foreground">
+                                alt. edition
+                              </Badge>
+                            )}
+                          </div>
+                          <span className="shrink-0 font-medium ml-2">${subtotal.toFixed(2)}</span>
+                        </div>
+                      ))}
+                      <div className="border-t pt-1.5 flex justify-between text-sm text-muted-foreground">
+                        <span>Shipping (est.): ${group.shipping.toFixed(2)}</span>
+                        <span className="font-semibold text-foreground">
+                          Group total: ${group.group_total.toFixed(2)}
+                        </span>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full mt-1 h-8 text-sm"
+                        onClick={() => openGroup(group.assignments.map((a) => a.listing.url))}
+                      >
+                        <ExternalLink className="h-3 w-3 mr-1.5" />
+                        Open {group.assignments.length} listing{group.assignments.length !== 1 ? 's' : ''} on {group.seller_name}
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ))}
+              </>
+            ) : (
+              <div className="text-sm text-muted-foreground text-center py-4 border rounded-lg">
+                No listings found from {SOURCE_META[sourceTab].label}.{' '}
+                {sourceTab !== 'best' && items[0]?.isbn_preferred && (
+                  <a
+                    href={SOURCE_META[sourceTab].searchUrl(items[0].isbn_preferred)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline hover:text-foreground"
+                  >
+                    Search manually
+                  </a>
+                )}
+              </div>
+            )}
+
+            <p className="text-xs text-muted-foreground text-center">{shippingNote} Actual rates may vary.</p>
+          </div>
+        )
+      })()}
     </div>
   )
 }

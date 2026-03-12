@@ -25,6 +25,7 @@ export function computeTotalCost(bookOptions: BookOption[], assignment: Assignme
   const sellerQty = new Map<string, number>()
   const sellerBookCost = new Map<string, number>()
   const sellerShippingBase = new Map<string, number>()
+  const sellerShippingPerAdditional = new Map<string, number>()
   for (const { item } of bookOptions) {
     const l = assignment.get(item.id)
     if (!l) continue
@@ -32,11 +33,16 @@ export function computeTotalCost(bookOptions: BookOption[], assignment: Assignme
     sellerBookCost.set(l.seller_id, (sellerBookCost.get(l.seller_id) ?? 0) + l.price * item.quantity)
     if (!sellerShippingBase.has(l.seller_id)) {
       sellerShippingBase.set(l.seller_id, l.shipping_base)
+      sellerShippingPerAdditional.set(l.seller_id, l.shipping_per_additional)
     }
   }
   let cost = 0
   for (const [sid, bookCost] of sellerBookCost) {
-    cost += bookCost + shippingCost(sellerQty.get(sid)!, sellerShippingBase.get(sid) ?? 3.99)
+    cost += bookCost + shippingCost(
+      sellerQty.get(sid)!,
+      sellerShippingBase.get(sid) ?? 3.99,
+      sellerShippingPerAdditional.get(sid) ?? 1.99,
+    )
   }
   return cost
 }
@@ -89,7 +95,11 @@ export function buildGroups(bookOptions: BookOption[], assignment: Assignment): 
   const groups: SellerGroup[] = []
   for (const group of groupMap.values()) {
     const totalQty = group.assignments.reduce((s, a) => s + a.quantity, 0)
-    group.shipping = shippingCost(totalQty, group.assignments[0]?.listing.shipping_base ?? 3.99)
+    group.shipping = shippingCost(
+      totalQty,
+      group.assignments[0]?.listing.shipping_base ?? 3.99,
+      group.assignments[0]?.listing.shipping_per_additional ?? 1.99,
+    )
     group.group_total = group.books_subtotal + group.shipping
     groups.push(group)
   }
