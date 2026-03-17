@@ -148,7 +148,7 @@ export default function HomePage() {
         {/* Sister site */}
         <div className="mt-4 text-center text-sm text-muted-foreground">
           Looking for board games? Try{' '}
-          <a href="https://rolled.vercel.app" className="underline hover:text-foreground transition-colors" target="_blank" rel="noopener noreferrer">
+          <a href="https://rolled-eight.vercel.app" className="underline hover:text-foreground transition-colors" target="_blank" rel="noopener noreferrer">
             Rolled →
           </a>
         </div>
