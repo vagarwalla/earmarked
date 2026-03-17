@@ -109,7 +109,7 @@ export function BookSearch({ onSelect }: Props) {
         />
       </div>
       {open && results.length > 0 && (
-        <div className="absolute z-50 top-full mt-1 w-full bg-white border rounded-lg shadow-lg max-h-80 overflow-y-auto">
+        <div className="absolute z-50 top-full mt-1 w-full bg-background border rounded-lg shadow-lg max-h-80 overflow-y-auto">
           {results.map((book) => {
             // Use lazily-fetched covers once available, fall back to the single cover from search
             const covers = coverMap[book.work_id] ?? (book.cover_url ? [book.cover_url] : [])
