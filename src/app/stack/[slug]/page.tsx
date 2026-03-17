@@ -157,6 +157,29 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
     setCoverItem(null)
   }
 
+  async function handleApplyDefaultsToAll() {
+    if (!cart) return
+    const patch = {
+      conditions: cart.default_conditions ?? ['new', 'like_new'],
+      format: cart.default_format ?? 'any',
+      max_price: cart.default_max_price ?? null,
+      ...(cart.default_signed_only !== null && { signed_only: cart.default_signed_only }),
+      ...(cart.default_first_edition_only !== null && { first_edition_only: cart.default_first_edition_only }),
+      ...(cart.default_dust_jacket_only !== null && { dust_jacket_only: cart.default_dust_jacket_only }),
+    }
+    await Promise.all(
+      items.map((item) =>
+        fetch(`/api/cart/${slug}/items/${item.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        })
+      )
+    )
+    setItems((prev) => prev.map((i) => ({ ...i, ...patch })))
+    toast.success(`Defaults applied to all ${items.length} books`)
+  }
+
   function handleUpdateItem(id: string, patch: Partial<CartItem>) {
     setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)))
   }
@@ -224,7 +247,7 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
         {/* Left: Book list */}
         <div className="space-y-4">
           <BookSearch onSelect={handleBookSelect} />
-          <CartDefaults cart={cart} onUpdate={(updated) => setCart(updated)} slug={slug} />
+          <CartDefaults cart={cart} onUpdate={(updated) => setCart(updated)} slug={slug} onApplyToAll={handleApplyDefaultsToAll} />
 
           {items.length === 0 ? (
             <div className="text-center py-16 text-muted-foreground border-2 border-dashed rounded-lg">

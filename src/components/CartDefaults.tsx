@@ -7,6 +7,7 @@ interface Props {
   cart: Cart
   slug: string
   onUpdate: (updated: Cart) => void
+  onApplyToAll?: () => void
 }
 
 const CONDITIONS: { value: Condition; label: string }[] = [
@@ -30,7 +31,7 @@ function toggleCondition(current: Condition[], value: Condition): Condition[] {
   return [...current, value]
 }
 
-export function CartDefaults({ cart, slug, onUpdate }: Props) {
+export function CartDefaults({ cart, slug, onUpdate, onApplyToAll }: Props) {
   const [maxInput, setMaxInput] = useState(
     cart.default_max_price != null ? String(cart.default_max_price) : ''
   )
@@ -124,6 +125,16 @@ export function CartDefaults({ cart, slug, onUpdate }: Props) {
           )
         })}
       </div>
+
+      {onApplyToAll && (
+        <button
+          className="shrink-0 px-2 py-1 rounded-md border hover:bg-muted transition-colors"
+          onClick={onApplyToAll}
+          title="Apply current defaults to all books in this stack"
+        >
+          Apply to all
+        </button>
+      )}
     </div>
   )
 }
