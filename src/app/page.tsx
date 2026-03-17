@@ -145,6 +145,13 @@ export default function HomePage() {
         <div className="max-w-5xl mx-auto flex justify-end">
           <p className="text-sm text-muted-foreground">made with ♥ by vaidehi</p>
         </div>
+        {/* Sister site */}
+        <div className="mt-4 text-center text-sm text-muted-foreground">
+          Looking for board games? Try{' '}
+          <a href="https://rolled.vercel.app" className="underline hover:text-foreground transition-colors" target="_blank" rel="noopener noreferrer">
+            Rolled →
+          </a>
+        </div>
       </footer>
 
       <CreateCartDialog open={open} onOpenChange={setOpen} onCreated={handleCreated} />
