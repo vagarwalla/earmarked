@@ -475,13 +475,13 @@ function makeGreedySuboptimalFixture() {
 }
 
 describe('greedyStrategy', () => {
-  it('produces a suboptimal result on the known difficult fixture', () => {
+  it('finds the optimum on the previously-difficult fixture thanks to marginal cost scoring', () => {
     const { items, listingsByIsbn } = makeGreedySuboptimalFixture()
     const bookOptions = buildBookOptions(items, listingsByIsbn)
     const assignment = greedyStrategy.solve(bookOptions)
     const cost = computeTotalCost(bookOptions, assignment)
-    // Greedy gets $30.96; verify it does NOT find the $28.96 optimum
-    expect(cost).toBeGreaterThan(29)
+    // Improved greedy with marginal cost scoring finds the $28.96 optimum
+    expect(cost).toBeCloseTo(28.96, 1)
   })
 })
 
@@ -510,32 +510,35 @@ describe('exactStrategy', () => {
     expect(assignment.size).toBe(0)
   })
 
-  it('handles a cart of 10 books within reasonable time', () => {
-    const items = Array.from({ length: 10 }, (_, i) =>
+  it('handles a cart of 12 books within reasonable time', () => {
+    const items = Array.from({ length: 12 }, (_, i) =>
       makeItem({ id: `i${i}`, isbn_preferred: `isbn-${i}` })
     )
     const listingsByIsbn = new Map(
       items.map((item) => [
         item.isbn_preferred!,
-        [makeListing({ seller_id: 'A', isbn: item.isbn_preferred!, price: 5.00 })],
+        [
+          makeListing({ seller_id: 'A', isbn: item.isbn_preferred!, price: 5.00 }),
+          makeListing({ seller_id: 'B', isbn: item.isbn_preferred!, price: 6.00 }),
+        ],
       ])
     )
     const bookOptions = buildBookOptions(items, listingsByIsbn)
     const start = Date.now()
     const assignment = exactStrategy.solve(bookOptions)
     expect(Date.now() - start).toBeLessThan(500) // must finish in < 500ms
-    expect(assignment.size).toBe(10)
+    expect(assignment.size).toBe(12)
   })
 })
 
 describe('localSearchStrategy', () => {
-  it('finds the optimum (or better) on the greedy-suboptimal fixture', () => {
+  it('finds the optimum on the greedy-suboptimal fixture', () => {
     const { items, listingsByIsbn } = makeGreedySuboptimalFixture()
     const bookOptions = buildBookOptions(items, listingsByIsbn)
     const greedyCost = computeTotalCost(bookOptions, greedyStrategy.solve(bookOptions))
     const lsCost = computeTotalCost(bookOptions, localSearchStrategy.solve(bookOptions))
-    // Local search must beat greedy on this fixture
-    expect(lsCost).toBeLessThan(greedyCost)
+    // Local search must be at least as good as greedy
+    expect(lsCost).toBeLessThanOrEqual(greedyCost + 0.001)
     // And should reach the optimum
     expect(lsCost).toBeCloseTo(28.96, 1)
   })
@@ -567,6 +570,90 @@ describe('localSearchStrategy', () => {
       const lsCost = computeTotalCost(bookOptions, localSearchStrategy.solve(bookOptions))
       expect(lsCost).toBeLessThanOrEqual(greedyCost + 0.001)
     }
+  })
+})
+
+describe('exactStrategy with mixed shipping models', () => {
+  it('uses actual seller shipping params, not hardcoded AbeBooks defaults', () => {
+    // ThriftBooks seller: flat $3.99 shipping (per_additional = 0)
+    // AbeBooks seller: $3.99 + $1.99/additional
+    // Book 1: ThriftBooks=$4, AbeBooks=$3
+    // Book 2: ThriftBooks=$5, AbeBooks=$4
+    //
+    // All at ThriftBooks: (4+5) + 3.99 = $12.99
+    // All at AbeBooks:    (3+4) + 3.99 + 1.99 = $12.98
+    // Split: ThriftBooks(book1)=$7.99, AbeBooks(book2)=$7.99 = $15.98
+    //
+    // With flat shipping, ThriftBooks grouping wins at $12.99 vs AbeBooks $12.98
+    // BUT if we add book 3 only at ThriftBooks=$2:
+    // ThriftBooks(all 3): (4+5+2) + 3.99 = $14.99
+    // AbeBooks(1,2) + ThriftBooks(3): (3+4)+5.98 + 2+3.99 = $18.97
+    // ThriftBooks(1,2,3): $14.99 is optimal
+    const items = [
+      makeItem({ id: 'i1', isbn_preferred: 'isbn-1' }),
+      makeItem({ id: 'i2', isbn_preferred: 'isbn-2' }),
+      makeItem({ id: 'i3', isbn_preferred: 'isbn-3' }),
+    ]
+    const listings = new Map([
+      ['isbn-1', [
+        makeListing({ seller_id: 'thriftbooks', isbn: 'isbn-1', price: 4.00, shipping_base: 3.99, shipping_per_additional: 0 }),
+        makeListing({ seller_id: 'abe-seller', isbn: 'isbn-1', price: 3.00, shipping_base: 3.99, shipping_per_additional: 1.99 }),
+      ]],
+      ['isbn-2', [
+        makeListing({ seller_id: 'thriftbooks', isbn: 'isbn-2', price: 5.00, shipping_base: 3.99, shipping_per_additional: 0 }),
+        makeListing({ seller_id: 'abe-seller', isbn: 'isbn-2', price: 4.00, shipping_base: 3.99, shipping_per_additional: 1.99 }),
+      ]],
+      ['isbn-3', [
+        makeListing({ seller_id: 'thriftbooks', isbn: 'isbn-3', price: 2.00, shipping_base: 3.99, shipping_per_additional: 0 }),
+      ]],
+    ])
+
+    const bookOptions = buildBookOptions(items, listings)
+    const assignment = exactStrategy.solve(bookOptions)
+    const cost = computeTotalCost(bookOptions, assignment)
+
+    // Optimal: all 3 at ThriftBooks = (4+5+2) + 3.99 = $14.99
+    expect(cost).toBeCloseTo(14.99, 1)
+    expect(assignment.get('i1')?.seller_id).toBe('thriftbooks')
+    expect(assignment.get('i2')?.seller_id).toBe('thriftbooks')
+    expect(assignment.get('i3')?.seller_id).toBe('thriftbooks')
+  })
+
+  it('lower bound does not prune optimal branch for flat-rate sellers', () => {
+    // Scenario where old $1.99 marginal bound would prune the optimal solution:
+    // Book 1: AbeBooks=$1, ThriftBooks=$3  (AbeBooks much cheaper per-item)
+    // Book 2: AbeBooks=$1, ThriftBooks=$3
+    // Book 3: ThriftBooks only=$1
+    //
+    // Old lower bound would favor AbeBooks for books 1,2 due to cheaper prices,
+    // but ThriftBooks grouping with flat shipping is competitive:
+    // AbeBooks(1,2) + ThriftBooks(3): (1+1)+5.98 + 1+3.99 = $12.97
+    // ThriftBooks(all 3): (3+3+1) + 3.99 = $10.99  ← optimal
+    const items = [
+      makeItem({ id: 'i1', isbn_preferred: 'isbn-1' }),
+      makeItem({ id: 'i2', isbn_preferred: 'isbn-2' }),
+      makeItem({ id: 'i3', isbn_preferred: 'isbn-3' }),
+    ]
+    const listings = new Map([
+      ['isbn-1', [
+        makeListing({ seller_id: 'abe', isbn: 'isbn-1', price: 1.00, shipping_base: 3.99, shipping_per_additional: 1.99 }),
+        makeListing({ seller_id: 'thrift', isbn: 'isbn-1', price: 3.00, shipping_base: 3.99, shipping_per_additional: 0 }),
+      ]],
+      ['isbn-2', [
+        makeListing({ seller_id: 'abe', isbn: 'isbn-2', price: 1.00, shipping_base: 3.99, shipping_per_additional: 1.99 }),
+        makeListing({ seller_id: 'thrift', isbn: 'isbn-2', price: 3.00, shipping_base: 3.99, shipping_per_additional: 0 }),
+      ]],
+      ['isbn-3', [
+        makeListing({ seller_id: 'thrift', isbn: 'isbn-3', price: 1.00, shipping_base: 3.99, shipping_per_additional: 0 }),
+      ]],
+    ])
+
+    const bookOptions = buildBookOptions(items, listings)
+    const assignment = exactStrategy.solve(bookOptions)
+    const cost = computeTotalCost(bookOptions, assignment)
+
+    // Optimal: all at ThriftBooks = (3+3+1) + 3.99 = $10.99
+    expect(cost).toBeCloseTo(10.99, 1)
   })
 })
 

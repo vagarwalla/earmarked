@@ -6,12 +6,13 @@ const MAX_CANDIDATES_PER_BOOK = 6
 
 /**
  * Exact strategy: branch-and-bound over all possible seller assignments.
- * Guaranteed optimal. Practical for carts up to ~10 books with the branching
+ * Guaranteed optimal. Practical for carts up to ~12 books with the branching
  * factor capped at MAX_CANDIDATES_PER_BOOK per book.
  *
- * Lower bound: exact cost for assigned books + cheapest price for each
- * unassigned book + $1.99 shipping per unassigned book (best-case marginal
- * shipping assuming they join an existing seller order).
+ * Uses incremental state tracking during backtracking to avoid rebuilding
+ * seller maps from scratch at every node. Lower bound uses actual seller
+ * shipping params for assigned books and $0 marginal shipping for unassigned
+ * books (valid because flat-rate sellers have per_additional = 0).
  */
 export const exactStrategy: OptimizerStrategy = {
   name: 'exact',
@@ -33,70 +34,65 @@ export const exactStrategy: OptimizerStrategy = {
         .map((listing) => ({ sellerId: listing.seller_id, listing }))
     })
 
+    // Pre-compute the sum of cheapest prices for books [i..n-1] (suffix sums)
+    // Used by lowerBound to avoid re-summing unassigned book prices each time
+    const suffixMinPrice = new Array(n + 1).fill(0)
+    for (let i = n - 1; i >= 0; i--) {
+      const qty = bookOptions[i].item.quantity
+      const cheapest = candidates[i].length > 0 ? candidates[i][0].listing.price * qty : 0
+      suffixMinPrice[i] = suffixMinPrice[i + 1] + cheapest
+    }
+
     const chosen: Array<{ sellerId: string; listing: Listing } | null> = new Array(n).fill(null)
     let bestCost = Infinity
     let bestChosen: typeof chosen = []
 
-    // Lower bound for partial assignment (first k books assigned):
-    // exact cost of assigned portion + floor estimate for the rest
-    function lowerBound(k: number): number {
-      const sellerQty = new Map<string, number>()
-      const sellerBookCost = new Map<string, number>()
+    // Incremental seller state maintained during backtracking
+    type SellerInfo = { qty: number; bookCost: number; shippingBase: number; perAdditional: number }
+    const sellers = new Map<string, SellerInfo>()
+    // Running cost of all assigned sellers (book prices + shipping)
+    let assignedCost = 0
 
-      for (let i = 0; i < k; i++) {
-        const c = chosen[i]
-        if (!c) continue
-        const qty = bookOptions[i].item.quantity
-        sellerQty.set(c.sellerId, (sellerQty.get(c.sellerId) ?? 0) + qty)
-        sellerBookCost.set(c.sellerId, (sellerBookCost.get(c.sellerId) ?? 0) + c.listing.price * qty)
-      }
-
-      let lb = 0
-      for (const [sid, bookCost] of sellerBookCost) {
-        lb += bookCost + shippingCost(sellerQty.get(sid)!)
-      }
-
-      // Remaining books: cheapest price + $1.99 marginal shipping each
-      // ($1.99 assumes they join an existing order; valid lower bound since
-      //  a new seller would cost $3.99 base which is higher)
-      for (let i = k; i < n; i++) {
-        if (candidates[i].length > 0) {
-          const qty = bookOptions[i].item.quantity
-          lb += candidates[i][0].listing.price * qty + 1.99 * qty
-        }
-      }
-
-      return lb
+    function sellerCost(s: SellerInfo): number {
+      return s.bookCost + shippingCost(s.qty, s.shippingBase, s.perAdditional)
     }
 
-    function exactCost(): number {
-      const sellerQty = new Map<string, number>()
-      const sellerBookCost = new Map<string, number>()
-      for (let i = 0; i < n; i++) {
-        const c = chosen[i]
-        if (!c) continue
-        const qty = bookOptions[i].item.quantity
-        sellerQty.set(c.sellerId, (sellerQty.get(c.sellerId) ?? 0) + qty)
-        sellerBookCost.set(c.sellerId, (sellerBookCost.get(c.sellerId) ?? 0) + c.listing.price * qty)
+    function addToSeller(sellerId: string, listing: Listing, qty: number): void {
+      const s = sellers.get(sellerId)
+      if (s) {
+        assignedCost -= sellerCost(s)
+        s.qty += qty
+        s.bookCost += listing.price * qty
+        assignedCost += sellerCost(s)
+      } else {
+        const ns: SellerInfo = { qty, bookCost: listing.price * qty, shippingBase: listing.shipping_base, perAdditional: listing.shipping_per_additional }
+        sellers.set(sellerId, ns)
+        assignedCost += sellerCost(ns)
       }
-      let cost = 0
-      for (const [sid, bookCost] of sellerBookCost) {
-        cost += bookCost + shippingCost(sellerQty.get(sid)!)
+    }
+
+    function removeFromSeller(sellerId: string, listing: Listing, qty: number): void {
+      const s = sellers.get(sellerId)!
+      assignedCost -= sellerCost(s)
+      s.qty -= qty
+      s.bookCost -= listing.price * qty
+      if (s.qty <= 0) {
+        sellers.delete(sellerId)
+      } else {
+        assignedCost += sellerCost(s)
       }
-      return cost
     }
 
     function backtrack(bookIdx: number) {
       if (bookIdx === n) {
-        const cost = exactCost()
-        if (cost < bestCost) {
-          bestCost = cost
+        if (assignedCost < bestCost) {
+          bestCost = assignedCost
           bestChosen = chosen.slice()
         }
         return
       }
 
-      // Books with no qualifying listings are skipped (assigned nothing)
+      // Books with no qualifying listings are skipped
       if (candidates[bookIdx].length === 0) {
         chosen[bookIdx] = null
         backtrack(bookIdx + 1)
@@ -104,10 +100,18 @@ export const exactStrategy: OptimizerStrategy = {
       }
 
       for (const candidate of candidates[bookIdx]) {
+        const qty = bookOptions[bookIdx].item.quantity
         chosen[bookIdx] = candidate
-        if (lowerBound(bookIdx + 1) < bestCost) {
+        addToSeller(candidate.sellerId, candidate.listing, qty)
+
+        // Lower bound = assignedCost + sum of cheapest prices for remaining books
+        // (with $0 marginal shipping — valid lower bound)
+        const lb = assignedCost + suffixMinPrice[bookIdx + 1]
+        if (lb < bestCost) {
           backtrack(bookIdx + 1)
         }
+
+        removeFromSeller(candidate.sellerId, candidate.listing, qty)
       }
       chosen[bookIdx] = null
     }

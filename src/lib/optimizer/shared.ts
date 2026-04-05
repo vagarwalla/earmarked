@@ -47,6 +47,64 @@ export function computeTotalCost(bookOptions: BookOption[], assignment: Assignme
   return cost
 }
 
+export type SellerState = {
+  qty: number
+  bookCost: number
+  shippingBase: number
+  perAdditional: number
+}
+
+/**
+ * Mutable cost tracker for incremental swap evaluation.
+ * Maintains per-seller state and a running total cost so that
+ * reassigning a single book is O(1) instead of O(n).
+ */
+export class CostTracker {
+  sellers = new Map<string, SellerState>()
+  totalCost = 0
+
+  static fromAssignment(bookOptions: BookOption[], assignment: Assignment): CostTracker {
+    const t = new CostTracker()
+    for (const { item } of bookOptions) {
+      const l = assignment.get(item.id)
+      if (!l) continue
+      t.addBook(l.seller_id, l.price, item.quantity, l.shipping_base, l.shipping_per_additional)
+    }
+    return t
+  }
+
+  private sellerCost(s: SellerState): number {
+    return s.bookCost + shippingCost(s.qty, s.shippingBase, s.perAdditional)
+  }
+
+  addBook(sellerId: string, price: number, qty: number, shippingBase: number, perAdditional: number): void {
+    const s = this.sellers.get(sellerId)
+    if (s) {
+      this.totalCost -= this.sellerCost(s)
+      s.qty += qty
+      s.bookCost += price * qty
+      this.totalCost += this.sellerCost(s)
+    } else {
+      const ns: SellerState = { qty, bookCost: price * qty, shippingBase, perAdditional }
+      this.sellers.set(sellerId, ns)
+      this.totalCost += this.sellerCost(ns)
+    }
+  }
+
+  removeBook(sellerId: string, price: number, qty: number): void {
+    const s = this.sellers.get(sellerId)
+    if (!s) return
+    this.totalCost -= this.sellerCost(s)
+    s.qty -= qty
+    s.bookCost -= price * qty
+    if (s.qty <= 0) {
+      this.sellers.delete(sellerId)
+    } else {
+      this.totalCost += this.sellerCost(s)
+    }
+  }
+}
+
 export function buildBookOptions(
   items: CartItem[],
   listingsByIsbn: Map<string, Listing[]>

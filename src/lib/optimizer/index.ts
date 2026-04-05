@@ -8,9 +8,10 @@ import { exactStrategy } from './strategies/exact'
 export type { OptimizerStrategy }
 export { greedyStrategy, localSearchStrategy, exactStrategy }
 
-// Exact is optimal but only practical up to ~10 books given the branching factor.
-// Beyond that, local search (which starts from greedy) is near-optimal and fast.
-const EXACT_BOOK_LIMIT = 10
+// Exact is optimal but only practical up to ~12 books given the branching factor.
+// Incremental state tracking makes this feasible. Beyond that, local search
+// (multi-start + ILS from greedy) is near-optimal and fast.
+const EXACT_BOOK_LIMIT = 12
 
 function autoSelectStrategy(itemCount: number): OptimizerStrategy {
   return itemCount <= EXACT_BOOK_LIMIT ? exactStrategy : localSearchStrategy
