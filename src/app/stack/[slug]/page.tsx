@@ -290,7 +290,7 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
 
         {/* Right: Optimization panel */}
         <div className="lg:sticky lg:top-20 lg:self-start">
-          <OptimizationPanel items={items} cartSlug={slug} />
+          <OptimizationPanel items={items} cartSlug={slug} onUpdateItem={handleUpdateItem} />
         </div>
       </div>
 

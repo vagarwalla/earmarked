@@ -22,6 +22,7 @@ import {
 interface Props {
   items: CartItem[]
   cartSlug: string
+  onUpdateItem?: (id: string, patch: Partial<CartItem>) => void
 }
 
 function totalCost(l: Listing) {
@@ -391,7 +392,7 @@ async function runOptimize(itemsToOpt: CartItem[], byIsbn: Record<string, Listin
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function OptimizationPanel({ items, cartSlug }: Props) {
+export function OptimizationPanel({ items, cartSlug, onUpdateItem }: Props) {
   const [loading, setLoading] = useState(false)
   const [relaxing, setRelaxing] = useState(false)
   const [sourceTab, setSourceTab] = useState<SourceId>('best')
@@ -421,9 +422,6 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
     setSourceTab('best')
     setListingsByIsbn({})
     setSearched(false)
-    setConditionOverrides({})
-    setMaxPriceOverrides({})
-    setIsbnCandidateOverrides({})
     setEditionPickerFor(null)
 
     try {
@@ -458,6 +456,19 @@ export function OptimizationPanel({ items, cartSlug }: Props) {
     setMaxPriceOverrides(newMaxPriceOverrides)
     setRelaxing(true)
     try {
+      // Persist relaxed conditions/max_price to DB and update parent state
+      const patch: Partial<CartItem> = {}
+      if (newCondOverrides[itemId]) patch.conditions = newCondOverrides[itemId]
+      if (itemId in newMaxPriceOverrides) patch.max_price = newMaxPriceOverrides[itemId]
+      if (Object.keys(patch).length > 0) {
+        fetch(`/api/cart/${encodeURIComponent(cartSlug)}/items/${itemId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        }).catch(() => {})
+        onUpdateItem?.(itemId, patch)
+      }
+
       const overriddenItems = itemsWithIsbn.map((i) => ({
         ...i,
         conditions: newCondOverrides[i.id] ?? i.conditions,
