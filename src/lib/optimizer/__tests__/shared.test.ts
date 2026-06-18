@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildBookOptions } from '../shared'
+import { buildBookOptions, buildSellerCoverage, buildCandidatesByBook } from '../shared'
 import type { CartItem, Condition, Listing } from '../../types'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -44,6 +44,77 @@ function makeListing(
     ...overrides,
   }
 }
+
+// ── buildSellerCoverage ───────────────────────────────────────────────────────
+
+describe('buildSellerCoverage', () => {
+  it('counts how many distinct books each seller can supply', () => {
+    const items = [makeItem({ id: 'i1' }), makeItem({ id: 'i2' }), makeItem({ id: 'i3' })]
+    const listings = new Map([
+      ['isbn-i1', [
+        makeListing({ listing_id: 'l1', isbn: 'isbn-i1', price: 5, seller_id: 'H' }),
+        makeListing({ listing_id: 'l2', isbn: 'isbn-i1', price: 4, seller_id: 'A' }),
+      ]],
+      ['isbn-i2', [makeListing({ listing_id: 'l3', isbn: 'isbn-i2', price: 5, seller_id: 'H' })]],
+      ['isbn-i3', [makeListing({ listing_id: 'l4', isbn: 'isbn-i3', price: 5, seller_id: 'H' })]],
+    ])
+    const coverage = buildSellerCoverage(buildBookOptions(items, listings))
+    expect(coverage.get('H')).toBe(3)
+    expect(coverage.get('A')).toBe(1)
+  })
+
+  it('does not double-count a seller listing the same book twice', () => {
+    const items = [makeItem({ id: 'i1' })]
+    const listings = new Map([
+      ['isbn-i1', [
+        makeListing({ listing_id: 'l1', isbn: 'isbn-i1', price: 5, seller_id: 'H' }),
+        makeListing({ listing_id: 'l2', isbn: 'isbn-i1', price: 8, seller_id: 'H' }),
+      ]],
+    ])
+    const coverage = buildSellerCoverage(buildBookOptions(items, listings))
+    expect(coverage.get('H')).toBe(1)
+  })
+})
+
+// ── buildCandidatesByBook ─────────────────────────────────────────────────────
+
+describe('buildCandidatesByBook', () => {
+  it('includes a multi-book hub seller even when it is outside the per-book top-K', () => {
+    const items = [makeItem({ id: 'i1' }), makeItem({ id: 'i2' })]
+    // Each book has 3 cheap unique sellers ($1) plus hub H ($9) carrying both.
+    const listings = new Map([
+      ['isbn-i1', [
+        makeListing({ listing_id: 'a', isbn: 'isbn-i1', price: 1, seller_id: 'u1a' }),
+        makeListing({ listing_id: 'b', isbn: 'isbn-i1', price: 1, seller_id: 'u1b' }),
+        makeListing({ listing_id: 'c', isbn: 'isbn-i1', price: 1, seller_id: 'u1c' }),
+        makeListing({ listing_id: 'h1', isbn: 'isbn-i1', price: 9, seller_id: 'H' }),
+      ]],
+      ['isbn-i2', [
+        makeListing({ listing_id: 'd', isbn: 'isbn-i2', price: 1, seller_id: 'u2a' }),
+        makeListing({ listing_id: 'e', isbn: 'isbn-i2', price: 1, seller_id: 'u2b' }),
+        makeListing({ listing_id: 'f', isbn: 'isbn-i2', price: 1, seller_id: 'u2c' }),
+        makeListing({ listing_id: 'h2', isbn: 'isbn-i2', price: 9, seller_id: 'H' }),
+      ]],
+    ])
+    const bookOptions = buildBookOptions(items, listings)
+    // topK = 2 would normally drop H (it is the 4th-cheapest for each book).
+    const candidates = buildCandidatesByBook(bookOptions, { topKPerBook: 2 })
+    expect(candidates[0].has('H')).toBe(true)
+    expect(candidates[1].has('H')).toBe(true)
+  })
+
+  it('keeps the cheapest listing for a seller carrying a book at multiple prices', () => {
+    const items = [makeItem({ id: 'i1' })]
+    const listings = new Map([
+      ['isbn-i1', [
+        makeListing({ listing_id: 'cheap', isbn: 'isbn-i1', price: 3, seller_id: 'A' }),
+        makeListing({ listing_id: 'pricey', isbn: 'isbn-i1', price: 8, seller_id: 'A' }),
+      ]],
+    ])
+    const candidates = buildCandidatesByBook(buildBookOptions(items, listings))
+    expect(candidates[0].get('A')?.price).toBe(3)
+  })
+})
 
 // ── buildBookOptions – condition filter ───────────────────────────────────────
 

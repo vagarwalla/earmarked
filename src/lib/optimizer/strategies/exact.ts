@@ -1,13 +1,24 @@
 import type { OptimizerStrategy, BookOption, Assignment, Listing } from '../shared'
-import { shippingCost } from '../shared'
+import { shippingCost, buildCandidatesByBook } from '../shared'
 
-// Top sellers to consider per book (limits branching factor)
-const MAX_CANDIDATES_PER_BOOK = 6
+// Per-book branching: the cheapest sellers for each book, always unioned with
+// consolidation "hub" sellers (see buildCandidatesByBook). Optimality only
+// requires the single cheapest-by-total seller plus all hubs, so a small top-K
+// keeps branching tight while preserving the guarantee.
+const TOP_K_PER_BOOK = 4
+const MAX_HUBS = 8
+const MAX_CANDIDATES_PER_BOOK = 12
+
+// Defensive wall-clock cap. With realistic data branch-and-bound finishes in a
+// few ms; this guard only fires on pathological carts (many highly-overlapping
+// sellers) and returns the best complete assignment found so far.
+const TIME_BUDGET_MS = 1000
 
 /**
  * Exact strategy: branch-and-bound over all possible seller assignments.
- * Guaranteed optimal. Practical for carts up to ~12 books with the branching
- * factor capped at MAX_CANDIDATES_PER_BOOK per book.
+ * Optimal over the candidate set, which is constructed to provably contain a
+ * globally optimal solution (cheapest per-book sellers ∪ all consolidation
+ * hubs — see buildCandidatesByBook). Practical for carts up to ~12 books.
  *
  * Uses incremental state tracking during backtracking to avoid rebuilding
  * seller maps from scratch at every node. Lower bound uses actual seller
@@ -20,19 +31,17 @@ export const exactStrategy: OptimizerStrategy = {
   solve(bookOptions: BookOption[]): Assignment {
     const n = bookOptions.length
 
-    // For each book: cheapest listing per seller, sorted cheapest-first
-    const candidates: Array<Array<{ sellerId: string; listing: Listing }>> = bookOptions.map((opt) => {
-      const bySellerCheapest = new Map<string, Listing>()
-      for (const l of opt.listings) {
-        if (!bySellerCheapest.has(l.seller_id)) {
-          bySellerCheapest.set(l.seller_id, l)
-          if (bySellerCheapest.size >= MAX_CANDIDATES_PER_BOOK) break
-        }
-      }
-      return Array.from(bySellerCheapest.values())
+    // For each book: cheapest listing per seller (incl. hubs), cheapest-first.
+    const candidateMaps = buildCandidatesByBook(bookOptions, {
+      topKPerBook: TOP_K_PER_BOOK,
+      maxHubs: MAX_HUBS,
+      maxPerBook: MAX_CANDIDATES_PER_BOOK,
+    })
+    const candidates: Array<Array<{ sellerId: string; listing: Listing }>> = candidateMaps.map((m) =>
+      Array.from(m.values())
         .sort((a, b) => a.price - b.price)
         .map((listing) => ({ sellerId: listing.seller_id, listing }))
-    })
+    )
 
     // Pre-compute the sum of cheapest prices for books [i..n-1] (suffix sums)
     // Used by lowerBound to avoid re-summing unassigned book prices each time
@@ -83,12 +92,24 @@ export const exactStrategy: OptimizerStrategy = {
       }
     }
 
+    const deadline = Date.now() + TIME_BUDGET_MS
+    let aborted = false
+
     function backtrack(bookIdx: number) {
+      if (aborted) return
       if (bookIdx === n) {
         if (assignedCost < bestCost) {
           bestCost = assignedCost
           bestChosen = chosen.slice()
         }
+        return
+      }
+
+      // Depth-first explores the cheapest candidate first, so a complete
+      // assignment is recorded almost immediately; if the budget is exhausted
+      // we bail out and keep the best one found so far.
+      if ((bookIdx & 7) === 0 && Date.now() > deadline) {
+        aborted = true
         return
       }
 

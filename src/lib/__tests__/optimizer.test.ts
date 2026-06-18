@@ -657,6 +657,88 @@ describe('exactStrategy with mixed shipping models', () => {
   })
 })
 
+// ── Consolidation-hub regression tests ──────────────────────────────────────
+//
+// A large seller that carries most of the cart at moderate prices is the best
+// way to share one shipping fee, but it can rank outside every book's top-K
+// cheapest sellers. The optimizer must still consider it. These guard against
+// the bug where such "hub" sellers were excluded from candidate sets, so the
+// cheapest bundle (buy-everything-from-one-seller) was never found.
+
+function makeHubFixture(numBooks: number, cheaperSellersPerBook = 6) {
+  const items = Array.from({ length: numBooks }, (_, i) => makeItem({ id: `i${i}`, isbn_preferred: `isbn-${i}` }))
+  const listingsByIsbn = new Map<string, Listing[]>()
+  for (let i = 0; i < numBooks; i++) {
+    const ls: Listing[] = []
+    // Per book: several unique single-book sellers cheaper than the hub.
+    for (let s = 0; s < cheaperSellersPerBook; s++) {
+      ls.push(makeListing({ seller_id: `u${i}_${s}`, isbn: `isbn-${i}`, price: 1.0 }))
+    }
+    // One hub seller H carries every book at a moderate price with flat shipping.
+    ls.push(makeListing({ seller_id: 'H', isbn: `isbn-${i}`, price: 2.0, shipping_per_additional: 0 }))
+    listingsByIsbn.set(`isbn-${i}`, ls)
+  }
+  return { items, listingsByIsbn }
+}
+
+describe('consolidation hub handling', () => {
+  it('exact strategy buys the whole cart from a moderately-priced hub seller', () => {
+    // 5 books → exact path. Optimal: all from H = 5*2 + 3.99 = 13.99.
+    // Naive per-book cheapest singletons: 5 * (1 + 3.99) = 24.95.
+    const { items, listingsByIsbn } = makeHubFixture(5)
+    const bookOptions = buildBookOptions(items, listingsByIsbn)
+    const assignment = exactStrategy.solve(bookOptions)
+    const cost = computeTotalCost(bookOptions, assignment)
+    expect(cost).toBeCloseTo(13.99, 1)
+    for (const item of items) {
+      expect(assignment.get(item.id)?.seller_id).toBe('H')
+    }
+  })
+
+  it('local-search strategy finds the hub bundle on a large cart', () => {
+    // 16 books → local-search path. Optimal: all from H = 16*2 + 3.99 = 35.99.
+    const { items, listingsByIsbn } = makeHubFixture(16)
+    const bookOptions = buildBookOptions(items, listingsByIsbn)
+    const assignment = localSearchStrategy.solve(bookOptions)
+    const cost = computeTotalCost(bookOptions, assignment)
+    expect(cost).toBeCloseTo(35.99, 1)
+  })
+
+  it('optimize() reports the hub bundle and large savings end-to-end', () => {
+    const { items, listingsByIsbn } = makeHubFixture(5)
+    const result = optimize(items, listingsByIsbn)
+    expect(result.grand_total).toBeCloseTo(13.99, 1)
+    // Naive baseline buys each book separately from its cheapest seller.
+    expect(result.naive_total).toBeCloseTo(24.95, 1)
+    expect(result.savings).toBeCloseTo(10.96, 1)
+    // Everything lands in a single seller group.
+    expect(result.groups).toHaveLength(1)
+    expect(result.groups[0].seller_id).toBe('H')
+  })
+
+  it('still prefers cheap singletons when consolidation does not pay off', () => {
+    // Hub priced too high to beat buying each book from its own cheap seller.
+    const items = [
+      makeItem({ id: 'i1', isbn_preferred: 'isbn-1' }),
+      makeItem({ id: 'i2', isbn_preferred: 'isbn-2' }),
+    ]
+    const listings = new Map([
+      ['isbn-1', [
+        makeListing({ seller_id: 'A', isbn: 'isbn-1', price: 1.0, shipping_base: 0, shipping_per_additional: 0 }),
+        makeListing({ seller_id: 'H', isbn: 'isbn-1', price: 50.0, shipping_per_additional: 0 }),
+      ]],
+      ['isbn-2', [
+        makeListing({ seller_id: 'B', isbn: 'isbn-2', price: 1.0, shipping_base: 0, shipping_per_additional: 0 }),
+        makeListing({ seller_id: 'H', isbn: 'isbn-2', price: 50.0, shipping_per_additional: 0 }),
+      ]],
+    ])
+    const result = optimize(items, listings)
+    // A($1) + B($1) with free shipping = $2, far cheaper than the hub.
+    expect(result.grand_total).toBeCloseTo(2.0, 2)
+    expect(result.groups.some((g) => g.seller_id === 'H')).toBe(false)
+  })
+})
+
 describe('optimize() with explicit strategy', () => {
   it('accepts a strategy override', () => {
     const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1' })

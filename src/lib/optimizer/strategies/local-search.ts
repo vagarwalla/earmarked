@@ -1,8 +1,10 @@
 import type { OptimizerStrategy, BookOption, Assignment, Listing } from '../shared'
-import { CostTracker } from '../shared'
+import { CostTracker, buildCandidatesByBook } from '../shared'
 import { solveGreedy } from './greedy'
 
-const MAX_CANDIDATES_PER_BOOK = 10
+const TOP_K_PER_BOOK = 10
+const MAX_HUBS = 12
+const MAX_CANDIDATES_PER_BOOK = 24
 const NUM_STARTS = 5
 const ILS_PERTURB_MIN = 2
 const ILS_PERTURB_MAX = 4
@@ -89,7 +91,6 @@ function localSearchImprove(
           // Remove both from current sellers
           tracker.removeBook(listingI.seller_id, listingI.price, qtyI)
           tracker.removeBook(listingJ.seller_id, listingJ.price, qtyJ)
-          const costWithout = tracker.totalCost
 
           for (const [sidI, candI] of candidatesByBook[i]) {
             for (const [sidJ, candJ] of candidatesByBook[j]) {
@@ -180,16 +181,12 @@ export const localSearchStrategy: OptimizerStrategy = {
   solve(bookOptions: BookOption[]): Assignment {
     if (bookOptions.length === 0) return new Map()
 
-    // Pre-compute cheapest listing per seller for each book
-    const candidatesByBook: Array<Map<string, Listing>> = bookOptions.map((opt) => {
-      const bySellerCheapest = new Map<string, Listing>()
-      for (const l of opt.listings) {
-        if (!bySellerCheapest.has(l.seller_id)) {
-          bySellerCheapest.set(l.seller_id, l)
-          if (bySellerCheapest.size >= MAX_CANDIDATES_PER_BOOK) break
-        }
-      }
-      return bySellerCheapest
+    // Cheapest sellers per book, always unioned with consolidation hubs so
+    // local search can move books onto a shared-shipping seller.
+    const candidatesByBook = buildCandidatesByBook(bookOptions, {
+      topKPerBook: TOP_K_PER_BOOK,
+      maxHubs: MAX_HUBS,
+      maxPerBook: MAX_CANDIDATES_PER_BOOK,
     })
 
     let bestAssignment: Assignment = new Map()

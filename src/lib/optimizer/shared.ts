@@ -105,6 +105,85 @@ export class CostTracker {
   }
 }
 
+/**
+ * Count, for each seller, how many distinct cart books it can supply.
+ * Sellers covering >= 2 books are "consolidation hubs" — buying multiple
+ * books from them shares a single shipping fee.
+ */
+export function buildSellerCoverage(bookOptions: BookOption[]): Map<string, number> {
+  const coverage = new Map<string, number>()
+  for (const { listings } of bookOptions) {
+    const seen = new Set<string>()
+    for (const l of listings) {
+      if (seen.has(l.seller_id)) continue
+      seen.add(l.seller_id)
+      coverage.set(l.seller_id, (coverage.get(l.seller_id) ?? 0) + 1)
+    }
+  }
+  return coverage
+}
+
+export interface CandidateOptions {
+  topKPerBook?: number // cheapest distinct sellers per book to always include
+  maxHubs?: number // cap on number of multi-book hub sellers considered
+  maxPerBook?: number // hard cap on candidates per book (bounds branching)
+}
+
+/**
+ * Build the set of seller candidates each book should consider, as a map of
+ * seller_id → cheapest qualifying listing for that book.
+ *
+ * Why this matters: picking only the per-book cheapest sellers misses the
+ * single most valuable move in bundle optimization — consolidating many books
+ * onto one seller to share shipping. A large seller that carries most of the
+ * cart at moderate prices can rank outside every book's top-K cheapest yet be
+ * the globally optimal choice. So we always union in "hub" sellers (those
+ * covering >= 2 books).
+ *
+ * Correctness: in any optimal assignment, a book is bought either from a seller
+ * holding only that book — in which case the per-book cheapest-by-total seller
+ * is at least as good — or from a seller holding >= 2 books, which by
+ * definition is a hub. Including the top cheapest sellers plus all hubs is
+ * therefore sufficient to contain an optimal solution (subject to maxHubs,
+ * which only bites in pathological carts with many highly-overlapping sellers).
+ */
+export function buildCandidatesByBook(
+  bookOptions: BookOption[],
+  { topKPerBook = 6, maxHubs = 10, maxPerBook = 18 }: CandidateOptions = {}
+): Array<Map<string, Listing>> {
+  const coverage = buildSellerCoverage(bookOptions)
+  const hubSellers = [...coverage.entries()]
+    .filter(([, c]) => c >= 2)
+    .sort((a, b) => b[1] - a[1]) // most coverage first
+    .slice(0, maxHubs)
+    .map(([sid]) => sid)
+
+  return bookOptions.map((opt) => {
+    // Cheapest listing per seller, in ascending total-cost order
+    // (opt.listings is pre-sorted by price + shipping_base).
+    const cheapestPerSeller = new Map<string, Listing>()
+    for (const l of opt.listings) {
+      if (!cheapestPerSeller.has(l.seller_id)) cheapestPerSeller.set(l.seller_id, l)
+    }
+
+    const result = new Map<string, Listing>()
+    // 1. The top-K cheapest sellers for this book.
+    for (const [sid, l] of cheapestPerSeller) {
+      if (result.size >= topKPerBook) break
+      result.set(sid, l)
+    }
+    // 2. Every hub seller that carries this book — even if priced above the
+    //    top-K — because consolidating here may win on shipping.
+    for (const sid of hubSellers) {
+      if (result.size >= maxPerBook) break
+      if (result.has(sid)) continue
+      const l = cheapestPerSeller.get(sid)
+      if (l) result.set(sid, l)
+    }
+    return result
+  })
+}
+
 export function buildBookOptions(
   items: CartItem[],
   listingsByIsbn: Map<string, Listing[]>
