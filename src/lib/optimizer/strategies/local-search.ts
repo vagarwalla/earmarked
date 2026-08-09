@@ -28,6 +28,7 @@ function localSearchImprove(
   assignment: Assignment,
   candidatesByBook: Array<Map<string, SellerOffer>>,
   hardDeadline: number = Infinity,
+  twoSwap = true,
 ): { assignment: Assignment; cost: number } {
   const tracker = CostTracker.fromAssignment(bookOptions, assignment)
 
@@ -68,7 +69,7 @@ function localSearchImprove(
   }
 
   // 2-swap pass: try swapping sellers for all pairs of assigned books
-  if (bookOptions.length <= 30) {
+  if (twoSwap && bookOptions.length <= 30) {
     let twoSwapImproved = true
     while (twoSwapImproved && Date.now() < hardDeadline) {
       twoSwapImproved = false
@@ -199,12 +200,16 @@ export function solveLocalSearch(bookOptions: BookOption[], seed?: number): Assi
   let bestCost = Infinity
   const hardDeadline = Date.now() + HARD_DEADLINE_MS
   const iterations = ilsIterations(bookOptions.length)
+  // The full 2-swap pass is quadratic in books × candidates; beyond a dozen
+  // books it dominates runtime, so ILS iterations run single-swap only and
+  // one 2-swap polish is applied to the winner at the end.
+  const twoSwapInIls = bookOptions.length <= 12
 
   for (let start = 0; start < NUM_STARTS; start++) {
     // First start is deterministic greedy, rest are randomized
     const initial = solveGreedy(bookOptions, start === 0 ? 0 : 0.3, rand)
     let { assignment: current, cost: currentCost } = localSearchImprove(
-      bookOptions, initial, candidatesByBook, hardDeadline,
+      bookOptions, initial, candidatesByBook, hardDeadline, twoSwapInIls,
     )
 
     if (currentCost < bestCost) {
@@ -217,7 +222,7 @@ export function solveLocalSearch(bookOptions: BookOption[], seed?: number): Assi
       const numPerturb = ILS_PERTURB_MIN + Math.floor(rand() * (ILS_PERTURB_MAX - ILS_PERTURB_MIN + 1))
       const perturbed = perturb(bookOptions, current, candidatesByBook, numPerturb, rand)
       const { assignment: candidate, cost: candidateCost } = localSearchImprove(
-        bookOptions, perturbed, candidatesByBook, hardDeadline,
+        bookOptions, perturbed, candidatesByBook, hardDeadline, twoSwapInIls,
       )
 
       if (candidateCost < currentCost - 0.001) {
@@ -228,6 +233,17 @@ export function solveLocalSearch(bookOptions: BookOption[], seed?: number): Assi
           bestAssignment = new Map(current)
         }
       }
+    }
+  }
+
+  // Final 2-swap polish for mid-size carts that skipped it during ILS
+  if (!twoSwapInIls) {
+    const polished = localSearchImprove(
+      bookOptions, new Map(bestAssignment), candidatesByBook, hardDeadline, true,
+    )
+    if (polished.cost < bestCost) {
+      bestCost = polished.cost
+      bestAssignment = polished.assignment
     }
   }
 

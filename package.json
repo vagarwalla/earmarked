@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "bench:optimizer": "BENCH=1 vitest run src/lib/optimizer/__bench__/optimizer.bench.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
