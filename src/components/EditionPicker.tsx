@@ -594,8 +594,8 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
       .then((data: Edition[]) => {
         setEditions(data)
         setLoading(false)
+        const groups = groupEditionsBycover(data)
         if (initialIsbns && initialIsbns.length > 0) {
-          const groups = groupEditionsBycover(data)
           const isbnToKey = new Map<string, string>()
           for (const g of groups) {
             for (const e of g.editions) isbnToKey.set(e.isbn, g.key)
@@ -607,6 +607,9 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
             if (key && !seen.has(key)) { seen.add(key); keys.push(key) }
           }
           if (keys.length > 0) setSelectedKeys(keys)
+        } else {
+          // Default: all editions selected
+          setSelectedKeys(groups.map((g) => g.key))
         }
       })
   }, [book, open, language])
@@ -923,6 +926,12 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
     })
   }
 
+  const allSelected = sorted.length > 0 && sorted.every((g) => selectedKeys.includes(g.key))
+
+  function selectAll() {
+    setSelectedKeys((prev) => [...prev, ...sorted.map((g) => g.key).filter((k) => !prev.includes(k))])
+  }
+
   function toggleGroup(groupKeys: string[]) {
     setSelectedKeys((prev) => {
       const allSelected = groupKeys.every((k) => prev.includes(k))
@@ -1040,6 +1049,14 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
           >
             {hideNoListings ? 'Has listings' : 'All editions'}
             {!statsLoaded && hideNoListings && <Loader2 className="h-3 w-3 animate-spin opacity-50" />}
+          </button>
+          <button
+            onClick={selectAll}
+            disabled={loading || allSelected}
+            className="flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-input hover:bg-muted text-sm text-muted-foreground transition-colors whitespace-nowrap shrink-0 disabled:opacity-50 disabled:pointer-events-none"
+            title={allSelected ? 'All shown editions are selected' : 'Select all shown editions'}
+          >
+            <Check className="h-3.5 w-3.5" /> Select all
           </button>
           {hasActiveFilters && (
             <button
