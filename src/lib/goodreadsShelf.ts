@@ -52,23 +52,45 @@ export function parseGoodreadsUserId(input: string): string | null {
 }
 
 /**
- * Parse shelf names + counts from a Goodreads profile page.
- * Shelf links look like: <a href="/review/list/12345?shelf=to-read">to-read‎ (42)</a>
+ * Extract a specific shelf name from a pasted Goodreads URL, e.g.
+ * .../review/list/12345-jane?shelf=sociology or ...?tag=sociology
+ * (the newer My Books UI links custom shelves with `tag=`). Returns null
+ * when the input doesn't point at a specific shelf.
  */
-export function parseShelvesFromProfileHtml(html: string): GoodreadsShelf[] {
+export function parseGoodreadsShelfFromUrl(input: string): string | null {
+  const m = input.match(/[?&](?:shelf|tag)=([^&#\s]+)/i)
+  if (!m) return null
+  const name = decodeURIComponent(m[1].replace(/\+/g, ' ')).trim()
+  // "#ALL#" is Goodreads' pseudo-shelf for "everything"
+  return name && !name.startsWith('#') ? name : null
+}
+
+const INVISIBLE_MARKS = /[\u200a-\u200f\u2060\ufeff]|&lrm;|&rlm;/g
+
+/**
+ * Parse shelf names + counts from Goodreads HTML. Works on both the profile
+ * page (default shelves: <a href="/review/list/12345?shelf=to-read">to-read (42)</a>)
+ * and the My Books page sidebar, where custom shelves may be linked with
+ * `tag=` instead of `shelf=` and the count may sit just after the anchor:
+ * <a href="?tag=sociology">sociology</a> <span>(23)</span>
+ */
+export function parseShelvesFromHtml(html: string): GoodreadsShelf[] {
   const shelves: GoodreadsShelf[] = []
   const seen = new Set<string>()
-  const re = /href="\/review\/list\/\d+[^"]*[?&]shelf=([\w%.-]+)[^"]*"[^>]*>([^<]*)/g
+  const re = /<a[^>]*href="[^"]*[?&](?:shelf|tag)=([\w%.+~-]+)[^"]*"[^>]*>([\s\S]*?)<\/a>/g
   let m: RegExpExecArray | null
   while ((m = re.exec(html)) !== null) {
-    const name = decodeURIComponent(m[1])
-    if (seen.has(name)) continue
-    // Label text like "to-read‎ (42)" — strip invisible marks, pull the count
-    const label = m[2].replace(/[\u200a-\u200f\u2060\ufeff]|&lrm;|&rlm;/g, '').trim()
-    const countMatch = label.match(/\(([\d,]+)\)\s*$/)
-    if (!countMatch) continue
+    const name = decodeURIComponent(m[1].replace(/\+/g, ' '))
+    if (!name || name.startsWith('#') || seen.has(name)) continue
     seen.add(name)
-    shelves.push({ name, count: parseInt(countMatch[1].replace(/,/g, ''), 10) })
+    // Count is either inside the label ("sociology (23)") or shortly after the
+    // anchor — but never past the next link, which belongs to another shelf
+    const after = html.slice(re.lastIndex, re.lastIndex + 80).split(/<a[\s>]/)[0]
+    const windowText = (m[2] + ' ' + after)
+      .replace(INVISIBLE_MARKS, '')
+      .replace(/<[^>]*>/g, ' ')
+    const countMatch = windowText.match(/\((\d[\d,]*)\)/)
+    shelves.push({ name, count: countMatch ? parseInt(countMatch[1].replace(/,/g, ''), 10) : -1 })
   }
   return shelves
 }
@@ -147,15 +169,45 @@ export function parseRssOwnerName(xml: string): string | null {
   return m ? decodeXmlEntities(m[1]) : null
 }
 
-/** Fetch the list of shelves for a Goodreads user by scraping their public profile. */
+/**
+ * Fetch the list of shelves for a Goodreads user. Scrapes two pages and merges:
+ * the My Books page sidebar (lists ALL shelves, including custom ones) and the
+ * profile page (only top shelves, but reliable counts). Throws only if both
+ * pages are unreachable.
+ */
 export async function fetchShelves(userId: string): Promise<GoodreadsShelf[]> {
-  const res = await fetch(`https://www.goodreads.com/user/show/${userId}`, {
-    headers: UA_HEADERS,
-    signal: AbortSignal.timeout(10000),
-    next: { revalidate: 300 },
-  })
-  if (!res.ok) throw new Error(`Goodreads profile returned ${res.status}`)
-  return parseShelvesFromProfileHtml(await res.text())
+  const urls = [
+    `https://www.goodreads.com/review/list/${userId}`,
+    `https://www.goodreads.com/user/show/${userId}`,
+  ]
+  const results = await Promise.allSettled(
+    urls.map(async (url) => {
+      const res = await fetch(url, {
+        headers: UA_HEADERS,
+        signal: AbortSignal.timeout(10000),
+        next: { revalidate: 300 },
+      })
+      if (!res.ok) throw new Error(`Goodreads returned ${res.status} for ${url}`)
+      return parseShelvesFromHtml(await res.text())
+    })
+  )
+
+  if (results.every((r) => r.status === 'rejected')) {
+    throw new Error('Goodreads unreachable')
+  }
+
+  const merged = new Map<string, GoodreadsShelf>()
+  for (const r of results) {
+    if (r.status !== 'fulfilled') continue
+    for (const shelf of r.value) {
+      const existing = merged.get(shelf.name)
+      // Prefer whichever source knew the count
+      if (!existing || (existing.count < 0 && shelf.count >= 0)) {
+        merged.set(shelf.name, shelf)
+      }
+    }
+  }
+  return [...merged.values()]
 }
 
 /**

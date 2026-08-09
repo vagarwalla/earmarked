@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   parseGoodreadsUserId,
-  parseShelvesFromProfileHtml,
+  parseShelvesFromHtml,
+  parseGoodreadsShelfFromUrl,
   parseShelfRss,
   parseRssOwnerName,
   stripSeriesSuffix,
@@ -62,7 +63,29 @@ describe('stripSeriesSuffix', () => {
   })
 })
 
-// ── parseShelvesFromProfileHtml ───────────────────────────────────────────────
+// ── parseGoodreadsShelfFromUrl ────────────────────────────────────────────────
+
+describe('parseGoodreadsShelfFromUrl', () => {
+  it('extracts a shelf from a ?shelf= URL', () => {
+    expect(parseGoodreadsShelfFromUrl('https://www.goodreads.com/review/list/12345-jane?shelf=sociology')).toBe('sociology')
+  })
+
+  it('extracts a shelf from a ?tag= URL (newer My Books UI)', () => {
+    expect(parseGoodreadsShelfFromUrl('https://www.goodreads.com/review/list/8008984-vaidehi?ref=nav_mybooks&tag=sociology')).toBe('sociology')
+  })
+
+  it('decodes encoded names', () => {
+    expect(parseGoodreadsShelfFromUrl('?shelf=summer%20reads')).toBe('summer reads')
+    expect(parseGoodreadsShelfFromUrl('?tag=summer+reads')).toBe('summer reads')
+  })
+
+  it('ignores the #ALL# pseudo-shelf and plain profile URLs', () => {
+    expect(parseGoodreadsShelfFromUrl('?shelf=%23ALL%23')).toBeNull()
+    expect(parseGoodreadsShelfFromUrl('https://www.goodreads.com/user/show/12345-jane')).toBeNull()
+  })
+})
+
+// ── parseShelvesFromHtml ──────────────────────────────────────────────────────
 
 const PROFILE_HTML = `
 <div class="leftContainer">
@@ -76,9 +99,19 @@ const PROFILE_HTML = `
   </div>
 </div>`
 
-describe('parseShelvesFromProfileHtml', () => {
-  it('parses shelf names and counts, deduplicated', () => {
-    const shelves = parseShelvesFromProfileHtml(PROFILE_HTML)
+// My Books sidebar style: custom shelves via tag= links, count outside the anchor
+const MYBOOKS_HTML = `
+<div class="userShelves">
+  <a href="/review/list/12345?shelf=%23ALL%23">All</a> <span>(1,230)</span>
+  <a href="/review/list/12345?shelf=read">read</a> <span class="greyText">(142)</span>
+  <a href="/review/list/12345-vaidehi?ref=nav_mybooks&tag=sociology">sociology</a> <span>(23)</span>
+  <a href="/review/list/12345?tag=summer+reads">summer reads</a>
+  <a href="/review/list/12345?shelf=to-read">to-read</a> <span>(1,057)</span>
+</div>`
+
+describe('parseShelvesFromHtml', () => {
+  it('parses profile-page shelf links with counts in the label, deduplicated', () => {
+    const shelves = parseShelvesFromHtml(PROFILE_HTML)
     expect(shelves).toEqual([
       { name: 'read', count: 142 },
       { name: 'currently-reading', count: 3 },
@@ -87,8 +120,23 @@ describe('parseShelvesFromProfileHtml', () => {
     ])
   })
 
+  it('parses My Books sidebar links: tag= params, counts after the anchor, skips #ALL#', () => {
+    const shelves = parseShelvesFromHtml(MYBOOKS_HTML)
+    expect(shelves).toEqual([
+      { name: 'read', count: 142 },
+      { name: 'sociology', count: 23 },
+      { name: 'summer reads', count: -1 },
+      { name: 'to-read', count: 1057 },
+    ])
+  })
+
+  it('does not let a count-less shelf steal the next shelf\'s count', () => {
+    const shelves = parseShelvesFromHtml(MYBOOKS_HTML)
+    expect(shelves.find((s) => s.name === 'summer reads')?.count).toBe(-1)
+  })
+
   it('returns empty for HTML with no shelf links', () => {
-    expect(parseShelvesFromProfileHtml('<html><body>private profile</body></html>')).toEqual([])
+    expect(parseShelvesFromHtml('<html><body>private profile</body></html>')).toEqual([])
   })
 })
 
@@ -169,6 +217,45 @@ describe('parseRssOwnerName', () => {
 
   it('returns null when the pattern is absent', () => {
     expect(parseRssOwnerName('<rss><channel><title>whatever</title></channel></rss>')).toBeNull()
+  })
+})
+
+// ── fetchShelves ──────────────────────────────────────────────────────────────
+
+describe('fetchShelves', () => {
+  it('merges shelves from both pages, preferring known counts', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/review/list/')) return Promise.resolve({ ok: true, text: async () => MYBOOKS_HTML })
+      return Promise.resolve({ ok: true, text: async () => PROFILE_HTML })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { fetchShelves } = await import('../goodreadsShelf')
+    const shelves = await fetchShelves('12345')
+    const names = shelves.map((s) => s.name)
+    // Custom shelves from My Books + profile-only shelves both present
+    expect(names).toContain('sociology')
+    expect(names).toContain('favorites')
+    expect(names).toContain('currently-reading')
+    expect(shelves.find((s) => s.name === 'read')?.count).toBe(142)
+  })
+
+  it('still works when one page is unreachable', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/review/list/')) return Promise.resolve({ ok: true, text: async () => MYBOOKS_HTML })
+      return Promise.resolve({ ok: false, status: 403 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { fetchShelves } = await import('../goodreadsShelf')
+    const shelves = await fetchShelves('12345')
+    expect(shelves.map((s) => s.name)).toContain('sociology')
+  })
+
+  it('throws when both pages are unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404 }))
+    const { fetchShelves } = await import('../goodreadsShelf')
+    await expect(fetchShelves('12345')).rejects.toThrow()
   })
 })
 
