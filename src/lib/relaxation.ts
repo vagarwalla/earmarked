@@ -112,8 +112,9 @@ function compareEditionOptions(a: EditionOption, b: EditionOption): number {
  * looser ones — so the caller can offer whichever costs the user least.
  *
  * `editions` should already exclude ISBNs the item is searching, and `byIsbn`
- * must hold listings for them. Results are deduplicated by cover image so the
- * user sees genuinely different covers rather than reprints that look alike.
+ * must hold listings for them. Editions sharing a cover image URL collapse to
+ * their best option, so the same artwork isn't offered twice; near-identical
+ * covers under different URLs are still listed separately.
  */
 export function findEditionOptions(
   item: CartItem,

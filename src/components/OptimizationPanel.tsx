@@ -400,10 +400,13 @@ const SOURCE_BADGE: Record<'abe' | 'thriftbooks' | 'bwb', { label: string; class
 }
 
 
-// Alternate-cover probing for books that came up empty. Bounded because
-// /api/prices fetches uncached ISBNs one at a time.
+// Alternate-cover probing for books that came up empty. Bounded on every axis
+// because /api/prices scrapes uncached ISBNs one at a time: a stack where
+// dozens of books come up empty would otherwise fan out into hundreds of
+// sequential scrapes. Books past the batch size are probed on request.
 const ALT_COVERS_PER_BOOK = 6
 const COVER_PROBE_CONCURRENCY = 3
+const COVER_PROBE_BATCH = 20
 
 // One request returns every source view — the server qualifies listings once
 // and partitions per source, and guarantees combined ≤ each single source.
@@ -439,8 +442,12 @@ export function OptimizationPanel({ items, cartSlug, onUpdateItem }: Props) {
   // Alternate editions auto-probed for books with no listings, keyed by item id
   const [altEditions, setAltEditions] = useState<Record<string, Edition[]>>({})
   const [coverProbeStatus, setCoverProbeStatus] = useState<Record<string, 'searching' | 'done' | 'error'>>({})
+  const [coverProbeBudget, setCoverProbeBudget] = useState(COVER_PROBE_BATCH)
   // Bumped on every new search so in-flight probes from a previous run can't write stale listings
   const probeGen = useRef(0)
+  // Queued item ids, tracked synchronously — state updates land too late to keep
+  // a re-run of the effect (React strict mode runs it twice) from double-fetching.
+  const queuedForProbe = useRef(new Set<string>())
 
   async function updateAllResults(byIsbn: Record<string, Listing[]>, itemsToOpt: CartItem[]) {
     setResultsBySource(await runOptimizeBatch(itemsToOpt, byIsbn))
@@ -456,7 +463,9 @@ export function OptimizationPanel({ items, cartSlug, onUpdateItem }: Props) {
     setEditionPickerFor(null)
     setAltEditions({})
     setCoverProbeStatus({})
+    setCoverProbeBudget(COVER_PROBE_BATCH)
     probeGen.current++
+    queuedForProbe.current = new Set()
 
     try {
       const isbns = [...new Set(
@@ -526,14 +535,16 @@ export function OptimizationPanel({ items, cartSlug, onUpdateItem }: Props) {
   async function probeCoversForItem(item: CartItem, gen: number) {
     try {
       const res = await fetch(`/api/editions?workId=${encodeURIComponent(item.work_id!)}`)
+      if (!res.ok) throw new Error(`editions lookup failed (${res.status})`)
       const all: Edition[] = await res.json()
+      if (!Array.isArray(all)) throw new Error('editions lookup returned no list')
       if (probeGen.current !== gen) return
 
       const known = new Set([
         ...(item.isbn_preferred ? [item.isbn_preferred] : []),
         ...(item.isbns_candidates ?? []),
       ])
-      const fresh = (Array.isArray(all) ? all : [])
+      const fresh = all
         .filter((e) => !known.has(e.isbn))
         .sort((a, b) => b.popularity_score - a.popularity_score)
         .slice(0, ALT_COVERS_PER_BOOK)
@@ -548,6 +559,7 @@ export function OptimizationPanel({ items, cartSlug, onUpdateItem }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ isbns: fresh.map((e) => e.isbn) }),
       })
+      if (!priceRes.ok) throw new Error(`price lookup failed (${priceRes.status})`)
       const priceData: PriceResponse = await priceRes.json()
       if (probeGen.current !== gen) return
       setListingsByIsbn((prev) => ({ ...prev, ...(priceData.listings ?? {}) }))
@@ -626,6 +638,15 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
   const missingItems = itemListingCounts.filter((x) => x.listings.length === 0)
   const foundAnyListings = itemListingCounts.some((x) => x.listings.length > 0)
 
+  // A book has an entry in coverProbeStatus from the moment it is queued, so the
+  // keys double as the count of books already claimed against the batch budget.
+  const probeRoom = Math.max(0, coverProbeBudget - Object.keys(coverProbeStatus).length)
+  const unqueued = missingItems
+    .filter(({ item }) => item.work_id && coverProbeStatus[item.id] === undefined)
+    .map(({ item }) => item.id)
+  const willProbe = new Set(unqueued.slice(0, probeRoom))
+  const deferredProbeCount = unqueued.length - willProbe.size
+
   // Every book with no listings gets both relaxation axes searched automatically:
   // looser conditions on the edition it already has, and other covers of the same
   // work (each of those probed at the user's conditions first, looser only if needed).
@@ -637,19 +658,26 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
       suggestion,
       nearMiss: suggestion ? null : findNearMissPrice(item, listingsByIsbn, conditions, maxPrice),
       coverOptions: findEditionOptions(item, altEditions[item.id] ?? [], listingsByIsbn, conditions, maxPrice),
-      probing: coverProbeStatus[item.id] === 'searching',
+      // Books queued for this batch count as probing too, so the panel never
+      // flashes "nothing found" before their search has even started.
+      probing: coverProbeStatus[item.id] === 'searching' || willProbe.has(item.id),
     }
   })
 
   const missingIdsKey = missingItems.map((x) => x.item.id).join(',')
   useEffect(() => {
     if (!searched) return
+    const room = coverProbeBudget - queuedForProbe.current.size
+    if (room <= 0) return
     const pending = missingItems
       .map((x) => x.item)
-      .filter((item) => item.work_id && !(item.id in coverProbeStatus))
+      .filter((item) => item.work_id && !queuedForProbe.current.has(item.id))
+      .slice(0, room)
     if (pending.length === 0) return
 
-    // Marked before the fetches start, so this effect never re-queues the same book.
+    // Claimed synchronously, before any await, so a second run of this effect
+    // can't queue the same book twice.
+    for (const item of pending) queuedForProbe.current.add(item.id)
     setCoverProbeStatus((prev) => {
       const next = { ...prev }
       for (const item of pending) next[item.id] = 'searching'
@@ -657,7 +685,7 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
     })
     void probeCovers(pending, probeGen.current)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searched, missingIdsKey])
+  }, [searched, missingIdsKey, coverProbeBudget])
 
   return (
     <div className="space-y-4">
@@ -1015,7 +1043,7 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
                   <p className="text-xs text-amber-700 italic">
                     {coverProbeStatus[item.id] === 'error'
                       ? 'No listings for this edition, and the other-cover search failed.'
-                      : item.work_id
+                      : coverProbeStatus[item.id] === 'done'
                         ? 'No listings for this edition in any condition, or for the other covers we checked.'
                         : 'No listings found for this edition.'}
                   </p>
@@ -1041,7 +1069,9 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
                     isbnCandidateOverrides={isbnCandidateOverrides}
                     onSaved={(newIsbnOverrides, newListings) => {
                       setIsbnCandidateOverrides(newIsbnOverrides)
-                      setListingsByIsbn(newListings)
+                      // Merge rather than replace: a cover probe may have landed
+                      // since the picker captured its snapshot.
+                      setListingsByIsbn((prev) => ({ ...prev, ...newListings }))
                       setEditionPickerFor(null)
                       const overriddenItems = itemsWithIsbn.map((i) => ({
                         ...i,
@@ -1057,6 +1087,17 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
               </div>
             )
           })}
+          {deferredProbeCount > 0 && (
+            <div className="px-3 py-2">
+              <button
+                onClick={() => setCoverProbeBudget((b) => b + COVER_PROBE_BATCH)}
+                className="text-xs font-medium text-amber-700 hover:text-amber-900 flex items-center gap-1 underline"
+              >
+                <BookOpen className="h-3 w-3" />
+                Check other covers for the remaining {deferredProbeCount} book{deferredProbeCount !== 1 ? 's' : ''}
+              </button>
+            </div>
+          )}
         </div>
         )
       })()}
@@ -1096,7 +1137,9 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
                     isbnCandidateOverrides={isbnCandidateOverrides}
                     onSaved={(newIsbnOverrides, newListings) => {
                       setIsbnCandidateOverrides(newIsbnOverrides)
-                      setListingsByIsbn(newListings)
+                      // Merge rather than replace: a cover probe may have landed
+                      // since the picker captured its snapshot.
+                      setListingsByIsbn((prev) => ({ ...prev, ...newListings }))
                       setEditionPickerFor(null)
                       const overriddenItems = itemsWithIsbn.map((i) => ({
                         ...i,
