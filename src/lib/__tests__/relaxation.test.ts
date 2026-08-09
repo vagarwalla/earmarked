@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { computeListings, findSuggestion, findCheaperSuggestion, findShippingRelaxSuggestions } from '../relaxation'
-import type { CartItem, Condition, Listing } from '../types'
+import { computeListings, findSuggestion, findEditionOptions, findCheaperSuggestion, findShippingRelaxSuggestions } from '../relaxation'
+import type { CartItem, Condition, Edition, Listing } from '../types'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -47,6 +47,22 @@ function makeListing(
 
 function makeByIsbn(entries: Array<[string, Listing[]]>): Record<string, Listing[]> {
   return Object.fromEntries(entries)
+}
+
+function makeEdition(overrides: Partial<Edition> & { isbn: string }): Edition {
+  return {
+    title: 'Test Book',
+    publisher: 'Test Press',
+    publish_year: 1999,
+    format: 'any',
+    cover_url: `https://covers.example/${overrides.isbn}.jpg`,
+    cover_id: null,
+    edition_name: null,
+    pages: null,
+    popularity_score: 10,
+    ocaid: null,
+    ...overrides,
+  }
 }
 
 // ── computeListings ───────────────────────────────────────────────────────────
@@ -299,6 +315,143 @@ describe('findSuggestion', () => {
     const result = findSuggestion(item, byIsbn, ['new'], 20)
     // Condition expansion is tried first
     expect(result?.type).toBe('condition')
+  })
+})
+
+// ── findEditionOptions ────────────────────────────────────────────────────────
+
+describe('findEditionOptions', () => {
+  it('finds an alternate cover that has listings under the current conditions', () => {
+    const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1', conditions: ['new', 'fine'] })
+    const editions = [makeEdition({ isbn: 'isbn-alt' })]
+    const byIsbn = makeByIsbn([
+      ['isbn-1', []],
+      ['isbn-alt', [
+        makeListing({ listing_id: 'l1', isbn: 'isbn-alt', price: 9, condition_normalized: 'fine' }),
+        makeListing({ listing_id: 'l2', isbn: 'isbn-alt', price: 6, condition_normalized: 'new' }),
+      ]],
+    ])
+    const options = findEditionOptions(item, editions, byIsbn, ['new', 'fine'], null)
+    expect(options).toHaveLength(1)
+    expect(options[0].isbn).toBe('isbn-alt')
+    expect(options[0].count).toBe(2)
+    expect(options[0].cheapest).toBe(6)
+    expect(options[0].cheapestCondition).toBe('new')
+    expect(options[0].addedLabels).toEqual([])       // no condition relaxation needed
+    expect(options[0].newConditions).toEqual(['new', 'fine'])
+  })
+
+  it('relaxes conditions per edition when the cover only has worse copies', () => {
+    const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1', conditions: ['new'] })
+    const editions = [makeEdition({ isbn: 'isbn-alt' })]
+    const byIsbn = makeByIsbn([
+      ['isbn-alt', [makeListing({ listing_id: 'l1', isbn: 'isbn-alt', price: 4, condition_normalized: 'good' })]],
+    ])
+    const options = findEditionOptions(item, editions, byIsbn, ['new'], null)
+    expect(options).toHaveLength(1)
+    expect(options[0].addedLabels).toEqual(['Fine', 'Good'])
+    expect(options[0].newConditions).toEqual(['new', 'fine', 'good'])
+  })
+
+  it('prefers a cover needing no condition relaxation over a cheaper relaxed one', () => {
+    const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1', conditions: ['new', 'fine'] })
+    const editions = [
+      makeEdition({ isbn: 'isbn-cheap-relaxed' }),
+      makeEdition({ isbn: 'isbn-strict' }),
+    ]
+    const byIsbn = makeByIsbn([
+      ['isbn-cheap-relaxed', [makeListing({ listing_id: 'l1', isbn: 'isbn-cheap-relaxed', price: 2, condition_normalized: 'fair' })]],
+      ['isbn-strict', [makeListing({ listing_id: 'l2', isbn: 'isbn-strict', price: 12, condition_normalized: 'fine' })]],
+    ])
+    const options = findEditionOptions(item, editions, byIsbn, ['new', 'fine'], null)
+    expect(options.map((o) => o.isbn)).toEqual(['isbn-strict', 'isbn-cheap-relaxed'])
+  })
+
+  it('sorts equally-strict covers cheapest first', () => {
+    const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1', conditions: ['fine'] })
+    const editions = [
+      makeEdition({ isbn: 'isbn-pricey' }),
+      makeEdition({ isbn: 'isbn-cheap' }),
+    ]
+    const byIsbn = makeByIsbn([
+      ['isbn-pricey', [makeListing({ listing_id: 'l1', isbn: 'isbn-pricey', price: 15, condition_normalized: 'fine' })]],
+      ['isbn-cheap', [makeListing({ listing_id: 'l2', isbn: 'isbn-cheap', price: 5, condition_normalized: 'fine' })]],
+    ])
+    const options = findEditionOptions(item, editions, byIsbn, ['fine'], null)
+    expect(options.map((o) => o.isbn)).toEqual(['isbn-cheap', 'isbn-pricey'])
+  })
+
+  it('collapses editions that share a cover image, keeping the best one', () => {
+    const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1', conditions: ['fine'] })
+    const sharedCover = 'https://covers.example/shared.jpg'
+    const editions = [
+      makeEdition({ isbn: 'isbn-a', cover_url: sharedCover }),
+      makeEdition({ isbn: 'isbn-b', cover_url: sharedCover }),
+      makeEdition({ isbn: 'isbn-c', cover_url: 'https://covers.example/other.jpg' }),
+    ]
+    const byIsbn = makeByIsbn([
+      ['isbn-a', [makeListing({ listing_id: 'l1', isbn: 'isbn-a', price: 11, condition_normalized: 'fine' })]],
+      ['isbn-b', [makeListing({ listing_id: 'l2', isbn: 'isbn-b', price: 7, condition_normalized: 'fine' })]],
+      ['isbn-c', [makeListing({ listing_id: 'l3', isbn: 'isbn-c', price: 9, condition_normalized: 'fine' })]],
+    ])
+    const options = findEditionOptions(item, editions, byIsbn, ['fine'], null)
+    expect(options.map((o) => o.isbn)).toEqual(['isbn-b', 'isbn-c'])
+  })
+
+  it('keeps coverless editions distinct instead of collapsing them together', () => {
+    const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1', conditions: ['fine'] })
+    const editions = [
+      makeEdition({ isbn: 'isbn-a', cover_url: null }),
+      makeEdition({ isbn: 'isbn-b', cover_url: null }),
+    ]
+    const byIsbn = makeByIsbn([
+      ['isbn-a', [makeListing({ listing_id: 'l1', isbn: 'isbn-a', price: 8, condition_normalized: 'fine' })]],
+      ['isbn-b', [makeListing({ listing_id: 'l2', isbn: 'isbn-b', price: 9, condition_normalized: 'fine' })]],
+    ])
+    const options = findEditionOptions(item, editions, byIsbn, ['fine'], null)
+    expect(options.map((o) => o.isbn)).toEqual(['isbn-a', 'isbn-b'])
+  })
+
+  it('respects the price cap and the item\'s other filters', () => {
+    const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1', conditions: ['fine'], signed_only: true })
+    const editions = [
+      makeEdition({ isbn: 'isbn-over-cap' }),
+      makeEdition({ isbn: 'isbn-unsigned' }),
+      makeEdition({ isbn: 'isbn-ok' }),
+    ]
+    const byIsbn = makeByIsbn([
+      ['isbn-over-cap', [makeListing({ listing_id: 'l1', isbn: 'isbn-over-cap', price: 30, condition_normalized: 'fine', signed: true })]],
+      ['isbn-unsigned', [makeListing({ listing_id: 'l2', isbn: 'isbn-unsigned', price: 5, condition_normalized: 'fine', signed: false })]],
+      ['isbn-ok', [makeListing({ listing_id: 'l3', isbn: 'isbn-ok', price: 12, condition_normalized: 'fine', signed: true })]],
+    ])
+    const options = findEditionOptions(item, editions, byIsbn, ['fine'], 20)
+    expect(options.map((o) => o.isbn)).toEqual(['isbn-ok'])
+  })
+
+  it('ignores the item\'s own listings — each edition is probed on its own', () => {
+    const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1', conditions: ['fine'] })
+    const editions = [makeEdition({ isbn: 'isbn-empty' })]
+    const byIsbn = makeByIsbn([
+      ['isbn-1', [makeListing({ listing_id: 'l1', isbn: 'isbn-1', price: 5, condition_normalized: 'fine' })]],
+      ['isbn-empty', []],
+    ])
+    expect(findEditionOptions(item, editions, byIsbn, ['fine'], null)).toEqual([])
+  })
+
+  it('caps the number of covers returned', () => {
+    const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1', conditions: ['fine'] })
+    const editions = Array.from({ length: 5 }, (_, i) => makeEdition({ isbn: `isbn-${i}` }))
+    const byIsbn = makeByIsbn(editions.map((e, i) => [
+      e.isbn,
+      [makeListing({ listing_id: `l${i}`, isbn: e.isbn, price: 5 + i, condition_normalized: 'fine' })],
+    ]))
+    expect(findEditionOptions(item, editions, byIsbn, ['fine'], null)).toHaveLength(3)
+    expect(findEditionOptions(item, editions, byIsbn, ['fine'], null, 2)).toHaveLength(2)
+  })
+
+  it('returns nothing when there are no alternate editions to probe', () => {
+    const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1' })
+    expect(findEditionOptions(item, [], {}, ['fine'], null)).toEqual([])
   })
 })
 

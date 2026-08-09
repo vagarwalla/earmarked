@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Loader2, ExternalLink, TrendingDown, AlertCircle, ChevronDown, ChevronUp, Lightbulb, BookOpen } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -9,12 +9,15 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import type { CartItem, Condition, Edition, Listing, OptimizationResult, PriceResponse } from '@/lib/types'
 import { getSellerSource } from '@/lib/optimizer/batch'
 import {
+  CONDITION_LABELS,
   CONDITION_ORDER,
   computeListings,
   findSuggestion,
+  findEditionOptions,
   findRelaxedDeal,
   findNearMissPrice,
   findShippingRelaxSuggestions,
+  type EditionOption,
   type RelaxSuggestion,
   type RelaxedDeal,
   type NearMissPrice,
@@ -160,12 +163,12 @@ function BookListings({
 
 // ─── Cover thumbnail with ISBN fallback ──────────────────────────────────────
 
-function CoverThumb({ url, isbn }: { url: string | null; isbn: string }) {
+function CoverThumb({ url, isbn, size = 'w-20 h-28' }: { url: string | null; isbn: string; size?: string }) {
   const [failed, setFailed] = useState(false)
   const src = url ?? `https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg`
   if (failed) {
     return (
-      <div className="w-20 h-28 bg-muted rounded shrink-0 flex items-center justify-center text-[10px] text-muted-foreground text-center leading-tight px-1">
+      <div className={`${size} bg-muted rounded shrink-0 flex items-center justify-center text-[10px] text-muted-foreground text-center leading-tight px-1`}>
         No cover
       </div>
     )
@@ -174,7 +177,7 @@ function CoverThumb({ url, isbn }: { url: string | null; isbn: string }) {
     <img
       src={src}
       alt=""
-      className="w-20 h-28 object-cover rounded shrink-0"
+      className={`${size} object-cover rounded shrink-0`}
       onError={() => setFailed(true)}
     />
   )
@@ -397,6 +400,14 @@ const SOURCE_BADGE: Record<'abe' | 'thriftbooks' | 'bwb', { label: string; class
 }
 
 
+// Alternate-cover probing for books that came up empty. Bounded on every axis
+// because /api/prices scrapes uncached ISBNs one at a time: a stack where
+// dozens of books come up empty would otherwise fan out into hundreds of
+// sequential scrapes. Books past the batch size are probed on request.
+const ALT_COVERS_PER_BOOK = 6
+const COVER_PROBE_CONCURRENCY = 3
+const COVER_PROBE_BATCH = 20
+
 // One request returns every source view — the server qualifies listings once
 // and partitions per source, and guarantees combined ≤ each single source.
 async function runOptimizeBatch(
@@ -428,6 +439,15 @@ export function OptimizationPanel({ items, cartSlug, onUpdateItem }: Props) {
   const [maxPriceOverrides, setMaxPriceOverrides] = useState<Record<string, number | null>>({})
   const [isbnCandidateOverrides, setIsbnCandidateOverrides] = useState<Record<string, string[]>>({})
   const [editionPickerFor, setEditionPickerFor] = useState<string | null>(null)
+  // Alternate editions auto-probed for books with no listings, keyed by item id
+  const [altEditions, setAltEditions] = useState<Record<string, Edition[]>>({})
+  const [coverProbeStatus, setCoverProbeStatus] = useState<Record<string, 'searching' | 'done' | 'error'>>({})
+  const [coverProbeBudget, setCoverProbeBudget] = useState(COVER_PROBE_BATCH)
+  // Bumped on every new search so in-flight probes from a previous run can't write stale listings
+  const probeGen = useRef(0)
+  // Queued item ids, tracked synchronously — state updates land too late to keep
+  // a re-run of the effect (React strict mode runs it twice) from double-fetching.
+  const queuedForProbe = useRef(new Set<string>())
 
   async function updateAllResults(byIsbn: Record<string, Listing[]>, itemsToOpt: CartItem[]) {
     setResultsBySource(await runOptimizeBatch(itemsToOpt, byIsbn))
@@ -441,6 +461,11 @@ export function OptimizationPanel({ items, cartSlug, onUpdateItem }: Props) {
     setListingsByIsbn({})
     setSearched(false)
     setEditionPickerFor(null)
+    setAltEditions({})
+    setCoverProbeStatus({})
+    setCoverProbeBudget(COVER_PROBE_BATCH)
+    probeGen.current++
+    queuedForProbe.current = new Set()
 
     try {
       const isbns = [...new Set(
@@ -501,6 +526,97 @@ export function OptimizationPanel({ items, cartSlug, onUpdateItem }: Props) {
     }
   }
 
+  /**
+   * Search the other editions of a work for a book that came up empty. Their
+   * listings are merged into `listingsByIsbn` right away — keyed by ISBN, they
+   * only affect an item once that ISBN becomes one of its candidates — so the
+   * cover options render as soon as prices land.
+   */
+  async function probeCoversForItem(item: CartItem, gen: number) {
+    try {
+      const res = await fetch(`/api/editions?workId=${encodeURIComponent(item.work_id!)}`)
+      if (!res.ok) throw new Error(`editions lookup failed (${res.status})`)
+      const all: Edition[] = await res.json()
+      if (!Array.isArray(all)) throw new Error('editions lookup returned no list')
+      if (probeGen.current !== gen) return
+
+      const known = new Set([
+        ...(item.isbn_preferred ? [item.isbn_preferred] : []),
+        ...(item.isbns_candidates ?? []),
+      ])
+      const fresh = all
+        .filter((e) => !known.has(e.isbn))
+        .sort((a, b) => b.popularity_score - a.popularity_score)
+        .slice(0, ALT_COVERS_PER_BOOK)
+      if (fresh.length === 0) {
+        setCoverProbeStatus((prev) => ({ ...prev, [item.id]: 'done' }))
+        return
+      }
+      setAltEditions((prev) => ({ ...prev, [item.id]: fresh }))
+
+      const priceRes = await fetch('/api/prices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isbns: fresh.map((e) => e.isbn) }),
+      })
+      if (!priceRes.ok) throw new Error(`price lookup failed (${priceRes.status})`)
+      const priceData: PriceResponse = await priceRes.json()
+      if (probeGen.current !== gen) return
+      setListingsByIsbn((prev) => ({ ...prev, ...(priceData.listings ?? {}) }))
+      setCoverProbeStatus((prev) => ({ ...prev, [item.id]: 'done' }))
+    } catch {
+      if (probeGen.current === gen) setCoverProbeStatus((prev) => ({ ...prev, [item.id]: 'error' }))
+    }
+  }
+
+  async function probeCovers(pending: CartItem[], gen: number) {
+    const queue = [...pending]
+    const workers = Array.from({ length: Math.min(COVER_PROBE_CONCURRENCY, queue.length) }, async () => {
+      while (queue.length > 0) {
+        const next = queue.shift()!
+        if (probeGen.current !== gen) return
+        await probeCoversForItem(next, gen)
+      }
+    })
+    await Promise.all(workers)
+  }
+
+  /** Adopt an alternate cover — and the looser condition it needs, if any. */
+  async function applyEditionOption(item: CartItem, option: EditionOption) {
+    const existing = isbnCandidateOverrides[item.id] ?? item.isbns_candidates ?? []
+    const allCandidates = [...new Set([...existing, option.isbn])]
+    const newIsbnOverrides = { ...isbnCandidateOverrides, [item.id]: allCandidates }
+    const newCondOverrides = option.addedLabels.length > 0
+      ? { ...conditionOverrides, [item.id]: option.newConditions }
+      : conditionOverrides
+
+    setIsbnCandidateOverrides(newIsbnOverrides)
+    setConditionOverrides(newCondOverrides)
+    setRelaxing(true)
+    try {
+      const patch: Partial<CartItem> = { isbns_candidates: allCandidates }
+      if (option.addedLabels.length > 0) patch.conditions = option.newConditions
+      fetch(`/api/cart/${encodeURIComponent(cartSlug)}/items/${item.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      }).catch(() => {})
+      onUpdateItem?.(item.id, patch)
+
+      const overriddenItems = itemsWithIsbn.map((i) => ({
+        ...i,
+        conditions: newCondOverrides[i.id] ?? i.conditions,
+        max_price: i.id in maxPriceOverrides ? maxPriceOverrides[i.id] : i.max_price,
+        isbns_candidates: newIsbnOverrides[i.id] ?? i.isbns_candidates,
+      }))
+      await updateAllResults(listingsByIsbn, overriddenItems)
+    } catch {
+      // silent
+    } finally {
+      setRelaxing(false)
+    }
+  }
+
   function openGroup(urls: string[]) {
     urls.forEach((url) => window.open(url, '_blank', 'noopener'))
   }
@@ -521,6 +637,55 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
 
   const missingItems = itemListingCounts.filter((x) => x.listings.length === 0)
   const foundAnyListings = itemListingCounts.some((x) => x.listings.length > 0)
+
+  // A book has an entry in coverProbeStatus from the moment it is queued, so the
+  // keys double as the count of books already claimed against the batch budget.
+  const probeRoom = Math.max(0, coverProbeBudget - Object.keys(coverProbeStatus).length)
+  const unqueued = missingItems
+    .filter(({ item }) => item.work_id && coverProbeStatus[item.id] === undefined)
+    .map(({ item }) => item.id)
+  const willProbe = new Set(unqueued.slice(0, probeRoom))
+  const deferredProbeCount = unqueued.length - willProbe.size
+
+  // Every book with no listings gets both relaxation axes searched automatically:
+  // looser conditions on the edition it already has, and other covers of the same
+  // work (each of those probed at the user's conditions first, looser only if needed).
+  const missingWithOptions = missingItems.map(({ item, conditions, maxPrice }) => {
+    const suggestion = findSuggestion(item, listingsByIsbn, conditions, maxPrice)
+    return {
+      item,
+      maxPrice,
+      suggestion,
+      nearMiss: suggestion ? null : findNearMissPrice(item, listingsByIsbn, conditions, maxPrice),
+      coverOptions: findEditionOptions(item, altEditions[item.id] ?? [], listingsByIsbn, conditions, maxPrice),
+      // Books queued for this batch count as probing too, so the panel never
+      // flashes "nothing found" before their search has even started.
+      probing: coverProbeStatus[item.id] === 'searching' || willProbe.has(item.id),
+    }
+  })
+
+  const missingIdsKey = missingItems.map((x) => x.item.id).join(',')
+  useEffect(() => {
+    if (!searched) return
+    const room = coverProbeBudget - queuedForProbe.current.size
+    if (room <= 0) return
+    const pending = missingItems
+      .map((x) => x.item)
+      .filter((item) => item.work_id && !queuedForProbe.current.has(item.id))
+      .slice(0, room)
+    if (pending.length === 0) return
+
+    // Claimed synchronously, before any await, so a second run of this effect
+    // can't queue the same book twice.
+    for (const item of pending) queuedForProbe.current.add(item.id)
+    setCoverProbeStatus((prev) => {
+      const next = { ...prev }
+      for (const item of pending) next[item.id] = 'searching'
+      return next
+    })
+    void probeCovers(pending, probeGen.current)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searched, missingIdsKey, coverProbeBudget])
 
   return (
     <div className="space-y-4">
@@ -747,17 +912,28 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
         )
       })()}
 
-      {/* Missing books — with relaxation suggestions */}
-      {searched && missingItems.length > 0 && (
+      {/* Books with no listings — both relaxation axes searched automatically */}
+      {searched && missingItems.length > 0 && (() => {
+        const anyProbing = missingWithOptions.some((m) => m.probing)
+        const anyOptions = missingWithOptions.some((m) => m.suggestion || m.nearMiss || m.coverOptions.length > 0)
+        return (
         <div id="missing-books" className="rounded-lg border border-amber-200 bg-amber-50 divide-y divide-amber-100">
           <div className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-amber-800">
-            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-            No listings found for {missingItems.length === 1 ? 'this book' : `${missingItems.length} books`} — try relaxing constraints
+            {anyProbing
+              ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+              : <AlertCircle className="h-3.5 w-3.5 shrink-0" />}
+            <span>
+              No listings found for {missingItems.length === 1 ? 'this book' : `${missingItems.length} books`}
+              {anyProbing
+                ? ' — checking other conditions and covers…'
+                : anyOptions
+                  ? ' — here is what other conditions and covers turned up'
+                  : ' — try relaxing constraints'}
+            </span>
           </div>
-          {missingItems.map(({ item, conditions, maxPrice }) => {
-            const suggestion = findSuggestion(item, listingsByIsbn, conditions, maxPrice)
-            const nearMiss = !suggestion ? findNearMissPrice(item, listingsByIsbn, conditions, maxPrice) : null
+          {missingWithOptions.map(({ item, maxPrice, suggestion, nearMiss, coverOptions, probing }) => {
             const showEditionPicker = editionPickerFor === item.id
+            const noOptions = !suggestion && !nearMiss && coverOptions.length === 0
             return (
               <div key={item.id} className="px-3 py-2 space-y-1.5">
                 <div className="flex items-start justify-between gap-2">
@@ -774,12 +950,12 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
                   )}
                 </div>
 
-                {suggestion ? (
+                {suggestion && (
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs text-amber-700">
                       {suggestion.type === 'condition'
-                        ? <>{suggestion.count} cop{suggestion.count === 1 ? 'y' : 'ies'} available accepting <strong>{suggestion.addedLabels.join(' or ')}</strong> condition</>
-                        : <>{suggestion.count} cop{suggestion.count === 1 ? 'y' : 'ies'} available if price cap is removed</>
+                        ? <>{suggestion.count} cop{suggestion.count === 1 ? 'y' : 'ies'} of this cover accepting <strong>{suggestion.addedLabels.join(' or ')}</strong> condition</>
+                        : <>{suggestion.count} cop{suggestion.count === 1 ? 'y' : 'ies'} of this cover if price cap is removed</>
                       }
                     </span>
                     <button
@@ -799,7 +975,9 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
                       Accept
                     </button>
                   </div>
-                ) : nearMiss ? (
+                )}
+
+                {nearMiss && (
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs text-blue-700">
                       Listing at <strong>${nearMiss.cheapestBlocked.toFixed(2)}</strong> is just ${nearMiss.delta.toFixed(2)} over your ${maxPrice!.toFixed(2)} cap
@@ -816,7 +994,72 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
                       Remove cap
                     </button>
                   </div>
-                ) : showEditionPicker ? (
+                )}
+
+                {coverOptions.length > 0 && (
+                  <div className="space-y-1">
+                    <p className="text-[11px] font-medium text-amber-800">
+                      {coverOptions.length === 1
+                        ? 'A different cover has listings:'
+                        : `${coverOptions.length} different covers have listings:`}
+                    </p>
+                    {coverOptions.map((opt) => (
+                      <div key={opt.isbn} className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <CoverThumb url={opt.edition.cover_url} isbn={opt.isbn} size="w-7 h-10" />
+                          <span className="text-xs text-amber-700 min-w-0">
+                            <span className="font-medium">${opt.cheapest.toFixed(2)}</span>
+                            {` · ${opt.count} listing${opt.count !== 1 ? 's' : ''} · `}
+                            {opt.addedLabels.length > 0
+                              ? <>accepting <strong>{opt.addedLabels.join(' or ')}</strong></>
+                              : CONDITION_LABELS[opt.cheapestCondition]}
+                            <span className="block text-amber-600 truncate">
+                              {opt.edition.publisher ?? 'Unknown publisher'}
+                              {opt.edition.publish_year ? ` · ${opt.edition.publish_year}` : ''}
+                            </span>
+                          </span>
+                        </div>
+                        <button
+                          disabled={relaxing}
+                          onClick={() => applyEditionOption(item, opt)}
+                          className="shrink-0 text-xs font-medium px-2 py-1 rounded bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50 flex items-center gap-1"
+                        >
+                          {relaxing && <Loader2 className="h-3 w-3 animate-spin" />}
+                          Use this cover
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {probing && (
+                  <p className="flex items-center gap-1.5 text-xs text-amber-700">
+                    <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                    Checking other covers of this book…
+                  </p>
+                )}
+
+                {!probing && noOptions && (
+                  <p className="text-xs text-amber-700 italic">
+                    {coverProbeStatus[item.id] === 'error'
+                      ? 'No listings for this edition, and the other-cover search failed.'
+                      : coverProbeStatus[item.id] === 'done'
+                        ? 'No listings for this edition in any condition, or for the other covers we checked.'
+                        : 'No listings found for this edition.'}
+                  </p>
+                )}
+
+                {item.work_id && !showEditionPicker && !probing && (
+                  <button
+                    onClick={() => setEditionPickerFor(item.id)}
+                    className="text-xs font-medium text-amber-700 hover:text-amber-900 flex items-center gap-1 underline"
+                  >
+                    <BookOpen className="h-3 w-3" />
+                    Browse all editions
+                  </button>
+                )}
+
+                {showEditionPicker && (
                   <EditionPickerInline
                     item={item}
                     cartSlug={cartSlug}
@@ -826,7 +1069,9 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
                     isbnCandidateOverrides={isbnCandidateOverrides}
                     onSaved={(newIsbnOverrides, newListings) => {
                       setIsbnCandidateOverrides(newIsbnOverrides)
-                      setListingsByIsbn(newListings)
+                      // Merge rather than replace: a cover probe may have landed
+                      // since the picker captured its snapshot.
+                      setListingsByIsbn((prev) => ({ ...prev, ...newListings }))
                       setEditionPickerFor(null)
                       const overriddenItems = itemsWithIsbn.map((i) => ({
                         ...i,
@@ -838,27 +1083,24 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
                     }}
                     onCancel={() => setEditionPickerFor(null)}
                   />
-                ) : (
-                  <div className="flex items-center gap-3">
-                    <p className="text-xs text-amber-700 italic">
-                      No listings found for this edition.
-                    </p>
-                    {item.work_id && (
-                      <button
-                        onClick={() => setEditionPickerFor(item.id)}
-                        className="shrink-0 text-xs font-medium text-amber-700 hover:text-amber-900 flex items-center gap-1 underline"
-                      >
-                        <BookOpen className="h-3 w-3" />
-                        Try other editions
-                      </button>
-                    )}
-                  </div>
                 )}
               </div>
             )
           })}
+          {deferredProbeCount > 0 && (
+            <div className="px-3 py-2">
+              <button
+                onClick={() => setCoverProbeBudget((b) => b + COVER_PROBE_BATCH)}
+                className="text-xs font-medium text-amber-700 hover:text-amber-900 flex items-center gap-1 underline"
+              >
+                <BookOpen className="h-3 w-3" />
+                Check other covers for the remaining {deferredProbeCount} book{deferredProbeCount !== 1 ? 's' : ''}
+              </button>
+            </div>
+          )}
         </div>
-      )}
+        )
+      })()}
 
       {/* Per-book listing previews */}
       {searched && itemListingCounts.length > 0 && (
@@ -895,7 +1137,9 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
                     isbnCandidateOverrides={isbnCandidateOverrides}
                     onSaved={(newIsbnOverrides, newListings) => {
                       setIsbnCandidateOverrides(newIsbnOverrides)
-                      setListingsByIsbn(newListings)
+                      // Merge rather than replace: a cover probe may have landed
+                      // since the picker captured its snapshot.
+                      setListingsByIsbn((prev) => ({ ...prev, ...newListings }))
                       setEditionPickerFor(null)
                       const overriddenItems = itemsWithIsbn.map((i) => ({
                         ...i,

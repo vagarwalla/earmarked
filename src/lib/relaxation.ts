@@ -1,4 +1,4 @@
-import type { CartItem, Condition, Listing } from './types'
+import type { CartItem, Condition, Edition, Listing } from './types'
 import { listingQualifies } from './optimizer/shared'
 
 export const CONDITION_ORDER: Condition[] = ['new', 'fine', 'good', 'fair']
@@ -81,6 +81,88 @@ export function findSuggestion(
   }
 
   return null
+}
+
+/**
+ * An alternate edition (a different cover) that has listings, optionally after
+ * also relaxing conditions. `addedLabels` is empty when the edition qualifies
+ * under the conditions the user already accepts.
+ */
+export interface EditionOption {
+  edition: Edition
+  isbn: string
+  count: number
+  cheapest: number
+  cheapestCondition: Condition
+  newConditions: Condition[]  // conditions needed for this edition (== current when addedLabels is empty)
+  addedLabels: string[]       // e.g. ['Good'] — empty when no condition relaxation is needed
+}
+
+/** Cheapest-first, and prefer options that don't also require loosening condition. */
+function compareEditionOptions(a: EditionOption, b: EditionOption): number {
+  if (a.addedLabels.length !== b.addedLabels.length) return a.addedLabels.length - b.addedLabels.length
+  if (a.cheapest !== b.cheapest) return a.cheapest - b.cheapest
+  return b.edition.popularity_score - a.edition.popularity_score
+}
+
+/**
+ * Search alternate editions of the same work for listings, expanding conditions
+ * only as far as each edition needs. Explores both axes at once — a different
+ * cover may have stock under the user's current conditions, or only under
+ * looser ones — so the caller can offer whichever costs the user least.
+ *
+ * `editions` should already exclude ISBNs the item is searching, and `byIsbn`
+ * must hold listings for them. Editions sharing a cover image URL collapse to
+ * their best option, so the same artwork isn't offered twice; near-identical
+ * covers under different URLs are still listed separately.
+ */
+export function findEditionOptions(
+  item: CartItem,
+  editions: Edition[],
+  byIsbn: Record<string, Listing[]>,
+  conditions: Condition[],
+  maxPrice: number | null,
+  limit = 3,
+): EditionOption[] {
+  const missing = CONDITION_ORDER.filter((c) => !conditions.includes(c))
+  const bestByCover = new Map<string, EditionOption>()
+
+  for (const edition of editions) {
+    // Probe this edition alone — the item's own ISBNs already came up empty.
+    const probe: CartItem = { ...item, isbn_preferred: edition.isbn, isbns_candidates: null }
+
+    let listings = computeListings(probe, byIsbn, conditions, maxPrice)
+    let newConditions = conditions
+    let addedLabels: string[] = []
+
+    for (let i = 1; listings.length === 0 && i <= missing.length; i++) {
+      const expanded = [...conditions, ...missing.slice(0, i)]
+      const expandedListings = computeListings(probe, byIsbn, expanded, maxPrice)
+      if (expandedListings.length > 0) {
+        listings = expandedListings
+        newConditions = expanded
+        addedLabels = missing.slice(0, i).map((c) => CONDITION_LABELS[c])
+      }
+    }
+    if (listings.length === 0) continue
+
+    const cheapest = listings.reduce((a, b) => (a.price <= b.price ? a : b))
+    const option: EditionOption = {
+      edition,
+      isbn: edition.isbn,
+      count: listings.length,
+      cheapest: cheapest.price,
+      cheapestCondition: cheapest.condition_normalized,
+      newConditions,
+      addedLabels,
+    }
+
+    const coverKey = edition.cover_url ?? `isbn:${edition.isbn}`
+    const incumbent = bestByCover.get(coverKey)
+    if (!incumbent || compareEditionOptions(option, incumbent) < 0) bestByCover.set(coverKey, option)
+  }
+
+  return [...bestByCover.values()].sort(compareEditionOptions).slice(0, limit)
 }
 
 /**

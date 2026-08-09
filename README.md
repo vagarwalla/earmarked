@@ -59,6 +59,6 @@ src/
     EditionPicker.tsx     # Choose edition for a book
   lib/
     optimizer/            # Seller grouping algorithms
-    relaxation.ts         # Suggests loosening filters when no listings found
+    relaxation.ts         # Suggests looser conditions / other covers when no listings found
     types.ts              # Shared TypeScript types
 ```
