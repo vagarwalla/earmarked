@@ -47,7 +47,18 @@ export function optimize(
   listingsByIsbn: Map<string, Listing[]>,
   strategy?: OptimizerStrategy
 ): OptimizationResult {
-  const bookOptions = buildBookOptions(items, listingsByIsbn)
+  return optimizeBookOptions(buildBookOptions(items, listingsByIsbn), strategy)
+}
+
+/**
+ * Optimize pre-built book options. Lets callers qualify listings once and
+ * reuse/partition the result (see optimizer/batch.ts) instead of re-running
+ * buildBookOptions per source view.
+ */
+export function optimizeBookOptions(
+  bookOptions: BookOption[],
+  strategy?: OptimizerStrategy
+): OptimizationResult {
   const assignment = strategy ? strategy.solve(bookOptions) : solveAuto(bookOptions)
   const groups = buildGroups(bookOptions, assignment)
 
