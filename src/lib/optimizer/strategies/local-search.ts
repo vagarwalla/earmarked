@@ -1,16 +1,22 @@
 import type { OptimizerStrategy, BookOption, Assignment, Listing } from '../shared'
 import { CostTracker } from '../shared'
+import type { Rand } from '../rng'
+import { mulberry32, seedFromBookOptions } from '../rng'
 import { solveGreedy } from './greedy'
 
 const MAX_CANDIDATES_PER_BOOK = 10
 const NUM_STARTS = 5
 const ILS_PERTURB_MIN = 2
 const ILS_PERTURB_MAX = 4
+// Wall-clock backstop only (serverless safety) — the primary budget is
+// iteration-based so results are deterministic for a given input.
+const HARD_DEADLINE_MS = 1000
 
-function timeBudgetMs(n: number): number {
-  if (n <= 10) return 50
-  if (n <= 20) return 200
-  return 500
+/** ILS iterations per start. Iteration cost grows with n, so the count shrinks. */
+function ilsIterations(n: number): number {
+  if (n <= 10) return 40
+  if (n <= 20) return 25
+  return 12
 }
 
 /**
@@ -21,11 +27,12 @@ function localSearchImprove(
   bookOptions: BookOption[],
   assignment: Assignment,
   candidatesByBook: Array<Map<string, Listing>>,
+  hardDeadline: number = Infinity,
 ): { assignment: Assignment; cost: number } {
   const tracker = CostTracker.fromAssignment(bookOptions, assignment)
 
   let improved = true
-  while (improved) {
+  while (improved && Date.now() < hardDeadline) {
     improved = false
 
     for (let i = 0; i < bookOptions.length; i++) {
@@ -64,7 +71,7 @@ function localSearchImprove(
   // 2-swap pass: try swapping sellers for all pairs of assigned books
   if (bookOptions.length <= 30) {
     let twoSwapImproved = true
-    while (twoSwapImproved) {
+    while (twoSwapImproved && Date.now() < hardDeadline) {
       twoSwapImproved = false
 
       for (let i = 0; i < bookOptions.length; i++) {
@@ -141,6 +148,7 @@ function perturb(
   assignment: Assignment,
   candidatesByBook: Array<Map<string, Listing>>,
   numPerturb: number,
+  rand: Rand,
 ): Assignment {
   const result = new Map(assignment)
   const indices = bookOptions
@@ -150,7 +158,7 @@ function perturb(
   const count = Math.min(numPerturb, indices.length)
   // Fisher-Yates partial shuffle
   for (let k = 0; k < count; k++) {
-    const j = k + Math.floor(Math.random() * (indices.length - k))
+    const j = k + Math.floor(rand() * (indices.length - k))
     ;[indices[k], indices[j]] = [indices[j], indices[k]]
   }
 
@@ -160,7 +168,7 @@ function perturb(
     const currentSeller = result.get(opt.item.id)?.seller_id
     const candidates = Array.from(candidatesByBook[i].entries()).filter(([sid]) => sid !== currentSeller)
     if (candidates.length > 0) {
-      const [, listing] = candidates[Math.floor(Math.random() * candidates.length)]
+      const [, listing] = candidates[Math.floor(rand() * candidates.length)]
       result.set(opt.item.id, listing)
     }
   }
@@ -169,64 +177,72 @@ function perturb(
 }
 
 /**
- * Local search strategy with multi-start and Iterated Local Search (ILS).
+ * Local search with multi-start and Iterated Local Search (ILS).
  * Starts from multiple greedy solutions (one deterministic, rest randomized),
- * applies single-swap local search, then perturbs and re-optimizes within
- * a time budget.
+ * applies single-swap local search, then perturbs and re-optimizes for a
+ * fixed number of iterations per start. All randomness comes from a PRNG
+ * seeded by the input, so identical inputs give identical results; a
+ * wall-clock cap exists only as a serverless backstop.
  */
-export const localSearchStrategy: OptimizerStrategy = {
-  name: 'local-search',
+export function solveLocalSearch(bookOptions: BookOption[], seed?: number): Assignment {
+  if (bookOptions.length === 0) return new Map()
 
-  solve(bookOptions: BookOption[]): Assignment {
-    if (bookOptions.length === 0) return new Map()
+  const rand = mulberry32(seed ?? seedFromBookOptions(bookOptions))
 
-    // Pre-compute cheapest listing per seller for each book
-    const candidatesByBook: Array<Map<string, Listing>> = bookOptions.map((opt) => {
-      const bySellerCheapest = new Map<string, Listing>()
-      for (const l of opt.listings) {
-        if (!bySellerCheapest.has(l.seller_id)) {
-          bySellerCheapest.set(l.seller_id, l)
-          if (bySellerCheapest.size >= MAX_CANDIDATES_PER_BOOK) break
-        }
+  // Pre-compute cheapest listing per seller for each book
+  const candidatesByBook: Array<Map<string, Listing>> = bookOptions.map((opt) => {
+    const bySellerCheapest = new Map<string, Listing>()
+    for (const l of opt.listings) {
+      if (!bySellerCheapest.has(l.seller_id)) {
+        bySellerCheapest.set(l.seller_id, l)
+        if (bySellerCheapest.size >= MAX_CANDIDATES_PER_BOOK) break
       }
-      return bySellerCheapest
-    })
+    }
+    return bySellerCheapest
+  })
 
-    let bestAssignment: Assignment = new Map()
-    let bestCost = Infinity
-    const deadline = Date.now() + timeBudgetMs(bookOptions.length)
+  let bestAssignment: Assignment = new Map()
+  let bestCost = Infinity
+  const hardDeadline = Date.now() + HARD_DEADLINE_MS
+  const iterations = ilsIterations(bookOptions.length)
 
-    for (let start = 0; start < NUM_STARTS; start++) {
-      // First start is deterministic greedy, rest are randomized
-      const initial = solveGreedy(bookOptions, start === 0 ? 0 : 0.3)
-      let { assignment: current, cost: currentCost } = localSearchImprove(
-        bookOptions, initial, candidatesByBook,
+  for (let start = 0; start < NUM_STARTS; start++) {
+    // First start is deterministic greedy, rest are randomized
+    const initial = solveGreedy(bookOptions, start === 0 ? 0 : 0.3, rand)
+    let { assignment: current, cost: currentCost } = localSearchImprove(
+      bookOptions, initial, candidatesByBook, hardDeadline,
+    )
+
+    if (currentCost < bestCost) {
+      bestCost = currentCost
+      bestAssignment = new Map(current)
+    }
+
+    // ILS: perturb and re-optimize, a fixed iteration count per start
+    for (let iter = 0; iter < iterations && Date.now() < hardDeadline; iter++) {
+      const numPerturb = ILS_PERTURB_MIN + Math.floor(rand() * (ILS_PERTURB_MAX - ILS_PERTURB_MIN + 1))
+      const perturbed = perturb(bookOptions, current, candidatesByBook, numPerturb, rand)
+      const { assignment: candidate, cost: candidateCost } = localSearchImprove(
+        bookOptions, perturbed, candidatesByBook, hardDeadline,
       )
 
-      if (currentCost < bestCost) {
-        bestCost = currentCost
-        bestAssignment = new Map(current)
-      }
-
-      // ILS: perturb and re-optimize within time budget
-      while (Date.now() < deadline) {
-        const numPerturb = ILS_PERTURB_MIN + Math.floor(Math.random() * (ILS_PERTURB_MAX - ILS_PERTURB_MIN + 1))
-        const perturbed = perturb(bookOptions, current, candidatesByBook, numPerturb)
-        const { assignment: candidate, cost: candidateCost } = localSearchImprove(
-          bookOptions, perturbed, candidatesByBook,
-        )
-
-        if (candidateCost < currentCost - 0.001) {
-          current = candidate
-          currentCost = candidateCost
-          if (currentCost < bestCost) {
-            bestCost = currentCost
-            bestAssignment = new Map(current)
-          }
+      if (candidateCost < currentCost - 0.001) {
+        current = candidate
+        currentCost = candidateCost
+        if (currentCost < bestCost) {
+          bestCost = currentCost
+          bestAssignment = new Map(current)
         }
       }
     }
+  }
 
-    return bestAssignment
+  return bestAssignment
+}
+
+export const localSearchStrategy: OptimizerStrategy = {
+  name: 'local-search',
+  solve(bookOptions: BookOption[]): Assignment {
+    return solveLocalSearch(bookOptions)
   },
 }

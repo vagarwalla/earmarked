@@ -1,11 +1,13 @@
 import type { OptimizerStrategy, BookOption, Assignment, Listing } from '../shared'
 import { shippingCost } from '../shared'
+import type { Rand } from '../rng'
 
 /**
  * Core greedy solver. When randomness > 0, picks from the top sellers
  * with probability weighted by score (for multi-start diversification).
+ * Pass a seeded `rand` for deterministic results.
  */
-export function solveGreedy(bookOptions: BookOption[], randomness = 0): Assignment {
+export function solveGreedy(bookOptions: BookOption[], randomness = 0, rand: Rand = Math.random): Assignment {
   // Build seller catalog: seller_id → cheapest listing per item_id + shipping info
   const sellerCatalog = new Map<string, {
     name: string
@@ -65,7 +67,7 @@ export function solveGreedy(bookOptions: BookOption[], randomness = 0): Assignme
       const maxScore = candidates[candidates.length - 1].score
       const weights = candidates.map((c) => Math.max(0.1, maxScore - c.score + 1))
       const totalWeight = weights.reduce((s, w) => s + w, 0)
-      let r = Math.random() * totalWeight
+      let r = rand() * totalWeight
       for (let j = 0; j < candidates.length; j++) {
         r -= weights[j]
         if (r <= 0) { pick = candidates[j]; break }
