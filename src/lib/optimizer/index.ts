@@ -1,20 +1,45 @@
 import type { CartItem, Listing, OptimizationResult } from '../types'
-import type { OptimizerStrategy } from './shared'
+import type { Assignment, BookOption, OptimizerStrategy } from './shared'
 import { buildBookOptions, buildGroups, shippingCost } from './shared'
 import { greedyStrategy } from './strategies/greedy'
-import { localSearchStrategy } from './strategies/local-search'
-import { exactStrategy } from './strategies/exact'
+import { localSearchStrategy, solveLocalSearch } from './strategies/local-search'
+import { exactStrategy, solveExact } from './strategies/exact'
 
 export type { OptimizerStrategy }
 export { greedyStrategy, localSearchStrategy, exactStrategy }
 
-// Exact is optimal but only practical up to ~12 books given the branching factor.
-// Incremental state tracking makes this feasible. Beyond that, local search
-// (multi-start + ILS from greedy) is near-optimal and fast.
-const EXACT_BOOK_LIMIT = 12
+// Exact refinement is gated on an estimate of its search-space size (product
+// of per-book candidate counts, computed in log space). Estimates above this
+// are hopeless to prove optimal, so the local-search answer stands alone.
+// The node budget inside solveExact is the hard backstop either way.
+const EXACT_GATE_MAX_LOG_NODES = Math.log(1e7)
+// Same cap solveExact applies per book — the estimate must match its space.
+const EXACT_CANDIDATES_PER_BOOK = 6
 
-function autoSelectStrategy(itemCount: number): OptimizerStrategy {
-  return itemCount <= EXACT_BOOK_LIMIT ? exactStrategy : localSearchStrategy
+function exactSearchLogNodes(bookOptions: BookOption[]): number {
+  let logNodes = 0
+  for (const { listings } of bookOptions) {
+    const sellers = new Set<string>()
+    for (const l of listings) {
+      sellers.add(l.seller_id)
+      if (sellers.size >= EXACT_CANDIDATES_PER_BOOK) break
+    }
+    if (sellers.size > 1) logNodes += Math.log(sellers.size)
+  }
+  return logNodes
+}
+
+/**
+ * Default solve order:
+ *   1. Seeded local search — cheap, bounded, deterministic.
+ *   2. If the exact search space is small enough, refine with warm-started
+ *      branch-and-bound. The warm start makes the result never worse than
+ *      local search, even when the node budget aborts the search.
+ */
+function solveAuto(bookOptions: BookOption[]): Assignment {
+  const ls = solveLocalSearch(bookOptions)
+  if (exactSearchLogNodes(bookOptions) > EXACT_GATE_MAX_LOG_NODES) return ls
+  return solveExact(bookOptions, { warmStart: ls })
 }
 
 export function optimize(
@@ -23,8 +48,7 @@ export function optimize(
   strategy?: OptimizerStrategy
 ): OptimizationResult {
   const bookOptions = buildBookOptions(items, listingsByIsbn)
-  const chosen = strategy ?? autoSelectStrategy(items.length)
-  const assignment = chosen.solve(bookOptions)
+  const assignment = strategy ? strategy.solve(bookOptions) : solveAuto(bookOptions)
   const groups = buildGroups(bookOptions, assignment)
 
   const grand_total = groups.reduce((s, g) => s + g.group_total, 0)
