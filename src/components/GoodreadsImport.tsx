@@ -58,7 +58,12 @@ export function GoodreadsImport({ slug, existingTitles, onImported }: Props) {
       try { localStorage.setItem(PROFILE_KEY, profile) } catch { /* ignore */ }
       setUserId(data.userId)
       setShelves(data.shelves)
-      setStep('shelves')
+      if (data.requestedShelf) {
+        // The pasted URL pointed at a specific shelf — skip straight to its books
+        await loadShelf(data.userId, data.requestedShelf)
+      } else {
+        setStep('shelves')
+      }
     } catch {
       setError('Something went wrong — try again')
     } finally {
@@ -66,13 +71,17 @@ export function GoodreadsImport({ slug, existingTitles, onImported }: Props) {
     }
   }
 
-  async function handlePickShelf(shelf: GoodreadsShelf) {
+  function handlePickShelf(shelf: GoodreadsShelf) {
     if (!userId) return
+    loadShelf(userId, shelf.name)
+  }
+
+  async function loadShelf(uid: string, name: string) {
     setLoading(true)
     setError(null)
-    setShelfName(shelf.name)
+    setShelfName(name)
     try {
-      const res = await fetch(`/api/goodreads/shelf?userId=${userId}&shelf=${encodeURIComponent(shelf.name)}`)
+      const res = await fetch(`/api/goodreads/shelf?userId=${uid}&shelf=${encodeURIComponent(name)}`)
       const data = await res.json()
       if (!res.ok) {
         setError(data?.error ?? 'Something went wrong')
@@ -157,8 +166,9 @@ export function GoodreadsImport({ slug, existingTitles, onImported }: Props) {
           {step === 'input' && (
             <div className="space-y-3">
               <p className="text-sm text-muted-foreground">
-                Paste your Goodreads profile URL (or numeric user ID). Your profile
-                needs to be public for shelves to be visible.
+                Paste your Goodreads profile URL to browse your shelves — or paste a
+                shelf URL directly (e.g. …/review/list/12345?shelf=sociology) to jump
+                straight to it. Your profile needs to be public.
               </p>
               <Input
                 placeholder="https://www.goodreads.com/user/show/12345-your-name"

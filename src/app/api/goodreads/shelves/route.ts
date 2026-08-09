@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { parseGoodreadsUserId, fetchShelves } from '@/lib/goodreadsShelf'
+import { parseGoodreadsUserId, parseGoodreadsShelfFromUrl, fetchShelves } from '@/lib/goodreadsShelf'
 
-// Every account has these even if the profile page fails to list them
+// Every account has these even if neither scraped page lists them
 const DEFAULT_SHELVES = ['read', 'currently-reading', 'to-read']
 
 export async function GET(req: NextRequest) {
@@ -16,14 +16,28 @@ export async function GET(req: NextRequest) {
     )
   }
 
+  // A pasted shelf URL (?shelf=… or ?tag=…) names the exact shelf to import
+  const requestedShelf = parseGoodreadsShelfFromUrl(user)
+
   try {
     let shelves = await fetchShelves(userId)
     if (shelves.length === 0) {
-      // Profile page layout changed or shelves not listed — offer the built-in shelves
+      // Page layouts changed or shelves not listed — offer the built-in shelves
       shelves = DEFAULT_SHELVES.map((name) => ({ name, count: -1 }))
     }
-    return NextResponse.json({ userId, shelves })
+    if (requestedShelf && !shelves.some((s) => s.name === requestedShelf)) {
+      shelves = [{ name: requestedShelf, count: -1 }, ...shelves]
+    }
+    return NextResponse.json({ userId, shelves, requestedShelf })
   } catch {
+    if (requestedShelf) {
+      // Shelf pages unreachable but the URL already tells us which shelf to load
+      return NextResponse.json({
+        userId,
+        shelves: [{ name: requestedShelf, count: -1 }],
+        requestedShelf,
+      })
+    }
     return NextResponse.json(
       { error: 'Could not reach Goodreads. Check the profile is public and try again.' },
       { status: 502 }
