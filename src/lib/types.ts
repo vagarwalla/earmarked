@@ -82,7 +82,10 @@ export interface SellerGroup {
   seller_name: string
   assignments: Array<{
     item: CartItem
+    /** Representative (cheapest) unit listing. */
     listing: Listing
+    /** One listing per unit; distinct copies for marketplace sellers, the stocked listing repeated for retailers. */
+    listings: Listing[]
     quantity: number
     subtotal: number
   }>
@@ -93,6 +96,8 @@ export interface SellerGroup {
 
 export interface OptimizationResult {
   groups: SellerGroup[]
+  // Items with no qualifying listings — not covered by grand_total
+  unassigned: CartItem[]
   grand_total: number
   naive_total: number
   savings: number

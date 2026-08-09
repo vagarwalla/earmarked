@@ -109,7 +109,7 @@ describe('computeListings', () => {
     expect(result[0].listing_id).toBe('l2')
   })
 
-  it('keeps all listings when signed_only is false', () => {
+  it('excludes signed listings when signed_only is false (types.ts tri-state: false = exclude)', () => {
     const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1', signed_only: false })
     const byIsbn = makeByIsbn([
       ['isbn-1', [
@@ -118,7 +118,34 @@ describe('computeListings', () => {
       ]],
     ])
     const result = computeListings(item, byIsbn, ['fine'], null)
+    expect(result).toHaveLength(1)
+    expect(result[0].listing_id).toBe('l1')
+  })
+
+  it('keeps all listings when signed_only is null (any)', () => {
+    const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1', signed_only: null })
+    const byIsbn = makeByIsbn([
+      ['isbn-1', [
+        makeListing({ listing_id: 'l1', isbn: 'isbn-1', price: 5, condition_normalized: 'fine', signed: false }),
+        makeListing({ listing_id: 'l2', isbn: 'isbn-1', price: 8, condition_normalized: 'fine', signed: true }),
+      ]],
+    ])
+    const result = computeListings(item, byIsbn, ['fine'], null)
     expect(result).toHaveLength(2)
+  })
+
+  it('matches optimizer semantics: relaxation and buildBookOptions qualify the same listings', () => {
+    // Regression for the divergence where relaxation treated false as "any"
+    // while the optimizer treated false as "exclude".
+    const item = makeItem({
+      id: 'i1', isbn_preferred: 'isbn-1',
+      signed_only: false, first_edition_only: false, dust_jacket_only: false,
+    })
+    const signedListing = makeListing({ listing_id: 'l-signed', isbn: 'isbn-1', price: 3, condition_normalized: 'fine', signed: true })
+    const plainListing = makeListing({ listing_id: 'l-plain', isbn: 'isbn-1', price: 5, condition_normalized: 'fine' })
+    const byIsbn = makeByIsbn([['isbn-1', [signedListing, plainListing]]])
+    const relaxed = computeListings(item, byIsbn, item.conditions, item.max_price)
+    expect(relaxed.map((l) => l.listing_id)).toEqual(['l-plain'])
   })
 
   it('filters out non-first-edition listings when first_edition_only is true', () => {

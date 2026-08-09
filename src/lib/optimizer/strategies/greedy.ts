@@ -1,52 +1,53 @@
-import type { OptimizerStrategy, BookOption, Assignment, Listing } from '../shared'
+import type { OptimizerStrategy, BookOption, Assignment, SellerOffer } from '../shared'
 import { shippingCost } from '../shared'
+import type { Rand } from '../rng'
 
 /**
  * Core greedy solver. When randomness > 0, picks from the top sellers
  * with probability weighted by score (for multi-start diversification).
+ * Pass a seeded `rand` for deterministic results.
  */
-export function solveGreedy(bookOptions: BookOption[], randomness = 0): Assignment {
-  // Build seller catalog: seller_id → cheapest listing per item_id + shipping info
+export function solveGreedy(bookOptions: BookOption[], randomness = 0, rand: Rand = Math.random): Assignment {
+  // Seller catalog: seller_id → offer per item + shipping info
   const sellerCatalog = new Map<string, {
-    name: string
-    catalog: Map<string, Listing>
+    catalog: Map<string, SellerOffer>
     shippingBase: number
     perAdditional: number
   }>()
-  for (const { item, listings } of bookOptions) {
-    for (const listing of listings) {
-      if (!sellerCatalog.has(listing.seller_id)) {
-        sellerCatalog.set(listing.seller_id, {
-          name: listing.seller_name,
-          catalog: new Map(),
-          shippingBase: listing.shipping_base,
-          perAdditional: listing.shipping_per_additional,
-        })
+  for (const { item, offers } of bookOptions) {
+    for (const [sellerId, offer] of offers) {
+      let seller = sellerCatalog.get(sellerId)
+      if (!seller) {
+        seller = { catalog: new Map(), shippingBase: offer.shipping_base, perAdditional: offer.shipping_per_additional }
+        sellerCatalog.set(sellerId, seller)
       }
-      const seller = sellerCatalog.get(listing.seller_id)!
-      if (!seller.catalog.has(item.id)) seller.catalog.set(item.id, listing) // first = cheapest
+      seller.catalog.set(item.id, offer)
     }
   }
 
   const assignment: Assignment = new Map()
   const unassigned = new Set(bookOptions.map((b) => b.item.id))
-  const sellerAssignedQty = new Map<string, number>()
+  const sellerAssignedUnits = new Map<string, number>()
 
   while (unassigned.size > 0) {
     const scored: Array<{ sellerId: string; score: number; bookIds: string[] }> = []
 
     for (const [sellerId, seller] of sellerCatalog) {
-      const ids = Array.from(unassigned).filter((id) => seller.catalog.has(id))
+      const ids: string[] = []
+      let totalBookCost = 0
+      let newUnits = 0
+      for (const [itemId, offer] of seller.catalog) {
+        if (!unassigned.has(itemId)) continue
+        ids.push(itemId)
+        totalBookCost += offer.total_price
+        newUnits += offer.listings.length
+      }
       if (ids.length === 0) continue
 
-      const opts = ids.map((id) => bookOptions.find((b) => b.item.id === id)!)
-      const totalBookCost = ids.reduce((s, id, i) => s + seller.catalog.get(id)!.price * opts[i].item.quantity, 0)
-      const newUnits = opts.reduce((s, o) => s + o.item.quantity, 0)
-      const existingQty = sellerAssignedQty.get(sellerId) ?? 0
-
-      const marginalShipping = existingQty > 0
-        ? shippingCost(existingQty + newUnits, seller.shippingBase, seller.perAdditional) -
-          shippingCost(existingQty, seller.shippingBase, seller.perAdditional)
+      const existingUnits = sellerAssignedUnits.get(sellerId) ?? 0
+      const marginalShipping = existingUnits > 0
+        ? shippingCost(existingUnits + newUnits, seller.shippingBase, seller.perAdditional) -
+          shippingCost(existingUnits, seller.shippingBase, seller.perAdditional)
         : shippingCost(newUnits, seller.shippingBase, seller.perAdditional)
 
       scored.push({ sellerId, score: (totalBookCost + marginalShipping) / ids.length, bookIds: ids })
@@ -65,7 +66,7 @@ export function solveGreedy(bookOptions: BookOption[], randomness = 0): Assignme
       const maxScore = candidates[candidates.length - 1].score
       const weights = candidates.map((c) => Math.max(0.1, maxScore - c.score + 1))
       const totalWeight = weights.reduce((s, w) => s + w, 0)
-      let r = Math.random() * totalWeight
+      let r = rand() * totalWeight
       for (let j = 0; j < candidates.length; j++) {
         r -= weights[j]
         if (r <= 0) { pick = candidates[j]; break }
@@ -74,11 +75,10 @@ export function solveGreedy(bookOptions: BookOption[], randomness = 0): Assignme
 
     const seller = sellerCatalog.get(pick.sellerId)!
     for (const itemId of pick.bookIds) {
-      const listing = seller.catalog.get(itemId)!
-      const qty = bookOptions.find((b) => b.item.id === itemId)!.item.quantity
-      assignment.set(itemId, listing)
+      const offer = seller.catalog.get(itemId)!
+      assignment.set(itemId, offer)
       unassigned.delete(itemId)
-      sellerAssignedQty.set(pick.sellerId, (sellerAssignedQty.get(pick.sellerId) ?? 0) + qty)
+      sellerAssignedUnits.set(pick.sellerId, (sellerAssignedUnits.get(pick.sellerId) ?? 0) + offer.listings.length)
     }
   }
 

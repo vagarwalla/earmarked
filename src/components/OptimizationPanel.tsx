@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import type { CartItem, Condition, Edition, Listing, OptimizationResult, PriceResponse } from '@/lib/types'
+import { getSellerSource } from '@/lib/optimizer/batch'
 import {
   CONDITION_ORDER,
   computeListings,
@@ -395,33 +396,22 @@ const SOURCE_BADGE: Record<'abe' | 'thriftbooks' | 'bwb', { label: string; class
   bwb:         { label: 'BWB',         className: 'bg-emerald-100 text-emerald-800 border border-emerald-300' },
 }
 
-function getSellerSource(sellerId: string): 'abe' | 'thriftbooks' | 'bwb' {
-  if (sellerId === 'thriftbooks') return 'thriftbooks'
-  if (sellerId === 'betterworldbooks') return 'bwb'
-  return 'abe'
-}
 
-function filterBySource(byIsbn: Record<string, Listing[]>, src: SourceId): Record<string, Listing[]> {
-  if (src === 'best' || src === 'combined') return byIsbn
-  const out: Record<string, Listing[]> = {}
-  for (const [isbn, ls] of Object.entries(byIsbn)) {
-    out[isbn] = ls.filter((l) =>
-      src === 'abe'
-        ? l.seller_id !== 'thriftbooks' && l.seller_id !== 'betterworldbooks'
-        : src === 'thriftbooks'
-          ? l.seller_id === 'thriftbooks'
-          : l.seller_id === 'betterworldbooks'
-    )
-  }
-  return out
-}
-
-async function runOptimize(itemsToOpt: CartItem[], byIsbn: Record<string, Listing[]>): Promise<OptimizationResult> {
+// One request returns every source view — the server qualifies listings once
+// and partitions per source, and guarantees combined ≤ each single source.
+async function runOptimizeBatch(
+  itemsToOpt: CartItem[],
+  byIsbn: Record<string, Listing[]>,
+): Promise<Record<SourceId, OptimizationResult>> {
   const res = await fetch('/api/optimize', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ items: itemsToOpt, listingsByIsbn: byIsbn }),
   })
+  if (!res.ok) {
+    const data = await res.json().catch(() => null)
+    throw new Error(data?.error ?? `optimize failed (${res.status})`)
+  }
   return res.json()
 }
 
@@ -440,14 +430,7 @@ export function OptimizationPanel({ items, cartSlug, onUpdateItem }: Props) {
   const [editionPickerFor, setEditionPickerFor] = useState<string | null>(null)
 
   async function updateAllResults(byIsbn: Record<string, Listing[]>, itemsToOpt: CartItem[]) {
-    const [bestR, abeR, tbR, bwbR, combinedR] = await Promise.all([
-      runOptimize(itemsToOpt, filterBySource(byIsbn, 'best')),
-      runOptimize(itemsToOpt, filterBySource(byIsbn, 'abe')),
-      runOptimize(itemsToOpt, filterBySource(byIsbn, 'thriftbooks')),
-      runOptimize(itemsToOpt, filterBySource(byIsbn, 'bwb')),
-      runOptimize(itemsToOpt, filterBySource(byIsbn, 'combined')),
-    ])
-    setResultsBySource({ best: bestR, abe: abeR, thriftbooks: tbR, bwb: bwbR, combined: combinedR })
+    setResultsBySource(await runOptimizeBatch(itemsToOpt, byIsbn))
   }
 
   async function findDeals() {
@@ -604,15 +587,26 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
               })}
             </div>
 
-            {missingItems.length > 0 && (
-              <div className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                <span>
-                  {missingItems.length === 1 ? '1 book is' : `${missingItems.length} books are`} missing from this total.{' '}
-                  <a href="#missing-books" className="underline font-medium hover:text-amber-900">See below</a>
-                </span>
-              </div>
-            )}
+            {(() => {
+              // Per-source truth from the optimizer when available (a book can be
+              // findable overall but unavailable from the active source).
+              const missingCount = activeResult?.unassigned
+                ? activeResult.unassigned.length
+                : missingItems.length
+              return missingCount > 0 && (
+                <div className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    {missingCount === 1 ? '1 book is' : `${missingCount} books are`} missing from this total.
+                    {missingItems.length > 0 && (
+                      <>
+                        {' '}<a href="#missing-books" className="underline font-medium hover:text-amber-900">See below</a>
+                      </>
+                    )}
+                  </span>
+                </div>
+              )
+            })()}
 
             {activeResult && activeResult.groups.length > 0 ? (
               <>
@@ -708,7 +702,7 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
                         size="sm"
                         variant="outline"
                         className="w-full mt-1 h-8 text-sm"
-                        onClick={() => openGroup(group.assignments.map((a) => a.listing.url))}
+                        onClick={() => openGroup([...new Set(group.assignments.flatMap((a) => a.listings.map((l) => l.url)))])}
                       >
                         <ExternalLink className="h-3 w-3 mr-1.5" />
                         Open {group.assignments.length} listing{group.assignments.length !== 1 ? 's' : ''} on {group.seller_name}

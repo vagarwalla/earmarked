@@ -1,14 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server'
-import type { CartItem, Listing } from '@/lib/types'
-import { optimize } from '@/lib/optimizer'
+import { runBatchOptimize } from '@/lib/optimizer/batch'
+import { validateOptimizeRequest } from '@/lib/optimizer/validate'
 
 export async function POST(req: NextRequest) {
-  const { items, listingsByIsbn }: {
-    items: CartItem[]
-    listingsByIsbn: Record<string, Listing[]>
-  } = await req.json()
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return NextResponse.json({ error: 'request body must be valid JSON' }, { status: 400 })
+  }
 
-  const map = new Map<string, Listing[]>(Object.entries(listingsByIsbn))
-  const result = optimize(items, map)
-  return NextResponse.json(result)
+  const validated = validateOptimizeRequest(body)
+  if (!validated.ok) {
+    return NextResponse.json({ error: validated.error }, { status: 400 })
+  }
+
+  // One request optimizes every source view: listings are qualified once and
+  // partitioned server-side instead of the client uploading the pool five times.
+  const results = runBatchOptimize(validated.items, validated.listingsByIsbn)
+  return NextResponse.json(results)
 }

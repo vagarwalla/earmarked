@@ -1,16 +1,22 @@
-import type { OptimizerStrategy, BookOption, Assignment, Listing } from '../shared'
+import type { OptimizerStrategy, BookOption, Assignment, SellerOffer } from '../shared'
 import { CostTracker } from '../shared'
+import type { Rand } from '../rng'
+import { mulberry32, seedFromBookOptions } from '../rng'
 import { solveGreedy } from './greedy'
 
 const MAX_CANDIDATES_PER_BOOK = 10
 const NUM_STARTS = 5
 const ILS_PERTURB_MIN = 2
 const ILS_PERTURB_MAX = 4
+// Wall-clock backstop only (serverless safety) — the primary budget is
+// iteration-based so results are deterministic for a given input.
+const HARD_DEADLINE_MS = 1000
 
-function timeBudgetMs(n: number): number {
-  if (n <= 10) return 50
-  if (n <= 20) return 200
-  return 500
+/** ILS iterations per start. Iteration cost grows with n, so the count shrinks. */
+function ilsIterations(n: number): number {
+  if (n <= 10) return 40
+  if (n <= 20) return 25
+  return 12
 }
 
 /**
@@ -20,109 +26,107 @@ function timeBudgetMs(n: number): number {
 function localSearchImprove(
   bookOptions: BookOption[],
   assignment: Assignment,
-  candidatesByBook: Array<Map<string, Listing>>,
+  candidatesByBook: Array<Map<string, SellerOffer>>,
+  hardDeadline: number = Infinity,
+  twoSwap = true,
 ): { assignment: Assignment; cost: number } {
   const tracker = CostTracker.fromAssignment(bookOptions, assignment)
 
   let improved = true
-  while (improved) {
+  while (improved && Date.now() < hardDeadline) {
     improved = false
 
     for (let i = 0; i < bookOptions.length; i++) {
       const opt = bookOptions[i]
-      const currentListing = assignment.get(opt.item.id)
-      if (!currentListing) continue
-      const qty = opt.item.quantity
+      const currentOffer = assignment.get(opt.item.id)
+      if (!currentOffer) continue
 
-      let bestListing = currentListing
+      let bestOffer = currentOffer
       let bestCost = tracker.totalCost
 
-      for (const [sellerId, listing] of candidatesByBook[i]) {
-        if (sellerId === currentListing.seller_id) continue
+      for (const [sellerId, offer] of candidatesByBook[i]) {
+        if (sellerId === currentOffer.seller_id) continue
 
-        tracker.removeBook(currentListing.seller_id, currentListing.price, qty)
-        tracker.addBook(sellerId, listing.price, qty, listing.shipping_base, listing.shipping_per_additional)
+        tracker.removeOffer(currentOffer)
+        tracker.addOffer(offer)
 
         if (tracker.totalCost < bestCost - 0.001) {
           bestCost = tracker.totalCost
-          bestListing = listing
+          bestOffer = offer
         }
 
-        tracker.removeBook(sellerId, listing.price, qty)
-        tracker.addBook(currentListing.seller_id, currentListing.price, qty, currentListing.shipping_base, currentListing.shipping_per_additional)
+        tracker.removeOffer(offer)
+        tracker.addOffer(currentOffer)
       }
 
-      if (bestListing !== currentListing) {
-        tracker.removeBook(currentListing.seller_id, currentListing.price, qty)
-        tracker.addBook(bestListing.seller_id, bestListing.price, qty, bestListing.shipping_base, bestListing.shipping_per_additional)
-        assignment.set(opt.item.id, bestListing)
+      if (bestOffer !== currentOffer) {
+        tracker.removeOffer(currentOffer)
+        tracker.addOffer(bestOffer)
+        assignment.set(opt.item.id, bestOffer)
         improved = true
       }
     }
   }
 
   // 2-swap pass: try swapping sellers for all pairs of assigned books
-  if (bookOptions.length <= 30) {
+  if (twoSwap && bookOptions.length <= 30) {
     let twoSwapImproved = true
-    while (twoSwapImproved) {
+    while (twoSwapImproved && Date.now() < hardDeadline) {
       twoSwapImproved = false
 
       for (let i = 0; i < bookOptions.length; i++) {
         const optI = bookOptions[i]
-        const listingI = assignment.get(optI.item.id)
-        if (!listingI) continue
-        const qtyI = optI.item.quantity
+        const offerI = assignment.get(optI.item.id)
+        if (!offerI) continue
 
         for (let j = i + 1; j < bookOptions.length; j++) {
           const optJ = bookOptions[j]
-          const listingJ = assignment.get(optJ.item.id)
-          if (!listingJ) continue
-          if (listingI.seller_id === listingJ.seller_id) continue
-          const qtyJ = optJ.item.quantity
+          const offerJ = assignment.get(optJ.item.id)
+          if (!offerJ) continue
+          if (offerI.seller_id === offerJ.seller_id) continue
 
-          // Try: book i goes to each of j's seller candidates, book j goes to each of i's seller candidates
+          // Try: book i goes to each of i's seller candidates, book j goes to each of j's
           const baseCost = tracker.totalCost
           let bestCostDelta = 0
-          let bestListingI: Listing | null = null
-          let bestListingJ: Listing | null = null
+          let bestOfferI: SellerOffer | null = null
+          let bestOfferJ: SellerOffer | null = null
 
           // Remove both from current sellers
-          tracker.removeBook(listingI.seller_id, listingI.price, qtyI)
-          tracker.removeBook(listingJ.seller_id, listingJ.price, qtyJ)
-          const costWithout = tracker.totalCost
+          tracker.removeOffer(offerI)
+          tracker.removeOffer(offerJ)
 
           for (const [sidI, candI] of candidatesByBook[i]) {
             for (const [sidJ, candJ] of candidatesByBook[j]) {
               // Skip if this is the same as current assignment
-              if (sidI === listingI.seller_id && sidJ === listingJ.seller_id) continue
+              if (sidI === offerI.seller_id && sidJ === offerJ.seller_id) continue
 
-              tracker.addBook(sidI, candI.price, qtyI, candI.shipping_base, candI.shipping_per_additional)
-              tracker.addBook(sidJ, candJ.price, qtyJ, candJ.shipping_base, candJ.shipping_per_additional)
+              tracker.addOffer(candI)
+              tracker.addOffer(candJ)
 
               const delta = tracker.totalCost - baseCost
               if (delta < bestCostDelta - 0.001) {
                 bestCostDelta = delta
-                bestListingI = candI
-                bestListingJ = candJ
+                bestOfferI = candI
+                bestOfferJ = candJ
               }
 
-              tracker.removeBook(sidI, candI.price, qtyI)
-              tracker.removeBook(sidJ, candJ.price, qtyJ)
+              tracker.removeOffer(candI)
+              tracker.removeOffer(candJ)
             }
           }
 
           // Restore original
-          tracker.addBook(listingI.seller_id, listingI.price, qtyI, listingI.shipping_base, listingI.shipping_per_additional)
-          tracker.addBook(listingJ.seller_id, listingJ.price, qtyJ, listingJ.shipping_base, listingJ.shipping_per_additional)
+          tracker.addOffer(offerI)
+          tracker.addOffer(offerJ)
 
-          if (bestListingI && bestListingJ) {
+          if (bestOfferI && bestOfferJ) {
             // Commit the 2-swap
-            tracker.removeBook(listingI.seller_id, listingI.price, qtyI)
-            tracker.removeBook(listingJ.seller_id, listingJ.price, qtyJ)
-            tracker.addBook(bestListingI.seller_id, bestListingI.price, qtyI, bestListingI.shipping_base, bestListingI.shipping_per_additional)
-            tracker.addBook(bestListingJ.seller_id, bestListingJ.price, qtyJ, bestListingJ.shipping_base, bestListingJ.shipping_per_additional)
-            assignment.set(optI.item.id, bestListingI)
-            assignment.set(optJ.item.id, bestListingJ)
+            tracker.removeOffer(offerI)
+            tracker.removeOffer(offerJ)
+            tracker.addOffer(bestOfferI)
+            tracker.addOffer(bestOfferJ)
+            assignment.set(optI.item.id, bestOfferI)
+            assignment.set(optJ.item.id, bestOfferJ)
             twoSwapImproved = true
           }
         }
@@ -139,8 +143,9 @@ function localSearchImprove(
 function perturb(
   bookOptions: BookOption[],
   assignment: Assignment,
-  candidatesByBook: Array<Map<string, Listing>>,
+  candidatesByBook: Array<Map<string, SellerOffer>>,
   numPerturb: number,
+  rand: Rand,
 ): Assignment {
   const result = new Map(assignment)
   const indices = bookOptions
@@ -150,7 +155,7 @@ function perturb(
   const count = Math.min(numPerturb, indices.length)
   // Fisher-Yates partial shuffle
   for (let k = 0; k < count; k++) {
-    const j = k + Math.floor(Math.random() * (indices.length - k))
+    const j = k + Math.floor(rand() * (indices.length - k))
     ;[indices[k], indices[j]] = [indices[j], indices[k]]
   }
 
@@ -160,8 +165,8 @@ function perturb(
     const currentSeller = result.get(opt.item.id)?.seller_id
     const candidates = Array.from(candidatesByBook[i].entries()).filter(([sid]) => sid !== currentSeller)
     if (candidates.length > 0) {
-      const [, listing] = candidates[Math.floor(Math.random() * candidates.length)]
-      result.set(opt.item.id, listing)
+      const [, offer] = candidates[Math.floor(rand() * candidates.length)]
+      result.set(opt.item.id, offer)
     }
   }
 
@@ -169,64 +174,85 @@ function perturb(
 }
 
 /**
- * Local search strategy with multi-start and Iterated Local Search (ILS).
+ * Local search with multi-start and Iterated Local Search (ILS).
  * Starts from multiple greedy solutions (one deterministic, rest randomized),
- * applies single-swap local search, then perturbs and re-optimizes within
- * a time budget.
+ * applies single-swap local search, then perturbs and re-optimizes for a
+ * fixed number of iterations per start. All randomness comes from a PRNG
+ * seeded by the input, so identical inputs give identical results; a
+ * wall-clock cap exists only as a serverless backstop.
  */
-export const localSearchStrategy: OptimizerStrategy = {
-  name: 'local-search',
+export function solveLocalSearch(bookOptions: BookOption[], seed?: number): Assignment {
+  if (bookOptions.length === 0) return new Map()
 
-  solve(bookOptions: BookOption[]): Assignment {
-    if (bookOptions.length === 0) return new Map()
+  const rand = mulberry32(seed ?? seedFromBookOptions(bookOptions))
 
-    // Pre-compute cheapest listing per seller for each book
-    const candidatesByBook: Array<Map<string, Listing>> = bookOptions.map((opt) => {
-      const bySellerCheapest = new Map<string, Listing>()
-      for (const l of opt.listings) {
-        if (!bySellerCheapest.has(l.seller_id)) {
-          bySellerCheapest.set(l.seller_id, l)
-          if (bySellerCheapest.size >= MAX_CANDIDATES_PER_BOOK) break
-        }
-      }
-      return bySellerCheapest
-    })
+  // Top offers per book (offers are sorted by total_price + shipping_base)
+  const candidatesByBook: Array<Map<string, SellerOffer>> = bookOptions.map((opt) => {
+    const top = new Map<string, SellerOffer>()
+    for (const [sellerId, offer] of opt.offers) {
+      top.set(sellerId, offer)
+      if (top.size >= MAX_CANDIDATES_PER_BOOK) break
+    }
+    return top
+  })
 
-    let bestAssignment: Assignment = new Map()
-    let bestCost = Infinity
-    const deadline = Date.now() + timeBudgetMs(bookOptions.length)
+  let bestAssignment: Assignment = new Map()
+  let bestCost = Infinity
+  const hardDeadline = Date.now() + HARD_DEADLINE_MS
+  const iterations = ilsIterations(bookOptions.length)
+  // The full 2-swap pass is quadratic in books × candidates; beyond a dozen
+  // books it dominates runtime, so ILS iterations run single-swap only and
+  // one 2-swap polish is applied to the winner at the end.
+  const twoSwapInIls = bookOptions.length <= 12
 
-    for (let start = 0; start < NUM_STARTS; start++) {
-      // First start is deterministic greedy, rest are randomized
-      const initial = solveGreedy(bookOptions, start === 0 ? 0 : 0.3)
-      let { assignment: current, cost: currentCost } = localSearchImprove(
-        bookOptions, initial, candidatesByBook,
+  for (let start = 0; start < NUM_STARTS; start++) {
+    // First start is deterministic greedy, rest are randomized
+    const initial = solveGreedy(bookOptions, start === 0 ? 0 : 0.3, rand)
+    let { assignment: current, cost: currentCost } = localSearchImprove(
+      bookOptions, initial, candidatesByBook, hardDeadline, twoSwapInIls,
+    )
+
+    if (currentCost < bestCost) {
+      bestCost = currentCost
+      bestAssignment = new Map(current)
+    }
+
+    // ILS: perturb and re-optimize, a fixed iteration count per start
+    for (let iter = 0; iter < iterations && Date.now() < hardDeadline; iter++) {
+      const numPerturb = ILS_PERTURB_MIN + Math.floor(rand() * (ILS_PERTURB_MAX - ILS_PERTURB_MIN + 1))
+      const perturbed = perturb(bookOptions, current, candidatesByBook, numPerturb, rand)
+      const { assignment: candidate, cost: candidateCost } = localSearchImprove(
+        bookOptions, perturbed, candidatesByBook, hardDeadline, twoSwapInIls,
       )
 
-      if (currentCost < bestCost) {
-        bestCost = currentCost
-        bestAssignment = new Map(current)
-      }
-
-      // ILS: perturb and re-optimize within time budget
-      while (Date.now() < deadline) {
-        const numPerturb = ILS_PERTURB_MIN + Math.floor(Math.random() * (ILS_PERTURB_MAX - ILS_PERTURB_MIN + 1))
-        const perturbed = perturb(bookOptions, current, candidatesByBook, numPerturb)
-        const { assignment: candidate, cost: candidateCost } = localSearchImprove(
-          bookOptions, perturbed, candidatesByBook,
-        )
-
-        if (candidateCost < currentCost - 0.001) {
-          current = candidate
-          currentCost = candidateCost
-          if (currentCost < bestCost) {
-            bestCost = currentCost
-            bestAssignment = new Map(current)
-          }
+      if (candidateCost < currentCost - 0.001) {
+        current = candidate
+        currentCost = candidateCost
+        if (currentCost < bestCost) {
+          bestCost = currentCost
+          bestAssignment = new Map(current)
         }
       }
     }
+  }
 
-    return bestAssignment
+  // Final 2-swap polish for mid-size carts that skipped it during ILS
+  if (!twoSwapInIls) {
+    const polished = localSearchImprove(
+      bookOptions, new Map(bestAssignment), candidatesByBook, hardDeadline, true,
+    )
+    if (polished.cost < bestCost) {
+      bestCost = polished.cost
+      bestAssignment = polished.assignment
+    }
+  }
+
+  return bestAssignment
+}
+
+export const localSearchStrategy: OptimizerStrategy = {
+  name: 'local-search',
+  solve(bookOptions: BookOption[]): Assignment {
+    return solveLocalSearch(bookOptions)
   },
 }
