@@ -1,5 +1,15 @@
 # Optimizer Review & Improvement Plan
 
+**Status: implemented.** All six workstreams landed on this branch as one
+commit each (A: boundary correctness, B: determinism, C: exact-search
+hardening, D: batch API + validation, E: stock-aware quantity model,
+F: property tests + benchmark). Acceptance criteria verified: the
+consolidation cart reaches $41.90, the 12×6 adversarial cart completes in
+bounded time under the node cap, optimize() matches a no-cap brute-force
+oracle on random small instances, results are byte-identical across runs,
+and `npm run bench:optimizer` shows every scenario under the 250ms
+envelope (worst 78ms) after benchmark-driven 2-swap tuning.
+
 **Revision 2.**
 Revision log:
 - *Rev 1*: findings empirically verified with probe code; withdrew rev 0's
