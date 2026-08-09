@@ -18,13 +18,9 @@ const EXACT_CANDIDATES_PER_BOOK = 6
 
 function exactSearchLogNodes(bookOptions: BookOption[]): number {
   let logNodes = 0
-  for (const { listings } of bookOptions) {
-    const sellers = new Set<string>()
-    for (const l of listings) {
-      sellers.add(l.seller_id)
-      if (sellers.size >= EXACT_CANDIDATES_PER_BOOK) break
-    }
-    if (sellers.size > 1) logNodes += Math.log(sellers.size)
+  for (const { offers } of bookOptions) {
+    const sellers = Math.min(offers.size, EXACT_CANDIDATES_PER_BOOK)
+    if (sellers > 1) logNodes += Math.log(sellers)
   }
   return logNodes
 }
@@ -68,13 +64,15 @@ export function optimizeBookOptions(
     .filter(({ item }) => !assignment.has(item.id))
     .map(({ item }) => item)
 
-  // Naive baseline: each book bought as its own order at the cheapest total cost.
-  // listings[0] is cheapest by total cost after buildBookOptions sorts by price + shipping_base.
-  // One order per book: qty units share a single shipping charge.
-  const naive_total = bookOptions.reduce((sum, { item, listings }) => {
-    if (listings.length === 0) return sum
-    const l = listings[0]
-    return sum + l.price * item.quantity + shippingCost(item.quantity, l.shipping_base, l.shipping_per_additional)
+  // Naive baseline: each book bought as its own order from the seller with
+  // the cheapest fulfillable offer (qty units share one shipping charge).
+  const naive_total = bookOptions.reduce((sum, { offers }) => {
+    let cheapest = Infinity
+    for (const o of offers.values()) {
+      const cost = o.total_price + shippingCost(o.listings.length, o.shipping_base, o.shipping_per_additional)
+      if (cost < cheapest) cheapest = cost
+    }
+    return cheapest === Infinity ? sum : sum + cheapest
   }, 0)
 
   return {

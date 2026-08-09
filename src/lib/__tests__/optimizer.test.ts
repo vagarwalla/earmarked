@@ -224,15 +224,45 @@ describe('optimize', () => {
     expect(result.groups[0].seller_id).toBe('B')
   })
 
-  it('respects quantity > 1 in subtotal and shipping', () => {
+  it('respects quantity > 1 in subtotal and shipping (retailer with stock)', () => {
     const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1', quantity: 3 })
-    const listing = makeListing({ seller_id: 'A', isbn: 'isbn-1', price: 5.00 })
+    // Retailers (thriftbooks/betterworldbooks) hold stock: one listing supplies any qty
+    const listing = makeListing({ seller_id: 'thriftbooks', isbn: 'isbn-1', price: 5.00 })
 
     const result = optimize([item], new Map([['isbn-1', [listing]]]))
 
     expect(result.groups[0].books_subtotal).toBe(15.00) // 5 × 3
     // shipping: 3.99 + 2 × 1.99 = 7.97
     expect(result.groups[0].shipping).toBeCloseTo(7.97)
+  })
+
+  it('quantity > 1 from a marketplace seller uses that many distinct copies', () => {
+    const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1', quantity: 2 })
+    const listings = new Map([
+      ['isbn-1', [
+        makeListing({ listing_id: 'copy-1', seller_id: 'A', isbn: 'isbn-1', price: 5.00 }),
+        makeListing({ listing_id: 'copy-2', seller_id: 'A', isbn: 'isbn-1', price: 7.00 }),
+        makeListing({ listing_id: 'copy-3', seller_id: 'A', isbn: 'isbn-1', price: 9.00 }),
+      ]],
+    ])
+    const result = optimize([item], listings)
+    expect(result.groups).toHaveLength(1)
+    const assignment = result.groups[0].assignments[0]
+    // Two cheapest distinct copies: $5 + $7
+    expect(assignment.subtotal).toBe(12.00)
+    expect(assignment.listings.map((l) => l.listing_id)).toEqual(['copy-1', 'copy-2'])
+  })
+
+  it('a marketplace seller with too few copies cannot fulfill quantity > 1', () => {
+    // Seller A has one copy; item needs 2 → unassigned (a single used
+    // listing is a single physical book)
+    const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1', quantity: 2 })
+    const listings = new Map([
+      ['isbn-1', [makeListing({ seller_id: 'A', isbn: 'isbn-1', price: 5.00 })]],
+    ])
+    const result = optimize([item], listings)
+    expect(result.groups).toHaveLength(0)
+    expect(result.unassigned.map((i) => i.id)).toEqual(['i1'])
   })
 
   it('produces no group for a book with no isbn', () => {
@@ -304,7 +334,7 @@ describe('optimize', () => {
 
   it('naive_total treats quantity > 1 as one order, not shipping per unit', () => {
     const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1', quantity: 3 })
-    const listing = makeListing({ seller_id: 'A', isbn: 'isbn-1', price: 5.00 })
+    const listing = makeListing({ seller_id: 'thriftbooks', isbn: 'isbn-1', price: 5.00 })
     const result = optimize([item], new Map([['isbn-1', [listing]]]))
     // One naive order: 3 × $5 + (3.99 + 2 × 1.99) = 15 + 7.97 = 22.97
     expect(result.naive_total).toBeCloseTo(22.97)

@@ -23,17 +23,79 @@ export function listingQualifies(
   )
 }
 
-export type BookOption = {
-  item: CartItem
-  listings: Listing[] // filtered by condition + price, sorted cheapest first
+/**
+ * A seller's concrete offer to supply an item's full quantity:
+ * the exact unit listings to buy and their summed price.
+ */
+export type SellerOffer = {
+  seller_id: string
+  seller_name: string
+  /** One entry per unit; retailers repeat their stocked listing. */
+  listings: Listing[]
+  total_price: number
+  shipping_base: number
+  shipping_per_additional: number
 }
 
-// item_id → chosen Listing
-export type Assignment = Map<string, Listing>
+export type BookOption = {
+  item: CartItem
+  /** All qualifying listings, sorted by unit price + shipping_base. */
+  listings: Listing[]
+  /** Fulfillable offers per seller, sorted by total_price + shipping_base. */
+  offers: Map<string, SellerOffer>
+}
+
+// item_id → chosen SellerOffer
+export type Assignment = Map<string, SellerOffer>
 
 export interface OptimizerStrategy {
   name: string
   solve(bookOptions: BookOption[]): Assignment
+}
+
+// Direct retailers hold stock: one listing can supply any quantity.
+// Marketplace (AbeBooks) listings are single copies.
+const RETAILER_SELLER_IDS = new Set(['thriftbooks', 'betterworldbooks'])
+
+/**
+ * Build per-seller offers for an item. A marketplace seller must have
+ * `quantity` distinct listings to qualify (its offer is the n cheapest);
+ * a retailer fulfills any quantity from its cheapest listing.
+ */
+export function buildSellerOffers(item: CartItem, qualified: Listing[]): Map<string, SellerOffer> {
+  const qty = item.quantity
+  const bySeller = new Map<string, Listing[]>()
+  for (const l of qualified) {
+    const arr = bySeller.get(l.seller_id)
+    if (arr) arr.push(l)
+    else bySeller.set(l.seller_id, [l])
+  }
+  const offers: Array<[string, SellerOffer]> = []
+  for (const [sellerId, ls] of bySeller) {
+    let units: Listing[]
+    if (RETAILER_SELLER_IDS.has(sellerId)) {
+      units = new Array(qty).fill(ls[0])
+    } else {
+      if (ls.length < qty) continue // seller can't supply the full quantity
+      units = ls.slice(0, qty) // n cheapest distinct copies
+    }
+    offers.push([sellerId, {
+      seller_id: sellerId,
+      seller_name: ls[0].seller_name,
+      listings: units,
+      total_price: units.reduce((s, l) => s + l.price, 0),
+      shipping_base: ls[0].shipping_base,
+      shipping_per_additional: ls[0].shipping_per_additional,
+    }])
+  }
+  offers.sort((a, b) =>
+    (a[1].total_price + a[1].shipping_base) - (b[1].total_price + b[1].shipping_base))
+  return new Map(offers)
+}
+
+/** Construct a BookOption from an item and its qualified, sorted listings. */
+export function makeBookOption(item: CartItem, qualified: Listing[]): BookOption {
+  return { item, listings: qualified, offers: buildSellerOffers(item, qualified) }
 }
 
 // AbeBooks standard US shipping
@@ -43,26 +105,26 @@ export function shippingCost(n: number, base = 3.99, perAdditional = 1.99): numb
 }
 
 export function computeTotalCost(bookOptions: BookOption[], assignment: Assignment): number {
-  const sellerQty = new Map<string, number>()
+  const sellerUnits = new Map<string, number>()
   const sellerBookCost = new Map<string, number>()
   const sellerShippingBase = new Map<string, number>()
   const sellerShippingPerAdditional = new Map<string, number>()
   for (const { item } of bookOptions) {
-    const l = assignment.get(item.id)
-    if (!l) continue
-    sellerQty.set(l.seller_id, (sellerQty.get(l.seller_id) ?? 0) + item.quantity)
-    sellerBookCost.set(l.seller_id, (sellerBookCost.get(l.seller_id) ?? 0) + l.price * item.quantity)
-    if (!sellerShippingBase.has(l.seller_id)) {
-      sellerShippingBase.set(l.seller_id, l.shipping_base)
-      sellerShippingPerAdditional.set(l.seller_id, l.shipping_per_additional)
+    const offer = assignment.get(item.id)
+    if (!offer) continue
+    sellerUnits.set(offer.seller_id, (sellerUnits.get(offer.seller_id) ?? 0) + offer.listings.length)
+    sellerBookCost.set(offer.seller_id, (sellerBookCost.get(offer.seller_id) ?? 0) + offer.total_price)
+    if (!sellerShippingBase.has(offer.seller_id)) {
+      sellerShippingBase.set(offer.seller_id, offer.shipping_base)
+      sellerShippingPerAdditional.set(offer.seller_id, offer.shipping_per_additional)
     }
   }
   let cost = 0
   for (const [sid, bookCost] of sellerBookCost) {
     cost += bookCost + shippingCost(
-      sellerQty.get(sid)!,
-      sellerShippingBase.get(sid) ?? 3.99,
-      sellerShippingPerAdditional.get(sid) ?? 1.99,
+      sellerUnits.get(sid)!,
+      sellerShippingBase.get(sid)!,
+      sellerShippingPerAdditional.get(sid)!,
     )
   }
   return cost
@@ -87,9 +149,9 @@ export class CostTracker {
   static fromAssignment(bookOptions: BookOption[], assignment: Assignment): CostTracker {
     const t = new CostTracker()
     for (const { item } of bookOptions) {
-      const l = assignment.get(item.id)
-      if (!l) continue
-      t.addBook(l.seller_id, l.price, item.quantity, l.shipping_base, l.shipping_per_additional)
+      const offer = assignment.get(item.id)
+      if (!offer) continue
+      t.addOffer(offer)
     }
     return t
   }
@@ -98,26 +160,35 @@ export class CostTracker {
     return s.bookCost + shippingCost(s.qty, s.shippingBase, s.perAdditional)
   }
 
-  addBook(sellerId: string, price: number, qty: number, shippingBase: number, perAdditional: number): void {
+  addOffer(offer: SellerOffer): void {
+    this.addBook(offer.seller_id, offer.total_price, offer.listings.length, offer.shipping_base, offer.shipping_per_additional)
+  }
+
+  removeOffer(offer: SellerOffer): void {
+    this.removeBook(offer.seller_id, offer.total_price, offer.listings.length)
+  }
+
+  /** `cost` is the total book cost being added for `units` units. */
+  addBook(sellerId: string, cost: number, units: number, shippingBase: number, perAdditional: number): void {
     const s = this.sellers.get(sellerId)
     if (s) {
       this.totalCost -= this.sellerCost(s)
-      s.qty += qty
-      s.bookCost += price * qty
+      s.qty += units
+      s.bookCost += cost
       this.totalCost += this.sellerCost(s)
     } else {
-      const ns: SellerState = { qty, bookCost: price * qty, shippingBase, perAdditional }
+      const ns: SellerState = { qty: units, bookCost: cost, shippingBase, perAdditional }
       this.sellers.set(sellerId, ns)
       this.totalCost += this.sellerCost(ns)
     }
   }
 
-  removeBook(sellerId: string, price: number, qty: number): void {
+  removeBook(sellerId: string, cost: number, units: number): void {
     const s = this.sellers.get(sellerId)
     if (!s) return
     this.totalCost -= this.sellerCost(s)
-    s.qty -= qty
-    s.bookCost -= price * qty
+    s.qty -= units
+    s.bookCost -= cost
     if (s.qty <= 0) {
       this.sellers.delete(sellerId)
     } else {
@@ -140,38 +211,44 @@ export function buildBookOptions(
     const qualified = rawListings.filter((l) => listingQualifies(item, l))
     // Sort by total standalone cost (price + shipping_base) so candidate selection
     // in all strategies considers actual cost, not just book price.
-    return { item, listings: qualified.sort((a, b) => (a.price + a.shipping_base) - (b.price + b.shipping_base)) }
+    qualified.sort((a, b) => (a.price + a.shipping_base) - (b.price + b.shipping_base))
+    return makeBookOption(item, qualified)
   })
 }
 
 export function buildGroups(bookOptions: BookOption[], assignment: Assignment): SellerGroup[] {
+  const optionById = new Map(bookOptions.map((b) => [b.item.id, b]))
   const groupMap = new Map<string, SellerGroup>()
-  for (const [itemId, listing] of assignment) {
-    const opt = bookOptions.find((b) => b.item.id === itemId)!
-    if (!groupMap.has(listing.seller_id)) {
-      groupMap.set(listing.seller_id, {
-        seller_id: listing.seller_id,
-        seller_name: listing.seller_name,
+  for (const [itemId, offer] of assignment) {
+    const opt = optionById.get(itemId)!
+    if (!groupMap.has(offer.seller_id)) {
+      groupMap.set(offer.seller_id, {
+        seller_id: offer.seller_id,
+        seller_name: offer.seller_name,
         assignments: [],
         books_subtotal: 0,
         shipping: 0,
         group_total: 0,
       })
     }
-    const group = groupMap.get(listing.seller_id)!
-    const qty = opt.item.quantity
-    group.assignments.push({ item: opt.item, listing, quantity: qty, subtotal: listing.price * qty })
-    group.books_subtotal += listing.price * qty
+    const group = groupMap.get(offer.seller_id)!
+    group.assignments.push({
+      item: opt.item,
+      listing: offer.listings[0],
+      listings: offer.listings,
+      quantity: opt.item.quantity,
+      subtotal: offer.total_price,
+    })
+    group.books_subtotal += offer.total_price
   }
 
+  // Shipping derives from the same per-seller unit count and params the
+  // strategies' cost model uses (offer params; a seller's params are uniform).
   const groups: SellerGroup[] = []
   for (const group of groupMap.values()) {
-    const totalQty = group.assignments.reduce((s, a) => s + a.quantity, 0)
-    group.shipping = shippingCost(
-      totalQty,
-      group.assignments[0]?.listing.shipping_base ?? 3.99,
-      group.assignments[0]?.listing.shipping_per_additional ?? 1.99,
-    )
+    const totalUnits = group.assignments.reduce((s, a) => s + a.listings.length, 0)
+    const first = group.assignments[0].listing
+    group.shipping = shippingCost(totalUnits, first.shipping_base, first.shipping_per_additional)
     group.group_total = group.books_subtotal + group.shipping
     groups.push(group)
   }

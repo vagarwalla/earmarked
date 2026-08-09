@@ -702,7 +702,7 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
                         size="sm"
                         variant="outline"
                         className="w-full mt-1 h-8 text-sm"
-                        onClick={() => openGroup(group.assignments.map((a) => a.listing.url))}
+                        onClick={() => openGroup([...new Set(group.assignments.flatMap((a) => a.listings.map((l) => l.url)))])}
                       >
                         <ExternalLink className="h-3 w-3 mr-1.5" />
                         Open {group.assignments.length} listing{group.assignments.length !== 1 ? 's' : ''} on {group.seller_name}

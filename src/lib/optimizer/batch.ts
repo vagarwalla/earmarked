@@ -1,6 +1,6 @@
 import type { CartItem, Listing, OptimizationResult } from '../types'
 import type { BookOption } from './shared'
-import { buildBookOptions } from './shared'
+import { buildBookOptions, makeBookOption } from './shared'
 import { optimizeBookOptions } from './index'
 
 export type OptimizeSource = 'abe' | 'thriftbooks' | 'bwb'
@@ -22,11 +22,10 @@ export function getSellerSource(sellerId: string): OptimizeSource {
 }
 
 function filterBySource(bookOptions: BookOption[], src: OptimizeSource): BookOption[] {
-  return bookOptions.map(({ item, listings }) => ({
-    item,
-    // Filtering preserves the cheapest-first sort
-    listings: listings.filter((l) => getSellerSource(l.seller_id) === src),
-  }))
+  // Filtering preserves the cheapest-first sort; offers are rebuilt from the
+  // narrowed listing set (qualification itself is not re-run).
+  return bookOptions.map(({ item, listings }) =>
+    makeBookOption(item, listings.filter((l) => getSellerSource(l.seller_id) === src)))
 }
 
 /**

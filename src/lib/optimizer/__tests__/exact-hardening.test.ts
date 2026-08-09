@@ -28,13 +28,9 @@ function makeListing(sellerId: string, isbn: string, price: number, perAdd = 1.9
   }
 }
 
-/** Exhaustive optimum over ALL seller choices (no candidate caps). */
+/** Exhaustive optimum over ALL seller offers (no candidate caps). */
 function bruteForceOptimum(bookOptions: BookOption[]): number {
-  const perBook = bookOptions.map((opt) => {
-    const bySeller = new Map<string, Listing>()
-    for (const l of opt.listings) if (!bySeller.has(l.seller_id)) bySeller.set(l.seller_id, l)
-    return Array.from(bySeller.values())
-  })
+  const perBook = bookOptions.map((opt) => Array.from(opt.offers.values()))
   let best = Infinity
   const assignment: Assignment = new Map()
   function recurse(i: number): void {
@@ -43,8 +39,8 @@ function bruteForceOptimum(bookOptions: BookOption[]): number {
       return
     }
     if (perBook[i].length === 0) { recurse(i + 1); return }
-    for (const l of perBook[i]) {
-      assignment.set(bookOptions[i].item.id, l)
+    for (const offer of perBook[i]) {
+      assignment.set(bookOptions[i].item.id, offer)
       recurse(i + 1)
       assignment.delete(bookOptions[i].item.id)
     }

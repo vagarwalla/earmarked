@@ -48,8 +48,8 @@ describe('optimizer determinism', () => {
     const a = localSearchStrategy.solve(buildBookOptions(items, listingsByIsbn))
     const b = localSearchStrategy.solve(buildBookOptions(items, listingsByIsbn))
     expect(a.size).toBe(b.size)
-    for (const [itemId, listing] of a) {
-      expect(b.get(itemId)?.listing_id).toBe(listing.listing_id)
+    for (const [itemId, offer] of a) {
+      expect(b.get(itemId)?.listings.map((l) => l.listing_id)).toEqual(offer.listings.map((l) => l.listing_id))
     }
   })
 
