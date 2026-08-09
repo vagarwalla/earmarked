@@ -374,51 +374,53 @@ function EditionCard({
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(group.key) } }}
       role="button"
       tabIndex={0}
-      className={`relative rounded-lg p-2 text-left transition-all border-2 cursor-pointer ${isPrimary ? 'border-amber-500 bg-amber-50' : isSelected ? 'border-primary bg-primary/5' : 'border-transparent hover:border-border'}`}
+      className={`relative rounded-lg p-1.5 text-left transition-all border-2 cursor-pointer ${isPrimary ? 'border-amber-500 bg-amber-50' : isSelected ? 'border-primary bg-primary/5' : 'border-transparent hover:border-border'}`}
     >
       {isSelected && (
-        <div className={`absolute top-2 right-2 rounded-full px-1.5 py-0.5 z-10 flex items-center gap-0.5 text-xs font-semibold leading-none ${isPrimary ? 'bg-amber-500 text-white' : 'bg-primary text-primary-foreground'}`}>
+        <div className={`absolute top-1 right-1 rounded-full px-1.5 py-0.5 z-10 flex items-center gap-0.5 text-xs font-semibold leading-none pointer-events-none ${isPrimary ? 'bg-amber-500 text-white' : 'bg-primary text-primary-foreground'}`}>
           {isPrimary && <Star className="h-2.5 w-2.5 fill-white" />}
           {isPrimary ? 'Top' : `#${selIdx + 1}`}
         </div>
       )}
       {isFirstEdition && !isSelected && (
-        <div className="absolute top-2 right-2 bg-amber-400 rounded-full p-1 z-10" title="First edition">
+        <div className="absolute top-1 right-1 bg-amber-400 rounded-full p-1 z-10 pointer-events-none" title="First edition">
           <Star className="h-3 w-3 text-white fill-white" />
         </div>
       )}
-      <div className="aspect-[2/3] bg-muted rounded overflow-hidden mb-3 flex items-center justify-center min-h-[88px]">
+      <div className="aspect-[2/3] bg-muted rounded overflow-hidden mb-1.5 flex items-center justify-center min-h-[72px]">
         {group.cover_url ? (
           <img src={group.cover_url} alt={rep.title} className="w-full h-full object-cover" />
         ) : (
           <div className="text-center px-2">
-            <div className="text-xl font-medium text-muted-foreground leading-tight">No cover art found</div>
+            <div className="text-sm font-medium text-muted-foreground leading-tight">No cover art found</div>
           </div>
         )}
       </div>
-      <div className="text-sm leading-snug space-y-1 min-h-[72px]">
+      <div className="text-xs leading-snug space-y-0.5">
         {(rep.edition_name || rep.title) && (
-          <div className="font-medium text-foreground line-clamp-2">{rep.edition_name || rep.title}</div>
+          <div className="font-medium text-foreground line-clamp-1">{rep.edition_name || rep.title}</div>
         )}
-        {rep.publisher && <div className="text-muted-foreground line-clamp-2">{rep.publisher}</div>}
+        {rep.publisher && <div className="text-muted-foreground line-clamp-1">{rep.publisher}</div>}
         <div className="flex justify-between items-baseline gap-1">
-          <span className="text-muted-foreground">{rep.publish_year ?? ''}</span>
-          <span className="text-xs text-muted-foreground/60 shrink-0">{rep.isbn}</span>
+          <span className="text-muted-foreground">
+            {rep.publish_year ?? ''}
+            {rep.pages ? `${rep.publish_year ? ' · ' : ''}${rep.pages} pp` : ''}
+          </span>
+          <span className="text-[10px] text-muted-foreground/60 shrink-0">{rep.isbn}</span>
         </div>
-        {rep.pages && <div className="text-muted-foreground text-sm">{rep.pages} pp</div>}
         <div className="flex flex-wrap items-center gap-1 pt-0.5">
           {group.formats.filter((f) => f !== 'any').map((f) => (
-            <span key={f} className="text-sm px-2 py-0.5 rounded bg-muted text-muted-foreground capitalize">
+            <span key={f} className="text-[10px] px-1.5 py-px rounded bg-muted text-muted-foreground capitalize">
               {f === 'hardcover' ? 'HC' : 'PB'}
             </span>
           ))}
           {isDigitized && (
-            <span className="text-xs px-1.5 py-0.5 rounded bg-sky-100 text-sky-700 font-medium" title="A copy of this edition is preserved in the Internet Archive">
+            <span className="text-[10px] px-1.5 py-px rounded bg-sky-100 text-sky-700 font-medium" title="A copy of this edition is preserved in the Internet Archive">
               Digitized
             </span>
           )}
         </div>
-        <div className="pt-1 text-[11px] leading-snug">
+        <div className="pt-0.5 text-[11px] leading-snug">
           {stats === undefined && (
             <span className="text-muted-foreground">Checking…</span>
           )}
@@ -521,7 +523,7 @@ function SectionHeader({
   return (
     <button
       onClick={() => onToggleGroup(groupKeys)}
-      className="flex items-center gap-2.5 w-full px-3 py-2.5 bg-muted/60 hover:bg-muted transition-colors text-left"
+      className="flex items-center gap-2.5 w-full px-2.5 py-1.5 bg-muted/60 hover:bg-muted transition-colors text-left"
     >
       <div className={`h-4 w-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${
         allSelected ? 'bg-primary border-primary' : someSelected ? 'border-primary bg-primary/10' : 'border-input bg-background'
@@ -594,8 +596,8 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
       .then((data: Edition[]) => {
         setEditions(data)
         setLoading(false)
+        const groups = groupEditionsBycover(data)
         if (initialIsbns && initialIsbns.length > 0) {
-          const groups = groupEditionsBycover(data)
           const isbnToKey = new Map<string, string>()
           for (const g of groups) {
             for (const e of g.editions) isbnToKey.set(e.isbn, g.key)
@@ -607,6 +609,9 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
             if (key && !seen.has(key)) { seen.add(key); keys.push(key) }
           }
           if (keys.length > 0) setSelectedKeys(keys)
+        } else {
+          // Default: all editions selected
+          setSelectedKeys(groups.map((g) => g.key))
         }
       })
   }, [book, open, language])
@@ -923,6 +928,12 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
     })
   }
 
+  const allSelected = sorted.length > 0 && sorted.every((g) => selectedKeys.includes(g.key))
+
+  function selectAll() {
+    setSelectedKeys((prev) => [...prev, ...sorted.map((g) => g.key).filter((k) => !prev.includes(k))])
+  }
+
   function toggleGroup(groupKeys: string[]) {
     setSelectedKeys((prev) => {
       const allSelected = groupKeys.every((k) => prev.includes(k))
@@ -952,7 +963,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-6xl max-w-full h-[100dvh] sm:h-auto sm:max-h-[90vh] flex flex-col rounded-none sm:rounded-xl">
+      <DialogContent className="sm:max-w-7xl max-w-full h-[100dvh] sm:h-auto sm:max-h-[92vh] flex flex-col rounded-none sm:rounded-xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 flex-wrap">
             <span>Choose editions — {book?.title}</span>
@@ -973,8 +984,8 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
           </DialogTitle>
         </DialogHeader>
 
-        <p className="text-sm text-muted-foreground shrink-0 -mt-1">
-          Pick one or more editions you&apos;d accept. First picked = top preference. All are searched for the best price.
+        <p className="text-xs text-muted-foreground shrink-0 -mt-1">
+          Pick one or more editions you&apos;d accept — click a cover to toggle it. First picked = top preference. All are searched for the best price.
         </p>
 
         {/* Filters: single row */}
@@ -1041,6 +1052,14 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
             {hideNoListings ? 'Has listings' : 'All editions'}
             {!statsLoaded && hideNoListings && <Loader2 className="h-3 w-3 animate-spin opacity-50" />}
           </button>
+          <button
+            onClick={selectAll}
+            disabled={loading || allSelected}
+            className="flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-input hover:bg-muted text-sm text-muted-foreground transition-colors whitespace-nowrap shrink-0 disabled:opacity-50 disabled:pointer-events-none"
+            title={allSelected ? 'All shown editions are selected' : 'Select all shown editions'}
+          >
+            <Check className="h-3.5 w-3.5" /> Select all
+          </button>
           {hasActiveFilters && (
             <button
               onClick={clearAllFilters}
@@ -1106,11 +1125,11 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
               No editions found for this filter.
             </div>
           ) : groupBy === 'publisher' ? (
-            <div className="space-y-4 py-2">
+            <div className="space-y-2 py-1">
               {publisherSections.map(({ label, groups }) => (
                 <div key={label} className="border border-border rounded-lg overflow-hidden">
                   <SectionHeader label={label} groups={groups} selectedKeys={selectedKeys} onToggleGroup={toggleGroup} />
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 p-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2 p-2">
                     {groups.map((group) => (
                       <EditionCard key={group.key} group={group} formatFilter={effectiveFormat} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} popularityMap={popularityMap} onHover={(g) => setHoveredGroup(g)} onUnhover={() => setHoveredGroup(null)} stats={group.key in listingStats ? listingStats[group.key] : undefined} />
                     ))}
@@ -1123,7 +1142,7 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : (
-            <div className="space-y-4 py-2">
+            <div className="space-y-2 py-1">
             {!hashesLoading && Object.keys(clusterMap).length > 0 && (
               <div className="flex items-center justify-between px-1">
                 <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
@@ -1139,13 +1158,13 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
                 </button>
               </div>
             )}
-            <div className="space-y-4">
+            <div className="space-y-2">
               {visualSections.map((section, sectionIdx) => {
                 const sectionLabel = `Cover design ${sectionIdx + 1}`
                 return (
                   <div key={section.clusterRep ?? `no-cover-${sectionIdx}`} className="border border-border rounded-lg overflow-hidden">
                     <SectionHeader label={sectionLabel} groups={section.groups} selectedKeys={selectedKeys} onToggleGroup={toggleGroup} />
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 p-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2 p-2">
                       {section.groups.map((group) => (
                         <EditionCard key={group.key} group={group} formatFilter={effectiveFormat} selectedKeys={selectedKeys} firstEditionKey={firstEditionKey} onToggle={toggleCard} popularityMap={popularityMap} onHover={(g) => setHoveredGroup(g)} onUnhover={() => setHoveredGroup(null)} stats={group.key in listingStats ? listingStats[group.key] : undefined} />
                       ))}

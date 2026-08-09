@@ -5,6 +5,7 @@ Find cheap used books and minimize shipping costs. Build a list of books, pick y
 ## What it does
 
 - Search for books by title or author (powered by Open Library)
+- Import an entire Goodreads shelf into a stack at once (via the public shelf RSS feed — no API key needed, profile must be public)
 - Pick which edition and cover you want for each book
 - Fetches live listings from ThriftBooks, Better World Books, and AbeBooks
 - Optimizes across sellers to minimize the number of orders (and shipping costs)
@@ -49,6 +50,7 @@ src/
       prices/             # Fetches live listings
       optimize/           # Seller grouping optimizer
       editions/           # Book editions from Open Library
+      goodreads/          # Ratings lookup + shelf import (shelves/, shelf/, import/)
   components/
     CartItemCard.tsx      # Per-book item in a stack
     CartDefaults.tsx      # Default filters for a stack

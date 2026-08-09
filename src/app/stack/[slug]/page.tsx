@@ -8,6 +8,7 @@ import { ArrowLeft, BookOpen, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { BookSearch } from '@/components/BookSearch'
+import { GoodreadsImport } from '@/components/GoodreadsImport'
 import { EditionPicker } from '@/components/EditionPicker'
 import { CoverPicker } from '@/components/CoverPicker'
 import { CartItemCard } from '@/components/CartItemCard'
@@ -247,12 +248,19 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
         {/* Left: Book list */}
         <div className="space-y-4">
           <BookSearch onSelect={handleBookSelect} />
+          <div className="flex justify-end">
+            <GoodreadsImport
+              slug={slug}
+              existingTitles={items.map((i) => i.title)}
+              onImported={(newItems) => setItems((prev) => [...prev, ...newItems])}
+            />
+          </div>
           <CartDefaults cart={cart} onUpdate={(updated) => setCart(updated)} slug={slug} onApplyToAll={handleApplyDefaultsToAll} />
 
           {items.length === 0 ? (
             <div className="text-center py-16 text-muted-foreground border-2 border-dashed rounded-lg">
               <Plus className="h-10 w-10 mx-auto mb-3 opacity-20" />
-              <p>Search for a book above to add it to your stack.</p>
+              <p>Search for a book above, or import a Goodreads shelf.</p>
             </div>
           ) : (
             <>
