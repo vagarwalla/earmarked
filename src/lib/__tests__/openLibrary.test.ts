@@ -1,5 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { getCoverUrl, detectFormat, searchBooks, getEditions, hasNonLatinScript, isAudioEdition, isNonEnglishIsbn } from '../openLibrary'
+import {
+  getCoverUrl,
+  detectFormat,
+  searchBooks,
+  getEditions,
+  hasNonLatinScript,
+  isAudioEdition,
+  isNonEnglishIsbn,
+  mergeDuplicateWorks,
+  isDerivativeWork,
+  dropDerivativeWorks,
+  findSiblingWorkIds,
+  titleCore,
+  titleKey,
+} from '../openLibrary'
+import type { BookSearchResult } from '../types'
 
 beforeEach(() => {
   vi.unstubAllGlobals()
@@ -826,5 +841,405 @@ describe('getEditions — edition filtering', () => {
     const editions = await getEditions('/works/OL82563W', 'eng')
     expect(editions).toHaveLength(1)
     expect(editions[0].isbn).toBe('9780439708180')
+  })
+})
+
+// ── title normalisation ───────────────────────────────────────────────────────
+
+describe('titleKey / titleCore', () => {
+  it('keeps the subtitle in titleKey but drops it in titleCore', () => {
+    expect(titleKey('Sapiens: A Brief History of Humankind')).toBe('sapiens a brief history of humankind')
+    expect(titleCore('Sapiens: A Brief History of Humankind')).toBe('sapiens')
+  })
+
+  it('normalises punctuation, case and spacing', () => {
+    expect(titleKey('Sapiens : a brief history of humankind')).toBe(titleKey('Sapiens: A Brief History of Humankind'))
+  })
+
+  it('strips a leading article', () => {
+    expect(titleCore('The Body Keeps the Score')).toBe('body keeps the score')
+  })
+
+  it('strips a trailing parenthetical', () => {
+    expect(titleKey('Dune (Special Edition)')).toBe('dune')
+  })
+
+  it('leaves a title with no subtitle unchanged', () => {
+    expect(titleCore('Sapiens')).toBe('sapiens')
+    expect(titleKey('Sapiens')).toBe('sapiens')
+  })
+})
+
+// ── mergeDuplicateWorks ───────────────────────────────────────────────────────
+
+function work(overrides: Partial<BookSearchResult> & { title: string; work_id: string }): BookSearchResult {
+  return {
+    author: 'Yuval Noah Harari',
+    cover_url: null,
+    cover_urls: [],
+    first_publish_year: null,
+    series: null,
+    series_number: null,
+    edition_count: 1,
+    work_ids: [overrides.work_id],
+    ...overrides,
+  }
+}
+
+describe('mergeDuplicateWorks', () => {
+  it('merges work records whose normalised titles are identical', () => {
+    const merged = mergeDuplicateWorks([
+      work({ title: 'Sapiens: A Brief History of Humankind', work_id: '/works/OL1W', edition_count: 40 }),
+      work({ title: 'Sapiens : a brief history of humankind', work_id: '/works/OL2W', edition_count: 3 }),
+    ])
+    expect(merged).toHaveLength(1)
+    expect(merged[0].work_ids).toEqual(['/works/OL1W', '/works/OL2W'])
+  })
+
+  it('merges a bare main title into its subtitled sibling', () => {
+    const merged = mergeDuplicateWorks([
+      work({ title: 'Sapiens', work_id: '/works/OL1W', edition_count: 2 }),
+      work({ title: 'Sapiens: A Brief History of Humankind', work_id: '/works/OL2W', edition_count: 40 }),
+    ])
+    expect(merged).toHaveLength(1)
+    expect(merged[0].work_ids).toContain('/works/OL1W')
+    expect(merged[0].work_ids).toContain('/works/OL2W')
+    // The record with more editions represents the merged result
+    expect(merged[0].title).toBe('Sapiens: A Brief History of Humankind')
+  })
+
+  it('does not merge two different books that share a main title', () => {
+    const merged = mergeDuplicateWorks([
+      work({ title: 'Sapiens: A Brief History of Humankind', work_id: '/works/OL1W' }),
+      work({ title: 'Sapiens: A Graphic History', work_id: '/works/OL2W' }),
+    ])
+    expect(merged).toHaveLength(2)
+  })
+
+  it('leaves a bare title alone when more than one subtitled sibling could claim it', () => {
+    const merged = mergeDuplicateWorks([
+      work({ title: 'Sapiens', work_id: '/works/OL1W' }),
+      work({ title: 'Sapiens: A Brief History of Humankind', work_id: '/works/OL2W' }),
+      work({ title: 'Sapiens: A Graphic History', work_id: '/works/OL3W' }),
+    ])
+    expect(merged).toHaveLength(3)
+  })
+
+  it('does not merge same-titled books by different authors', () => {
+    const merged = mergeDuplicateWorks([
+      work({ title: '1984', work_id: '/works/OL1W', author: 'George Orwell' }),
+      work({ title: '1984', work_id: '/works/OL2W', author: 'Anthony Burgess' }),
+    ])
+    expect(merged).toHaveLength(2)
+  })
+
+  it('merges an unattributed work record into its authored twin', () => {
+    const merged = mergeDuplicateWorks([
+      work({ title: 'Meditations', work_id: '/works/OL1W', author: 'Marcus Aurelius', edition_count: 50 }),
+      work({ title: 'Meditations', work_id: '/works/OL2W', author: 'Unknown', edition_count: 1 }),
+    ])
+    expect(merged).toHaveLength(1)
+    expect(merged[0].author).toBe('Marcus Aurelius')
+  })
+
+  it('does not merge across differing volume numbers', () => {
+    const merged = mergeDuplicateWorks([
+      work({ title: 'The Gulag Archipelago, Volume 1', work_id: '/works/OL1W' }),
+      work({ title: 'The Gulag Archipelago, Volume 2', work_id: '/works/OL2W' }),
+    ])
+    expect(merged).toHaveLength(2)
+  })
+
+  it('keeps the earliest publish year and unions cover art', () => {
+    const merged = mergeDuplicateWorks([
+      work({ title: 'Sapiens', work_id: '/works/OL1W', first_publish_year: 2015, cover_urls: ['a.jpg'] }),
+      work({
+        title: 'Sapiens: A Brief History of Humankind',
+        work_id: '/works/OL2W',
+        edition_count: 9,
+        first_publish_year: 2011,
+        cover_url: 'b.jpg',
+        cover_urls: ['b.jpg'],
+      }),
+    ])
+    expect(merged[0].first_publish_year).toBe(2011)
+    expect(merged[0].cover_urls).toEqual(expect.arrayContaining(['a.jpg', 'b.jpg']))
+    expect(merged[0].edition_count).toBe(10)
+  })
+
+  it('preserves relevance order and leaves unrelated books untouched', () => {
+    const merged = mergeDuplicateWorks([
+      work({ title: 'Homo Deus', work_id: '/works/OL9W' }),
+      work({ title: 'Sapiens', work_id: '/works/OL1W' }),
+      work({ title: 'Sapiens: A Brief History of Humankind', work_id: '/works/OL2W', edition_count: 9 }),
+    ])
+    expect(merged).toHaveLength(2)
+    expect(merged[0].title).toBe('Homo Deus')
+  })
+
+  it('is a no-op for an empty list', () => {
+    expect(mergeDuplicateWorks([])).toEqual([])
+  })
+})
+
+// ── derivative works ──────────────────────────────────────────────────────────
+
+describe('isDerivativeWork', () => {
+  it('flags summaries, study guides and workbooks', () => {
+    expect(isDerivativeWork('Summary of Sapiens by Yuval Noah Harari')).toBe(true)
+    expect(isDerivativeWork('Study Guide: Sapiens')).toBe(true)
+    expect(isDerivativeWork('Workbook For Atomic Habits')).toBe(true)
+    expect(isDerivativeWork('Conversation Starters for Educated')).toBe(true)
+    expect(isDerivativeWork('Sapiens by Yuval Noah Harari | Summary & Analysis')).toBe(true)
+    expect(isDerivativeWork('CliffsNotes on Walden')).toBe(true)
+  })
+
+  it('does not flag the books themselves', () => {
+    expect(isDerivativeWork('Sapiens: A Brief History of Humankind')).toBe(false)
+    expect(isDerivativeWork('Atomic Habits')).toBe(false)
+    expect(isDerivativeWork('A Field Guide to Getting Lost')).toBe(false)
+    expect(isDerivativeWork('The Hitchhiker\'s Guide to the Galaxy')).toBe(false)
+  })
+})
+
+describe('dropDerivativeWorks', () => {
+  const results = [
+    work({ title: 'Atomic Habits', work_id: '/works/OL1W', author: 'James Clear' }),
+    work({ title: 'Summary of Atomic Habits', work_id: '/works/OL2W', author: 'Instaread' }),
+  ]
+
+  it('removes derivatives from an ordinary query', () => {
+    expect(dropDerivativeWorks(results, 'atomic habits').map((r) => r.work_id)).toEqual(['/works/OL1W'])
+  })
+
+  it('keeps derivatives when the query asks for one', () => {
+    expect(dropDerivativeWorks(results, 'atomic habits summary')).toHaveLength(2)
+  })
+
+  it('keeps everything rather than returning nothing', () => {
+    const onlyDerivatives = [work({ title: 'Summary of Atomic Habits', work_id: '/works/OL2W' })]
+    expect(dropDerivativeWorks(onlyDerivatives, 'atomic habits')).toHaveLength(1)
+  })
+})
+
+// ── searchBooks — non-fiction duplicate works ────────────────────────────────
+
+describe('searchBooks — duplicate work merging', () => {
+  it('collapses OL work shards into one result carrying every work id', async () => {
+    const olResponse = {
+      docs: [
+        {
+          title: 'Sapiens',
+          author_name: ['Yuval Noah Harari'],
+          key: '/works/OL1W',
+          cover_i: null,
+          first_publish_year: 2011,
+          edition_count: 4,
+        },
+        {
+          title: 'Sapiens: A Brief History of Humankind',
+          author_name: ['Yuval Noah Harari'],
+          key: '/works/OL2W',
+          cover_i: 555,
+          first_publish_year: 2014,
+          edition_count: 60,
+        },
+        {
+          title: 'Summary of Sapiens',
+          author_name: ['Instaread'],
+          key: '/works/OL3W',
+          cover_i: null,
+          first_publish_year: 2016,
+          edition_count: 1,
+        },
+      ],
+    }
+
+    mockDualFetch(olResponse, { items: [] })
+
+    const results = await searchBooks('sapiens')
+    expect(results).toHaveLength(1)
+    expect(results[0].title).toBe('Sapiens: A Brief History of Humankind')
+    expect(results[0].work_ids).toEqual(expect.arrayContaining(['/works/OL1W', '/works/OL2W']))
+    expect(results[0].work_id).toBe(results[0].work_ids?.[0])
+  })
+
+  it('does not turn a publisher imprint prefix into a series', async () => {
+    // GB lists many non-fiction reissues as "Imprint: Title". Without a number in
+    // the prefix that is an imprint, not a series.
+    const olResponse = {
+      docs: [{
+        title: 'The Interpretation of Dreams',
+        author_name: ['Sigmund Freud'],
+        key: '/works/OL8W',
+        cover_i: null,
+        first_publish_year: 1899,
+        edition_count: 30,
+      }],
+    }
+    const gbResponse = {
+      items: [{ volumeInfo: { title: 'Penguin Modern Classics: The Interpretation of Dreams' } }],
+    }
+
+    mockDualFetch(olResponse, gbResponse)
+
+    const results = await searchBooks('the interpretation of dreams')
+    expect(results[0].series).toBeNull()
+  })
+
+  it('still reads a numbered series prefix as a series', async () => {
+    const olResponse = {
+      docs: [{
+        title: 'The Screaming Staircase',
+        author_name: ['Jonathan Stroud'],
+        key: '/works/OL9W',
+        cover_i: null,
+        first_publish_year: 2013,
+        edition_count: 5,
+      }],
+    }
+    const gbResponse = {
+      items: [{ volumeInfo: { title: 'Lockwood & Co #1: The Screaming Staircase' } }],
+    }
+
+    mockDualFetch(olResponse, gbResponse)
+
+    const results = await searchBooks('the screaming staircase')
+    expect(results[0].series).toBe('Lockwood & Co')
+    expect(results[0].series_number).toBe('1')
+  })
+
+  it('does not read a non-fiction subtitle as a series name', async () => {
+    const olResponse = {
+      docs: [{
+        title: 'Bad Blood: Secrets and Lies in a Silicon Valley Startup',
+        author_name: ['John Carreyrou'],
+        key: '/works/OL7W',
+        cover_i: null,
+        first_publish_year: 2018,
+        edition_count: 12,
+      }],
+    }
+    const gbResponse = {
+      items: [{ volumeInfo: { title: 'Bad Blood: Secrets and Lies in a Silicon Valley Startup' } }],
+    }
+
+    mockDualFetch(olResponse, gbResponse)
+
+    const results = await searchBooks('bad blood')
+    expect(results).toHaveLength(1)
+    expect(results[0].series).toBeNull()
+    expect(results[0].series_number).toBeNull()
+  })
+})
+
+// ── getEditions across merged works ──────────────────────────────────────────
+
+/** Serve a different editions payload per work id, keyed by the id in the URL. */
+function mockEditionsByWork(byWork: Record<string, unknown>) {
+  vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+    for (const [workId, payload] of Object.entries(byWork)) {
+      if (url.includes(workId)) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(payload) })
+      }
+    }
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({ entries: [] }) })
+  }))
+}
+
+describe('getEditions — multiple works', () => {
+  it('combines editions from every work id it is given', async () => {
+    mockEditionsByWork({
+      OL1W: { entries: [{ title: 'Sapiens', isbn_13: ['9780062316097'], covers: [1], publishers: ['Harper'] }] },
+      OL2W: { entries: [{ title: 'Sapiens', isbn_13: ['9781846558238'], covers: [2], publishers: ['Vintage'] }] },
+    })
+
+    const editions = await getEditions(['/works/OL1W', '/works/OL2W'], '')
+    expect(editions.map((e) => e.isbn).sort()).toEqual(['9780062316097', '9781846558238'])
+  })
+
+  it('de-duplicates ISBNs that appear under more than one work', async () => {
+    const shared = { title: 'Sapiens', isbn_13: ['9780062316097'], covers: [1], publishers: ['Harper'] }
+    mockEditionsByWork({
+      OL1W: { entries: [shared] },
+      OL2W: { entries: [shared, { title: 'Sapiens', isbn_13: ['9781846558238'], covers: [2], publishers: ['Vintage'] }] },
+    })
+
+    const editions = await getEditions(['/works/OL1W', '/works/OL2W'], '')
+    expect(editions).toHaveLength(2)
+  })
+
+  it('still returns the editions of the works that succeeded when one work fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+      if (url.includes('OL1W')) return Promise.reject(new Error('network'))
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ entries: [{ title: 'Sapiens', isbn_13: ['9781846558238'], covers: [2], publishers: ['Vintage'] }] }),
+      })
+    }))
+
+    const editions = await getEditions(['/works/OL1W', '/works/OL2W'], '')
+    expect(editions.map((e) => e.isbn)).toEqual(['9781846558238'])
+  })
+
+  it('accepts a single work id, unchanged from before', async () => {
+    mockEditionsByWork({
+      OL1W: { entries: [{ title: 'Sapiens', isbn_13: ['9780062316097'], covers: [1], publishers: ['Harper'] }] },
+    })
+
+    const editions = await getEditions('/works/OL1W', '')
+    expect(editions).toHaveLength(1)
+  })
+
+  it('returns an empty list when given no work ids', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    expect(await getEditions([], '')).toEqual([])
+    expect(fetch).not.toHaveBeenCalled()
+  })
+})
+
+// ── findSiblingWorkIds ────────────────────────────────────────────────────────
+
+describe('findSiblingWorkIds', () => {
+  it('finds the other work records holding the same book', async () => {
+    const olResponse = {
+      docs: [
+        { title: 'Sapiens', author_name: ['Yuval Noah Harari'], key: '/works/OL1W', cover_i: null, first_publish_year: 2011, edition_count: 4 },
+        { title: 'Sapiens: A Brief History of Humankind', author_name: ['Yuval Noah Harari'], key: '/works/OL2W', cover_i: null, first_publish_year: 2014, edition_count: 60 },
+      ],
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve(olResponse) }))
+
+    const ids = await findSiblingWorkIds('/works/OL1W', 'Sapiens', 'Yuval Noah Harari')
+    expect(ids[0]).toBe('/works/OL1W')  // the user's own choice stays first
+    expect(ids).toContain('/works/OL2W')
+  })
+
+  it('returns just the given work when search finds nothing related', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ docs: [] }) }))
+    expect(await findSiblingWorkIds('/works/OL1W', 'Sapiens', 'Yuval Noah Harari')).toEqual(['/works/OL1W'])
+  })
+
+  it('returns just the given work when the search call fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network')))
+    expect(await findSiblingWorkIds('/works/OL1W', 'Sapiens', 'Yuval Noah Harari')).toEqual(['/works/OL1W'])
+  })
+
+  it('does not call out at all without a title', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    expect(await findSiblingWorkIds('/works/OL1W', '', '')).toEqual(['/works/OL1W'])
+    expect(fetch).not.toHaveBeenCalled()
+  })
+})
+
+describe('isDerivativeWork — words that only look derivative', () => {
+  it('does not flag real books whose titles contain analysis or companion', () => {
+    expect(isDerivativeWork('Analysis of Algorithms')).toBe(false)
+    expect(isDerivativeWork('A Companion to Russian Studies')).toBe(false)
+    expect(isDerivativeWork('The Summing Up')).toBe(false)
+  })
+
+  it('still flags a summary that uses those words', () => {
+    expect(isDerivativeWork('Summary and Analysis of Sapiens')).toBe(true)
   })
 })

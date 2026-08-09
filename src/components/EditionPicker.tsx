@@ -591,7 +591,16 @@ export function EditionPicker({ book, open, onOpenChange, onConfirm, initialIsbn
       .then((data: GoodreadsData | null) => setGoodreadsData(data))
       .catch(() => {})
 
-    fetch(`/api/editions?workId=${encodeURIComponent(book.work_id)}&language=${language}`)
+    // Send every OL work this book is split across. When search already merged
+    // them we have the full set; otherwise the API resolves siblings from
+    // title + author so books saved before merging existed aren't short-changed.
+    const editionParams = new URLSearchParams({
+      workIds: (book.work_ids ?? [book.work_id]).join(','),
+      title: book.title,
+      author: book.author,
+      language,
+    })
+    fetch(`/api/editions?${editionParams}`)
       .then((r) => r.json())
       .then((data: Edition[]) => {
         setEditions(data)

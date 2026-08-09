@@ -316,6 +316,8 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
 
       <CoverPicker
         workId={coverItem?.work_id ?? null}
+        title={coverItem?.title ?? null}
+        author={coverItem?.author ?? null}
         currentCoverUrl={coverItem?.cover_url ?? null}
         open={coverPickerOpen}
         onOpenChange={setCoverPickerOpen}

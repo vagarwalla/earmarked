@@ -213,7 +213,12 @@ function EditionPickerInline({
   useEffect(() => {
     if (!item.work_id) { setLoadState('done'); return }
     let cancelled = false
-    fetch(`/api/editions?workId=${encodeURIComponent(item.work_id)}`)
+    const editionParams = new URLSearchParams({
+      workId: item.work_id,
+      title: item.title,
+      author: item.author ?? '',
+    })
+    fetch(`/api/editions?${editionParams}`)
       .then((r) => r.json())
       .then((all: Edition[]) => {
         if (cancelled) return

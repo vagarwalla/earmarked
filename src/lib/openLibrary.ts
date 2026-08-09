@@ -4,34 +4,55 @@ const BASE = 'https://openlibrary.org'
 const COVERS = 'https://covers.openlibrary.org'
 const GB_KEY = process.env.GOOGLE_BOOKS_API_KEY ? `&key=${process.env.GOOGLE_BOOKS_API_KEY}` : ''
 
+/** How many OL search docs to pull before merging duplicates down to MAX_RESULTS. */
+const SEARCH_FETCH_LIMIT = 40
+/** How many merged results to return to the client (each one costs cover + Goodreads lookups). */
+const MAX_RESULTS = 10
+
+const SEARCH_FIELDS = 'title,author_name,key,cover_i,first_publish_year,series_name,series_key,series_position,edition_count'
+
+function docToResult(doc: Record<string, unknown>): BookSearchResult {
+  const olSeriesName = Array.isArray(doc.series_name) ? (doc.series_name as string[])[0] : null
+  const olSeriesPos = Array.isArray(doc.series_position) ? (doc.series_position as string[])[0] : null
+  const primaryCoverId = doc.cover_i as number | null
+  const primaryCoverUrl = primaryCoverId ? `${COVERS}/b/id/${primaryCoverId}-M.jpg` : null
+  const workId = doc.key as string
+
+  return {
+    title: doc.title as string,
+    author: Array.isArray(doc.author_name) ? (doc.author_name as string[])[0] : 'Unknown',
+    work_id: workId,
+    work_ids: [workId],
+    cover_url: primaryCoverUrl,
+    cover_urls: primaryCoverUrl ? [primaryCoverUrl] : [],
+    first_publish_year: doc.first_publish_year as number | null,
+    series: olSeriesName ?? null,
+    series_number: olSeriesPos ? String(parseInt(olSeriesPos)) : null,
+    edition_count: (doc.edition_count as number | undefined) ?? 0,
+  }
+}
+
+/** Raw OL search — no Google Books enrichment, no series detection. */
+async function fetchWorkDocs(query: string): Promise<Record<string, unknown>[]> {
+  const url = `${BASE}/search.json?q=${encodeURIComponent(query)}&fields=${SEARCH_FIELDS}&limit=${SEARCH_FETCH_LIMIT}`
+  const res = await fetch(url, { next: { revalidate: 3600 } })
+  if (!res.ok) return []
+  const data = await res.json()
+  return data.docs || []
+}
+
 export async function searchBooks(query: string): Promise<BookSearchResult[]> {
-  const olUrl = `${BASE}/search.json?q=${encodeURIComponent(query)}&fields=title,author_name,key,cover_i,first_publish_year,series_name,series_key,series_position&limit=10`
-  const olRes = await fetch(olUrl, { next: { revalidate: 3600 } })
-  if (!olRes.ok) return []
-  const olData = await olRes.json()
-  const docs: Record<string, unknown>[] = olData.docs || []
+  const docs = await fetchWorkDocs(query)
+  if (docs.length === 0) return []
 
-  // Build initial results with OL data
-  const results: BookSearchResult[] = docs.map((doc) => {
-    const olSeriesName = Array.isArray(doc.series_name) ? (doc.series_name as string[])[0] : null
-    const olSeriesPos = Array.isArray(doc.series_position) ? (doc.series_position as string[])[0] : null
-    const primaryCoverId = doc.cover_i as number | null
-    const primaryCoverUrl = primaryCoverId ? `${COVERS}/b/id/${primaryCoverId}-M.jpg` : null
-
-    return {
-      title: doc.title as string,
-      author: Array.isArray(doc.author_name) ? (doc.author_name as string[])[0] : 'Unknown',
-      work_id: doc.key as string,
-      cover_url: primaryCoverUrl,
-      cover_urls: primaryCoverUrl ? [primaryCoverUrl] : [],
-      first_publish_year: doc.first_publish_year as number | null,
-      series: olSeriesName ?? null,
-      series_number: olSeriesPos ? String(parseInt(olSeriesPos)) : null,
-    }
-  })
+  // Build initial results with OL data, drop study guides/summaries, then collapse
+  // the duplicate work records OL keeps for the same book.
+  const results = mergeDuplicateWorks(
+    dropDerivativeWorks(docs.map(docToResult), query)
+  ).slice(0, MAX_RESULTS)
 
   // Detect series search via OL series key
-  const seriesKey = detectSeriesKey(query, docs)
+  const seriesKey = detectSeriesKey(query, docs.slice(0, MAX_RESULTS))
   if (seriesKey) {
     const seriesResults = await fetchSeriesBooks(seriesKey, results)
     if (seriesResults.length > 0) return seriesResults
@@ -105,7 +126,7 @@ async function fetchSeriesBooks(seriesKey: string, existing: BookSearchResult[])
     if (entry.type !== 'work') continue
     pos++
     const workId: string = entry.url  // e.g. "/works/OL82563W"
-    const existing_ = existing.find(r => r.work_id === workId)
+    const existing_ = existing.find(r => (r.work_ids ?? [r.work_id]).includes(workId))
     const coverUrl = entry.picture?.url
       ? `https:${entry.picture.url.replace('-S.jpg', '-M.jpg')}`
       : existing_?.cover_url ?? null
@@ -113,6 +134,7 @@ async function fetchSeriesBooks(seriesKey: string, existing: BookSearchResult[])
       title: entry.title as string,
       author: existing_?.author ?? author,
       work_id: workId,
+      work_ids: existing_?.work_ids ?? [workId],
       cover_url: coverUrl,
       cover_urls: coverUrl ? [coverUrl] : (existing_?.cover_urls ?? []),
       first_publish_year: existing_?.first_publish_year ?? null,
@@ -181,17 +203,206 @@ function normalize(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim()
 }
 
+// ─── Duplicate work merging ──────────────────────────────────────────────────
+//
+// Open Library keeps a separate work record for many title variants of the same
+// book. Non-fiction fragments hardest, because it fragments on the subtitle:
+// "Sapiens", "Sapiens: A Brief History of Humankind" and
+// "Sapiens : a brief history of humankind" can each be their own work, each
+// holding only part of the editions. Merging them is what makes the full edition
+// list reachable from one search result.
+
+/** Drop a trailing parenthetical, e.g. "Dune (Special Edition)" → "Dune". */
+function stripEditionParens(title: string): string {
+  return title.replace(/\s*\([^()]*\)\s*$/, ' ').trim()
+}
+
+function stripLeadingArticle(normalized: string): string {
+  return normalized.replace(/^(the|a|an) /, '')
+}
+
+/** Full title, normalised — the strict key. "The Dawn of Everything: A New History" stays whole. */
+export function titleKey(title: string): string {
+  return stripLeadingArticle(normalize(stripEditionParens(title)))
+}
+
+/** Title with any subtitle removed — the loose key. "Sapiens: A Brief History" → "sapiens". */
+export function titleCore(title: string): string {
+  let t = stripEditionParens(title)
+  const colon = t.indexOf(':')
+  if (colon > 0) {
+    const head = t.slice(0, colon).trim()
+    // A one- or two-character head ("A: ...") is punctuation noise, not a main title
+    if (head.length >= 3) t = head
+  }
+  return stripLeadingArticle(normalize(t))
+}
+
+/**
+ * The volume/part designation in a title, if any. Two records that disagree here
+ * are different books ("Collected Essays Vol. 1" vs "Collected Essays Vol. 2"),
+ * even when everything else matches.
+ */
+function volumeToken(title: string): string | null {
+  const match = title.match(/\b(?:volume|vol|book|part|no)\.?\s*(\d+|[ivxlc]+)\b/i)
+  return match ? match[1].toLowerCase() : null
+}
+
+/** Authors match, or one side is unattributed (OL leaves many work records author-less). */
+function authorsCompatible(a: string, b: string): boolean {
+  const na = normalize(a)
+  const nb = normalize(b)
+  if (!na || !nb || na === 'unknown' || nb === 'unknown') return true
+  return na === nb
+}
+
+/**
+ * True when two search results are the same book split across OL work records.
+ *
+ * Deliberately strict: it merges identical titles, and merges a bare main title
+ * into a subtitled one, but never merges two different subtitles under a shared
+ * main title — "Sapiens: A Brief History of Humankind" and "Sapiens: A Graphic
+ * History" are different books.
+ */
+function canMerge(a: BookSearchResult, b: BookSearchResult): boolean {
+  if (!authorsCompatible(a.author, b.author)) return false
+  if (volumeToken(a.title) !== volumeToken(b.title)) return false
+
+  const fullA = titleKey(a.title)
+  const fullB = titleKey(b.title)
+  if (!fullA || !fullB) return false
+  if (fullA === fullB) return true
+
+  const coreA = titleCore(a.title)
+  const coreB = titleCore(b.title)
+  // Same main title, and at least one side carries no subtitle of its own
+  return coreA === coreB && (fullA === coreA || fullB === coreB)
+}
+
+type WorkGroup = { rep: BookSearchResult; members: BookSearchResult[] }
+
+/** Fold a group's members into a single result, keeping every work id. */
+function collapse(group: WorkGroup): BookSearchResult {
+  // The record with the most editions is the best-maintained one — use it for display
+  const rep = group.members.reduce((best, m) =>
+    (m.edition_count ?? 0) > (best.edition_count ?? 0) ? m : best, group.members[0])
+
+  const workIds: string[] = []
+  const coverUrls: string[] = []
+  for (const m of [rep, ...group.members]) {
+    for (const id of m.work_ids ?? [m.work_id]) {
+      if (!workIds.includes(id)) workIds.push(id)
+    }
+    for (const url of m.cover_urls) {
+      if (url && !coverUrls.includes(url)) coverUrls.push(url)
+    }
+  }
+
+  const years = group.members.map((m) => m.first_publish_year).filter((y): y is number => y != null)
+  const withSeries = group.members.find((m) => m.series)
+
+  return {
+    ...rep,
+    work_id: workIds[0],
+    work_ids: workIds,
+    cover_url: rep.cover_url ?? group.members.find((m) => m.cover_url)?.cover_url ?? null,
+    cover_urls: coverUrls.slice(0, 3),
+    first_publish_year: years.length > 0 ? Math.min(...years) : null,
+    series: withSeries?.series ?? null,
+    series_number: withSeries?.series_number ?? null,
+    edition_count: group.members.reduce((sum, m) => sum + (m.edition_count ?? 0), 0),
+  }
+}
+
+/**
+ * Collapse duplicate OL work records into one result per book, preserving the
+ * order in which each book first appeared (i.e. OL's relevance ranking).
+ */
+export function mergeDuplicateWorks(results: BookSearchResult[]): BookSearchResult[] {
+  // Pass 1: exact title + author matches
+  const groups: WorkGroup[] = []
+  const byKey = new Map<string, WorkGroup>()
+  for (const r of results) {
+    const key = `${normalize(r.author)}|${titleKey(r.title)}`
+    const existing = byKey.get(key)
+    if (existing) {
+      existing.members.push(r)
+    } else {
+      const group: WorkGroup = { rep: r, members: [r] }
+      byKey.set(key, group)
+      groups.push(group)
+    }
+  }
+
+  // Pass 2: attach bare-title (or unattributed) groups to their one subtitled sibling.
+  // Requiring a *unique* candidate is what stops "Sapiens" from bridging
+  // "Sapiens: A Brief History" and "Sapiens: A Graphic History" into one result.
+  const absorbed = new Set<WorkGroup>()
+  for (const group of groups) {
+    if (absorbed.has(group)) continue
+    const rep = group.rep
+    const isBare = titleKey(rep.title) === titleCore(rep.title)
+    const isUnattributed = normalize(rep.author) === 'unknown' || !normalize(rep.author)
+    if (!isBare && !isUnattributed) continue
+
+    const candidates = groups.filter(
+      (other) => other !== group && !absorbed.has(other) && canMerge(rep, other.rep)
+    )
+    if (candidates.length !== 1) continue
+
+    candidates[0].members.push(...group.members)
+    absorbed.add(group)
+  }
+
+  return groups.filter((g) => !absorbed.has(g)).map(collapse)
+}
+
+// ─── Derivative works ────────────────────────────────────────────────────────
+//
+// Popular non-fiction attracts summaries, study guides and workbooks, each its
+// own OL work with a near-identical title. They crowd out the real book.
+
+// `analysis` and `companion` are deliberately absent as bare prefixes — "Analysis
+// of Algorithms" and "Companion to Russian Studies" are real books. Genuine
+// derivatives that use those words pair them with "summary", which is covered.
+const DERIVATIVE_PREFIX_RE = /^\s*(?:the\s+)?(?:summary|summaries|study\s*guide|studyguide|reading\s*group\s*guide|teacher'?s?\s*guide|workbook|conversation\s*starters?|key\s*takeaways|quicklet|instaread|joosr|blinkist|cliffs?\s*notes|spark\s*notes|shmoop|sidekick|book\s*summary|extended\s*summary)\b/i
+const DERIVATIVE_PHRASE_RE = /\b(?:summary|study\s*guide|workbook|conversation\s*starters?|key\s*takeaways)\s+(?:of|for|on|to)\b/i
+const DERIVATIVE_SUFFIX_RE = /[|:]\s*(?:a\s+)?(?:summary|analysis|summary\s*(?:&|and)\s*analysis|study\s*guide|workbook)\b/i
+
+/** True for study guides, summaries and other companions to a book — not the book itself. */
+export function isDerivativeWork(title: string): boolean {
+  return DERIVATIVE_PREFIX_RE.test(title)
+    || DERIVATIVE_PHRASE_RE.test(title)
+    || DERIVATIVE_SUFFIX_RE.test(title)
+}
+
+/**
+ * Remove study guides and summaries — unless the user asked for one, or unless
+ * doing so would leave nothing behind.
+ */
+export function dropDerivativeWorks(results: BookSearchResult[], query: string): BookSearchResult[] {
+  if (isDerivativeWork(query) || /\b(summary|guide|workbook|analysis)\b/i.test(query)) return results
+  const kept = results.filter((r) => !isDerivativeWork(r.title))
+  return kept.length > 0 ? kept : results
+}
+
 function extractSeriesFromGBTitle(gbTitle: string): { bookTitle: string; series: string; number: string | null } | null {
-  // Pattern 1: "Series: Book Title" or "Series #N: Book Title"
+  // Pattern 1: "Series #N: Book Title".
+  //
+  // The number is required. Without it, "X: Y" is overwhelmingly a title and its
+  // subtitle — which is how most non-fiction is titled ("Bad Blood: Secrets and
+  // Lies in a Silicon Valley Startup") — and reading X as a series name invents
+  // phantom series metadata that then re-sorts the whole result set.
   const colonIdx = gbTitle.indexOf(':')
   if (colonIdx > 0) {
     const prefix = gbTitle.slice(0, colonIdx).trim()
     const numMatch = prefix.match(/\s*#?(\d+)\s*$/)
-    const number = numMatch ? numMatch[1] : null
-    const seriesName = prefix.replace(/[,\s]*(book\s+)?#?\d+\s*$/i, '').trim()
-    const bookTitle = gbTitle.slice(colonIdx + 1).trim()
-    if (seriesName.length > 1 && bookTitle.length > 1) {
-      return { bookTitle, series: seriesName, number }
+    if (numMatch) {
+      const seriesName = prefix.replace(/[,\s]*(book\s+)?#?\d+\s*$/i, '').trim()
+      const bookTitle = gbTitle.slice(colonIdx + 1).trim()
+      if (seriesName.length > 1 && bookTitle.length > 1) {
+        return { bookTitle, series: seriesName, number: numMatch[1] }
+      }
     }
   }
   // Pattern 2: "Book Title (Series, #N)" or "Book Title (Series Book N/Word)"
@@ -206,7 +417,7 @@ function extractSeriesFromGBTitle(gbTitle: string): { bookTitle: string; series:
 }
 
 // Reject strings that are marketing/edition notes rather than series names
-const EDITION_NOTE_RE = /\b(edition|tie-in|priced|special|anniversary|illustrated|revised|expanded|complete|omnibus|box\s*set|collection|volume|vol\.|reprint|abridged|unabridged|classic|deluxe|premium|exclusive|authorized|official|gift)\b/i
+const EDITION_NOTE_RE = /\b(edition|tie-in|priced|special|anniversary|illustrated|revised|expanded|complete|omnibus|box\s*set|collection|volume|vol\.|reprint|abridged|unabridged|classic|deluxe|premium|exclusive|authorized|official|gift|graphic|novel|adaptation|adapted|movie|film|large\s*print|annotated|translated|paperback|hardcover|hardback|kindle|ebook|summary|study\s*guide|workbook)\b/i
 function isEditionNote(s: string): boolean {
   return EDITION_NOTE_RE.test(s)
 }
@@ -392,25 +603,42 @@ function buildEdition(
   }
 }
 
-export async function getEditions(workId: string, language = 'eng'): Promise<Edition[]> {
+/** Upper bound on merged works to fetch editions for, so a bad merge can't fan out. */
+const MAX_WORKS_PER_FETCH = 5
+
+/** Fetch up to 600 edition entries for one OL work: first 300, then a second page if needed. */
+async function fetchWorkEditionEntries(workId: string): Promise<Record<string, unknown>[]> {
   // workId e.g. "/works/OL45804W"
-  // Fetch up to 600 editions: first 300, then a second page if needed
   const page1Url = `${BASE}${workId}/editions.json?limit=300`
-  const page1Res = await fetch(page1Url, { next: { revalidate: 3600, tags: ['editions'] } })
-  if (!page1Res.ok) return []
+  const page1Res = await fetch(page1Url, { next: { revalidate: 3600, tags: ['editions'] } }).catch(() => null)
+  if (!page1Res?.ok) return []
   const page1Data = await page1Res.json()
 
   const totalSize: number = page1Data.size ?? 0
-  let allEntries: Record<string, unknown>[] = page1Data.entries || []
+  let entries: Record<string, unknown>[] = page1Data.entries || []
 
   if (totalSize > 300) {
     const page2Url = `${BASE}${workId}/editions.json?limit=300&offset=300`
     const page2Res = await fetch(page2Url, { next: { revalidate: 3600 } }).catch(() => null)
     if (page2Res?.ok) {
       const page2Data = await page2Res.json()
-      allEntries = [...allEntries, ...(page2Data.entries || [])]
+      entries = [...entries, ...(page2Data.entries || [])]
     }
   }
+  return entries
+}
+
+/**
+ * Editions for a book. Accepts every OL work the book is split across — passing a
+ * single id keeps the old behaviour. Entries are concatenated and then
+ * de-duplicated by ISBN, so works that overlap cost nothing extra.
+ */
+export async function getEditions(workId: string | string[], language = 'eng'): Promise<Edition[]> {
+  const workIds = (Array.isArray(workId) ? workId : [workId]).filter(Boolean).slice(0, MAX_WORKS_PER_FETCH)
+  if (workIds.length === 0) return []
+
+  const perWork = await Promise.all(workIds.map(fetchWorkEditionEntries))
+  const allEntries: Record<string, unknown>[] = perWork.flat()
 
   const data = { entries: allEntries }
 
@@ -527,4 +755,34 @@ export async function getEditions(workId: string, language = 'eng'): Promise<Edi
 
 export function getCoverUrl(isbn: string, size: 'S' | 'M' | 'L' = 'M'): string {
   return `${COVERS}/b/isbn/${isbn}-${size}.jpg`
+}
+
+
+/**
+ * Expand a single OL work id into the full set of work records that hold the same
+ * book. Stack items persist only one `work_id`, so this is what lets an item saved
+ * before work-merging existed still reach every edition.
+ *
+ * Falls back to `[workId]` whenever the lookup is inconclusive.
+ */
+export async function findSiblingWorkIds(workId: string, title: string, author: string): Promise<string[]> {
+  if (!workId || !title) return [workId].filter(Boolean)
+
+  const normAuthor = author && normalize(author) !== 'unknown' ? author : ''
+  const query = normAuthor ? `${title} ${normAuthor}` : title
+
+  try {
+    const docs = await fetchWorkDocs(query)
+    if (docs.length === 0) return [workId]
+
+    const merged = mergeDuplicateWorks(docs.map(docToResult))
+    const group = merged.find((r) => (r.work_ids ?? [r.work_id]).includes(workId))
+    if (!group) return [workId]
+
+    const ids = group.work_ids ?? [group.work_id]
+    // Keep the caller's work id first — it is the one the user actually chose
+    return [workId, ...ids.filter((id) => id !== workId)]
+  } catch {
+    return [workId]
+  }
 }

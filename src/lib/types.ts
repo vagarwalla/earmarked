@@ -40,11 +40,21 @@ export interface BookSearchResult {
   title: string
   author: string
   work_id: string // Open Library work ID e.g. "/works/OL45804W"
+  /**
+   * Every OL work this result represents, `work_id` first. Open Library often
+   * splits one book across several work records — especially non-fiction, which
+   * fragments on the subtitle — and each shard holds only part of the editions.
+   * Optional so existing construction sites (e.g. rebuilding a result from a
+   * saved stack item) stay valid; treat an absent value as `[work_id]`.
+   */
+  work_ids?: string[]
   cover_url: string | null
   cover_urls: string[] // up to 3 distinct edition covers (includes cover_url if present)
   first_publish_year: number | null
   series: string | null
   series_number: string | null
+  /** Combined OL edition count across `work_ids` — used to pick the merge representative. */
+  edition_count?: number
 }
 
 export interface Edition {

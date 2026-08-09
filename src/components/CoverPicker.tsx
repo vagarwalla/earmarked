@@ -8,13 +8,16 @@ import type { Edition } from '@/lib/types'
 
 interface Props {
   workId: string | null
+  /** Used to find the book's other OL work records, which carry more cover art. */
+  title?: string | null
+  author?: string | null
   currentCoverUrl: string | null
   open: boolean
   onOpenChange: (v: boolean) => void
   onConfirm: (coverUrl: string) => void
 }
 
-export function CoverPicker({ workId, currentCoverUrl, open, onOpenChange, onConfirm }: Props) {
+export function CoverPicker({ workId, title, author, currentCoverUrl, open, onOpenChange, onConfirm }: Props) {
   const [covers, setCovers] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
@@ -25,7 +28,8 @@ export function CoverPicker({ workId, currentCoverUrl, open, onOpenChange, onCon
     setCovers([])
     setSelected(currentCoverUrl)
 
-    fetch(`/api/editions?workId=${encodeURIComponent(workId)}&language=`)
+    const editionParams = new URLSearchParams({ workId, title: title ?? '', author: author ?? '', language: '' })
+    fetch(`/api/editions?${editionParams}`)
       .then((r) => r.json())
       .then((editions: Edition[]) => {
         // Collect unique cover URLs, current one first
@@ -42,7 +46,7 @@ export function CoverPicker({ workId, currentCoverUrl, open, onOpenChange, onCon
         setLoading(false)
       })
       .catch(() => setLoading(false))
-  }, [workId, open, currentCoverUrl])
+  }, [workId, title, author, open, currentCoverUrl])
 
   function handleConfirm() {
     if (!selected) return
