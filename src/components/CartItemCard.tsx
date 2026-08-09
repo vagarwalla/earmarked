@@ -124,58 +124,63 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
 
   if (collapsed) {
     return (
-      <div className={`flex items-center gap-3 px-3 py-2 rounded-lg border bg-card transition-opacity ${saving ? 'opacity-60' : ''}`}>
+      <div className={`flex items-end gap-3 px-1 pb-1 transition-opacity ${saving ? 'opacity-60' : ''}`}>
         {item.cover_url && (
-          <img src={item.cover_url} alt={item.title} className="w-7 h-9 object-cover rounded shrink-0" />
+          <img src={item.cover_url} alt={item.title} className="book-cover w-8 h-12 object-cover shrink-0" />
         )}
-        <div className="flex-1 min-w-0">
-          <span className="font-medium text-sm leading-tight truncate block">{item.title}</span>
+        <div className="flex-1 min-w-0 pb-0.5">
+          <span className="font-serif font-medium text-base leading-tight truncate block">{item.title}</span>
           {item.author && <span className="text-sm text-muted-foreground truncate block">{item.author}</span>}
         </div>
-        <button onClick={() => setCollapsed(false)} className="text-muted-foreground hover:text-foreground shrink-0" title="Expand">
-          <ChevronDown className="h-4 w-4" />
-        </button>
-        <button onClick={() => onRemove(item.id)} className="text-muted-foreground hover:text-destructive shrink-0">
-          <X className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-1 pb-1 shrink-0">
+          <button onClick={() => setCollapsed(false)} className="text-muted-foreground hover:text-foreground" title="Expand">
+            <ChevronDown className="h-4 w-4" />
+          </button>
+          <button onClick={() => onRemove(item.id)} className="text-muted-foreground hover:text-destructive">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
     )
   }
 
   return (
-    <div className={`flex gap-3 p-3 rounded-lg border bg-card transition-opacity ${saving ? 'opacity-60' : ''}`}>
-      {/* Cover */}
-      <div className="shrink-0">
+    <div className={`flex gap-4 sm:gap-5 px-1 transition-opacity ${saving ? 'opacity-60' : ''}`}>
+      {/* Cover — bottom-aligned so it rests on the shelf ledge */}
+      <div className="shrink-0 self-end">
         <button
-          className="w-20 h-28 bg-muted rounded overflow-hidden block hover:opacity-80 transition-opacity"
+          className="book-cover group relative w-24 h-36 bg-muted overflow-hidden block"
           onClick={() => onPickCover(item)}
           title="Change cover image"
         >
           {item.cover_url ? (
             <img src={item.cover_url} alt={item.title} className="w-full h-full object-cover" />
           ) : (
-            <div className="w-full h-full flex items-center justify-center text-sm text-muted-foreground">?</div>
+            <div className="w-full h-full flex items-center justify-center text-sm text-muted-foreground font-serif italic">?</div>
           )}
-        </button>
-        <button
-          className="mt-1 w-20 flex justify-center gap-1 items-center text-xs text-muted-foreground hover:text-foreground"
-          onClick={() => onChangeCover(item)}
-          title="Change edition"
-        >
-          <RefreshCw className="h-3 w-3" />
-          <span>edition</span>
+          <span className="absolute inset-x-0 bottom-0 pb-1.5 pt-4 text-center text-[11px] text-white bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+            change cover
+          </span>
         </button>
       </div>
 
       {/* Details */}
-      <div className="flex-1 min-w-0 space-y-2">
+      <div className="flex-1 min-w-0 space-y-2.5 pb-4">
         {/* Title row */}
         <div className="flex items-start justify-between gap-2">
-          <div>
-            <div className="font-medium text-base leading-tight">{item.title}</div>
+          <div className="min-w-0">
+            <div className="font-serif font-medium text-lg leading-snug">{item.title}</div>
             {item.author && <div className="text-sm text-muted-foreground">{item.author}</div>}
           </div>
-          <div className="flex items-center gap-1 shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0 pt-1">
+            <button
+              onClick={() => onChangeCover(item)}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              title="Change edition"
+            >
+              <RefreshCw className="h-3 w-3" />
+              <span>edition</span>
+            </button>
             <button onClick={() => setCollapsed(true)} className="text-muted-foreground hover:text-foreground" title="Collapse">
               <ChevronUp className="h-4 w-4" />
             </button>
@@ -186,15 +191,15 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
         </div>
 
         {/* Condition */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground w-14 shrink-0">Condition</span>
-          <div className="flex gap-0.5 border rounded-md overflow-hidden text-sm min-h-[44px] sm:min-h-0 items-center">
+        <div className="flex items-center gap-2.5">
+          <span className="overline-label w-16 shrink-0">Condition</span>
+          <div className="flex border border-border/80 rounded-full overflow-hidden text-[13px] min-h-[44px] sm:min-h-0 items-center bg-card/50">
             {CONDITIONS.map((c) => {
               const active = (item.conditions ?? []).includes(c.value)
               return (
                 <button
                   key={c.value}
-                  className={`px-2 py-1 transition-colors ${active ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
+                  className={`px-2.5 py-1 transition-colors ${active ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
                   onClick={() => patch({ conditions: toggleCondition(item.conditions ?? [], c.value) })}
                   title={`${active ? 'Remove' : 'Include'} ${c.label} condition`}
                 >
@@ -206,13 +211,13 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
         </div>
 
         {/* Format */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground w-14 shrink-0">Format</span>
-          <div className="flex gap-0.5 border rounded-md overflow-hidden text-sm min-h-[44px] sm:min-h-0 items-center">
+        <div className="flex items-center gap-2.5">
+          <span className="overline-label w-16 shrink-0">Format</span>
+          <div className="flex border border-border/80 rounded-full overflow-hidden text-[13px] min-h-[44px] sm:min-h-0 items-center bg-card/50">
             {formatOptions.map((f) => (
               <button
                 key={f}
-                className={`px-2 py-1 capitalize ${item.format === f ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
+                className={`px-2.5 py-1 capitalize transition-colors ${item.format === f ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
                 onClick={() => patch({ format: f })}
               >
                 {f === 'any' ? 'Any' : f === 'hardcover' ? 'Hardcover' : 'Paperback'}
@@ -222,9 +227,9 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
         </div>
 
         {/* Special filters */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs text-muted-foreground w-14 shrink-0">Only</span>
-          <div className="flex gap-0.5 border rounded-md overflow-hidden text-sm">
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <span className="overline-label w-16 shrink-0">Only</span>
+          <div className="flex border border-border/80 rounded-full overflow-hidden text-[13px] bg-card/50">
             {([
               { key: 'signed_only', label: 'Signed' },
               { key: 'first_edition_only', label: '1st edition' },
@@ -232,8 +237,8 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
             ] as { key: 'signed_only' | 'first_edition_only' | 'dust_jacket_only'; label: string }[]).map(({ key, label }) => (
               <button
                 key={key}
-                className={`px-2 py-1 transition-colors ${
-                  item[key] ? 'bg-amber-100 text-amber-800' : 'text-muted-foreground hover:bg-muted'
+                className={`px-2.5 py-1 transition-colors ${
+                  item[key] ? 'bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200' : 'text-muted-foreground hover:bg-muted'
                 }`}
                 onClick={() => patch({ [key]: !item[key] })}
                 title={item[key] ? `Showing only ${label} — click to remove filter` : `Click to require ${label}`}
@@ -244,8 +249,10 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
           </div>
           <button
             onClick={() => patch({ flexible: !item.flexible })}
-            className={`text-sm px-2 py-1 rounded border transition-colors ${
-              item.flexible ? 'bg-blue-50 text-blue-700 border-blue-200' : 'text-muted-foreground hover:bg-muted border-border'
+            className={`text-[13px] px-2.5 py-1 rounded-full border transition-colors ${
+              item.flexible
+                ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-900'
+                : 'text-muted-foreground hover:bg-muted border-border/80'
             }`}
             title="Flexible: also accept looser conditions if exact match unavailable"
           >
@@ -282,7 +289,7 @@ export function CartItemCard({ item, onUpdate, onRemove, onChangeCover, onPickCo
                   patch({ max_price: val })
                 }
               }}
-              className="h-11 sm:h-7 w-16 px-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+              className="h-11 sm:h-7 w-16 px-2.5 text-sm border border-border/80 rounded-full bg-card/50 focus:outline-none focus:ring-1 focus:ring-ring"
             />
           </div>
           {item.isbn_preferred && (!item.isbns_candidates || item.isbns_candidates.length < 2) && (

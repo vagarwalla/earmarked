@@ -51,7 +51,7 @@ export function CartDefaults({ cart, slug, onUpdate, onApplyToAll }: Props) {
 
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-      <span className="shrink-0">Defaults:</span>
+      <span className="overline-label shrink-0">Defaults</span>
 
       <div className="flex gap-0.5 border rounded-md overflow-hidden">
         {CONDITIONS.map((c) => {

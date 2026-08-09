@@ -128,13 +128,87 @@
     font-size: 1.0625rem; /* 17px base */
     font-weight: 450;
     line-height: 1.65;
+    /* faint paper grain */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
   }
   html {
     @apply font-sans;
   }
+  h1, h2, h3, h4 {
+    font-family: var(--font-serif);
+    letter-spacing: -0.015em;
+  }
 }
 
-/* Multi-shelf bookcase — one shelf per book */
+/* Small-caps micro label for section eyebrows and control labels */
+.overline-label {
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+/* ——— Modern Library shelf ———
+   Books rest on a thin wooden ledge; the shelf is a line, not furniture. */
+
+.shelf-book {
+  position: relative;
+  padding: 20px 6px 0;
+}
+
+/* contact shadow cast onto the ledge, strongest under the cover */
+.shelf-book::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 4px;
+  height: 12px;
+  background: radial-gradient(150px 12px at 60px 100%, oklch(0.2 0.04 50 / 20%), transparent 70%);
+  pointer-events: none;
+}
+
+.shelf-ledge {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to bottom, oklch(0.68 0.045 60), oklch(0.5 0.05 50));
+  box-shadow:
+    0 1px 0 oklch(0.99 0.005 75 / 55%),
+    0 10px 16px -10px oklch(0.25 0.05 50 / 40%);
+}
+
+/* Book-shaped cover: square spine edge, softly rounded fore-edge, spine crease */
+.book-cover {
+  border-radius: 2px 5px 5px 2px;
+  box-shadow:
+    inset 4px 0 6px -4px oklch(0 0 0 / 40%),
+    inset 0 0 0 1px oklch(0 0 0 / 7%),
+    2px 3px 6px oklch(0.2 0.04 50 / 15%),
+    7px 10px 22px -8px oklch(0.2 0.04 50 / 30%);
+}
+
+.dark .shelf-book::after {
+  background: radial-gradient(150px 12px at 60px 100%, oklch(0 0 0 / 45%), transparent 70%);
+}
+
+.dark .shelf-ledge {
+  background: linear-gradient(to bottom, oklch(0.36 0.032 54), oklch(0.24 0.028 50));
+  box-shadow:
+    0 1px 0 oklch(1 0 0 / 7%),
+    0 10px 16px -10px oklch(0 0 0 / 60%);
+}
+
+.dark .book-cover {
+  box-shadow:
+    inset 4px 0 6px -4px oklch(0 0 0 / 60%),
+    inset 0 0 0 1px oklch(1 0 0 / 8%),
+    2px 3px 6px oklch(0 0 0 / 35%),
+    7px 10px 22px -8px oklch(0 0 0 / 55%);
+}
+
+/* Legacy multi-shelf bookcase — kept for the design-options gallery */
 
 .bookcase-outer {
   display: flex;

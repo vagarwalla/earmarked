@@ -4,7 +4,7 @@ import { useEffect, useState, use } from 'react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, BookOpen, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeft, BookOpen, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { BookSearch } from '@/components/BookSearch'
@@ -219,17 +219,19 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
   return (
     <main className="min-h-screen bg-background">
       {/* Header */}
-      <header className="border-b bg-background sticky top-0 z-10">
+      <header className="border-b border-border/70 bg-background/85 backdrop-blur-md sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3">
           <Link href="/">
             <Button variant="ghost" size="icon" className="h-8 w-8">
               <ArrowLeft className="h-4 w-4" />
             </Button>
           </Link>
-          <BookOpen className="h-5 w-5 text-primary" />
           <div className="flex-1 min-w-0">
-            <h1 className="font-serif font-semibold text-lg leading-tight">{cart.name}</h1>
-            <p className="text-sm text-muted-foreground">{items.length} book{items.length !== 1 ? 's' : ''}</p>
+            <p className="overline-label flex items-center gap-1.5">
+              <BookOpen className="h-3 w-3" />
+              Stack · {items.length} book{items.length !== 1 ? 's' : ''}
+            </p>
+            <h1 className="font-serif font-semibold text-xl leading-tight truncate">{cart.name}</h1>
           </div>
           <ThemeToggle />
           <Button
@@ -258,41 +260,27 @@ export default function CartPage({ params }: { params: Promise<{ slug: string }>
           <CartDefaults cart={cart} onUpdate={(updated) => setCart(updated)} slug={slug} onApplyToAll={handleApplyDefaultsToAll} />
 
           {items.length === 0 ? (
-            <div className="text-center py-16 text-muted-foreground border-2 border-dashed rounded-lg">
-              <Plus className="h-10 w-10 mx-auto mb-3 opacity-20" />
-              <p>Search for a book above, or import a Goodreads shelf.</p>
+            <div className="pt-14 pb-2 text-center">
+              <p className="font-serif italic text-lg text-muted-foreground">This shelf is empty.</p>
+              <p className="text-sm text-muted-foreground mt-1">Search for a book above, or import a Goodreads shelf.</p>
+              <div className="shelf-ledge mt-10" />
             </div>
           ) : (
-            <>
-              {/* Bookcase: side walls + one shelf plank per book */}
-              <div className="bookcase-outer">
-                <div className="bookcase-wall-l" />
-                <div className="bookcase-scroll max-h-[calc(100vh-240px)]">
-                  {items.map((item) => (
-                    <div key={item.id}>
-                      <div className="bookcase-book-bay">
-                        <CartItemCard
-                          item={item}
-                          onUpdate={handleUpdateItem}
-                          onRemove={handleRemoveItem}
-                          onChangeCover={handleChangeCover}
-                          onPickCover={handlePickCover}
-                        />
-                      </div>
-                      <div className="bookcase-shelf-top" />
-                      <div className="bookcase-shelf-face" />
-                    </div>
-                  ))}
+            /* One thin ledge per book — each cover rests on its own shelf line */
+            <div>
+              {items.map((item) => (
+                <div key={item.id} className="shelf-book">
+                  <CartItemCard
+                    item={item}
+                    onUpdate={handleUpdateItem}
+                    onRemove={handleRemoveItem}
+                    onChangeCover={handleChangeCover}
+                    onPickCover={handlePickCover}
+                  />
+                  <div className="shelf-ledge" />
                 </div>
-                <div className="bookcase-wall-r" />
-              </div>
-              {/* Bottom closure */}
-              <div className="bookcase-bottom">
-                <div className="bookcase-bottom-wall-l" />
-                <div className="bookcase-bottom-plank" />
-                <div className="bookcase-bottom-wall-r" />
-              </div>
-            </>
+              ))}
+            </div>
           )}
         </div>
 
