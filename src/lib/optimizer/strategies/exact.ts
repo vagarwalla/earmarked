@@ -1,5 +1,5 @@
 import type { OptimizerStrategy, BookOption, Assignment, SellerOffer } from '../shared'
-import { shippingCost, computeTotalCost } from '../shared'
+import { CostTracker, computeTotalCost } from '../shared'
 
 // Total sellers considered per book (limits branching factor). Do not raise
 // casually: worst case is candidates^books before pruning.
@@ -84,46 +84,14 @@ export function solveExact(bookOptions: BookOption[], opts: ExactOptions = {}): 
   let nodesVisited = 0
   let aborted = false
 
-  // Incremental seller state maintained during backtracking
-  type SellerInfo = { qty: number; bookCost: number; shippingBase: number; perAdditional: number }
-  const sellers = new Map<string, SellerInfo>()
-  let assignedCost = 0
-
-  function sellerCost(s: SellerInfo): number {
-    return s.bookCost + shippingCost(s.qty, s.shippingBase, s.perAdditional)
-  }
-
-  function addOffer(offer: SellerOffer): void {
-    const units = offer.listings.length
-    const s = sellers.get(offer.seller_id)
-    if (s) {
-      assignedCost -= sellerCost(s)
-      s.qty += units
-      s.bookCost += offer.total_price
-      assignedCost += sellerCost(s)
-    } else {
-      const ns: SellerInfo = { qty: units, bookCost: offer.total_price, shippingBase: offer.shipping_base, perAdditional: offer.shipping_per_additional }
-      sellers.set(offer.seller_id, ns)
-      assignedCost += sellerCost(ns)
-    }
-  }
-
-  function removeOffer(offer: SellerOffer): void {
-    const units = offer.listings.length
-    const s = sellers.get(offer.seller_id)!
-    assignedCost -= sellerCost(s)
-    s.qty -= units
-    s.bookCost -= offer.total_price
-    if (s.qty <= 0) {
-      sellers.delete(offer.seller_id)
-    } else {
-      assignedCost += sellerCost(s)
-    }
-  }
+  // Incremental seller state maintained during backtracking. CostTracker is
+  // the shared cost model, so the bound this search prunes against is exactly
+  // the cost the rest of the optimizer reports.
+  const tracker = new CostTracker()
 
   function recordLeaf(): void {
-    if (assignedCost >= bestCost) return
-    bestCost = assignedCost
+    if (tracker.totalCost >= bestCost) return
+    bestCost = tracker.totalCost
     const m: Assignment = new Map()
     for (let i = 0; i < n; i++) {
       const c = chosen[i]
@@ -150,14 +118,14 @@ export function solveExact(bookOptions: BookOption[], opts: ExactOptions = {}): 
       if (++nodesVisited > nodeBudget) { aborted = true; return }
 
       chosen[bookIdx] = candidate
-      addOffer(candidate)
+      tracker.addOffer(candidate)
 
-      const lb = assignedCost + suffixMinPrice[bookIdx + 1]
+      const lb = tracker.totalCost + suffixMinPrice[bookIdx + 1]
       if (lb < bestCost) {
         backtrack(bookIdx + 1)
       }
 
-      removeOffer(candidate)
+      tracker.removeOffer(candidate)
       if (aborted) return
     }
     chosen[bookIdx] = null

@@ -22,6 +22,7 @@ function generateInstance(seed: number, maxBooks = 20): Instance {
     const retailer = s === 0 && rand() < 0.5
     return {
       id: retailer ? 'thriftbooks' : `abe-${s}`,
+      retailer,
       perAdd: retailer ? 0 : 1.99,
       copies: retailer ? 1 : 1 + Math.floor(rand() * 3), // marketplace sellers list 1–3 copies
     }
@@ -48,11 +49,15 @@ function generateInstance(seed: number, maxBooks = 20): Instance {
     for (const seller of sellers) {
       if (rand() >= 0.6) continue // seller doesn't carry this book
       for (let c = 0; c < seller.copies; c++) {
+        // Shipping is quoted PER LISTING on AbeBooks and free shipping is
+        // common, so bases vary within a single seller. Generating a constant
+        // base here is what let the order-dependent cost bug through before.
+        const base = seller.retailer ? 3.99 : [0, 0, 3.99, 5.99, 9.99][Math.floor(rand() * 5)]
         ls.push({
           listing_id: `${seller.id}-isbn-${b}-${c}`,
           seller_id: seller.id, seller_name: seller.id,
           price: 1 + Math.round(rand() * 2000) / 100,
-          shipping_base: 3.99, shipping_per_additional: seller.perAdd,
+          shipping_base: base, shipping_per_additional: seller.perAdd,
           condition: 'x',
           condition_normalized: ALL_CONDITIONS[Math.floor(rand() * ALL_CONDITIONS.length)],
           signed: rand() < 0.15, first_edition: false, dust_jacket: false,
@@ -139,6 +144,48 @@ describe('optimizer properties (seeded random instances)', () => {
           expect(ids.length).toBe(a.item.quantity)
         }
       }
+    }
+  })
+
+  it('grand_total is invariant under permutation of the cart', () => {
+    // Cart order comes from sort_order, so an order-sensitive cost model means
+    // dragging a book changes the price. This is the general guard against any
+    // "whichever listing we saw first wins" bug in the shipping model.
+    for (let t = 0; t < TRIALS; t++) {
+      const { items, listingsByIsbn } = generateInstance(9000 + t)
+      const forward = optimize(items, listingsByIsbn)
+      const reversed = optimize([...items].reverse(), listingsByIsbn)
+      expect(reversed.grand_total).toBeCloseTo(forward.grand_total, 6)
+      expect(reversed.naive_total).toBeCloseTo(forward.naive_total, 6)
+    }
+  })
+
+  it('group shipping is never below what any chosen listing quotes', () => {
+    // The order is charged one base; claiming a base lower than a copy in the
+    // order quotes would be inventing a discount the seller never offered.
+    for (let t = 0; t < TRIALS; t++) {
+      const { items, listingsByIsbn } = generateInstance(9500 + t)
+      const r = optimize(items, listingsByIsbn)
+      for (const g of r.groups) {
+        const units = g.assignments.flatMap((a) => a.listings)
+        const maxBase = Math.max(...units.map((l) => l.shipping_base))
+        expect(g.shipping).toBeGreaterThanOrEqual(maxBase - 1e-9)
+      }
+    }
+  })
+
+  it('reported grand_total matches the cost model the strategies minimize', () => {
+    for (let t = 0; t < TRIALS; t++) {
+      const { items, listingsByIsbn } = generateInstance(9800 + t)
+      const r = optimize(items, listingsByIsbn)
+      const bookOptions = buildBookOptions(items, listingsByIsbn)
+      const assignment: Assignment = new Map(
+        r.groups.flatMap((g) => g.assignments.map((a) => {
+          const opt = bookOptions.find((b) => b.item.id === a.item.id)!
+          return [a.item.id, opt.offers.get(g.seller_id)!] as const
+        }))
+      )
+      expect(computeTotalCost(bookOptions, assignment)).toBeCloseTo(r.grand_total, 6)
     }
   })
 

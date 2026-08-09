@@ -33,8 +33,36 @@ export type SellerOffer = {
   /** One entry per unit; retailers repeat their stocked listing. */
   listings: Listing[]
   total_price: number
+  /** Highest base quoted by this offer's unit listings — see combineShipping. */
   shipping_base: number
   shipping_per_additional: number
+}
+
+/**
+ * Shipping terms are quoted PER LISTING (AbeBooks returns a shipping cost on
+ * every copy, frequently $0 for free-shipping listings), but an order from one
+ * seller is charged once. Combining terms therefore has to pick a single base
+ * for the order, and the only safe choice is the highest quoted base: taking a
+ * lower one claims a discount the seller never offered, and taking "whichever
+ * listing we saw first" makes the total depend on cart ordering.
+ *
+ * max() is associative and commutative, so a group's terms are the same however
+ * its listings are ordered or incrementally added and removed.
+ */
+export function combineShippingBase(a: number, b: number): number {
+  return a > b ? a : b
+}
+
+function maxShippingBase(listings: Listing[]): number {
+  let m = 0
+  for (const l of listings) if (l.shipping_base > m) m = l.shipping_base
+  return m
+}
+
+function maxShippingPerAdditional(listings: Listing[]): number {
+  let m = 0
+  for (const l of listings) if (l.shipping_per_additional > m) m = l.shipping_per_additional
+  return m
 }
 
 export type BookOption = {
@@ -84,8 +112,9 @@ export function buildSellerOffers(item: CartItem, qualified: Listing[]): Map<str
       seller_name: ls[0].seller_name,
       listings: units,
       total_price: units.reduce((s, l) => s + l.price, 0),
-      shipping_base: ls[0].shipping_base,
-      shipping_per_additional: ls[0].shipping_per_additional,
+      // Terms for the units actually bought, not for the seller's cheapest listing
+      shipping_base: maxShippingBase(units),
+      shipping_per_additional: maxShippingPerAdditional(units),
     }])
   }
   offers.sort((a, b) =>
@@ -114,10 +143,11 @@ export function computeTotalCost(bookOptions: BookOption[], assignment: Assignme
     if (!offer) continue
     sellerUnits.set(offer.seller_id, (sellerUnits.get(offer.seller_id) ?? 0) + offer.listings.length)
     sellerBookCost.set(offer.seller_id, (sellerBookCost.get(offer.seller_id) ?? 0) + offer.total_price)
-    if (!sellerShippingBase.has(offer.seller_id)) {
-      sellerShippingBase.set(offer.seller_id, offer.shipping_base)
-      sellerShippingPerAdditional.set(offer.seller_id, offer.shipping_per_additional)
-    }
+    // Highest quoted terms win for the order, independent of iteration order
+    sellerShippingBase.set(offer.seller_id,
+      combineShippingBase(sellerShippingBase.get(offer.seller_id) ?? 0, offer.shipping_base))
+    sellerShippingPerAdditional.set(offer.seller_id,
+      combineShippingBase(sellerShippingPerAdditional.get(offer.seller_id) ?? 0, offer.shipping_per_additional))
   }
   let cost = 0
   for (const [sid, bookCost] of sellerBookCost) {
@@ -130,11 +160,64 @@ export function computeTotalCost(bookOptions: BookOption[], assignment: Assignme
   return cost
 }
 
+/**
+ * Multiset of quoted values whose maximum survives add/remove in any order.
+ * Needed because incremental search adds and removes offers constantly, and
+ * dropping the offer that quoted the highest base must restore the previous
+ * highest — not leave the seller charging a base nothing in the order quotes.
+ */
+class MaxBag {
+  max = 0
+  // Nearly every seller quotes one distinct base across an order, and this sits
+  // in the branch-and-bound inner loop, so the single-value case stays
+  // allocation-free; the Map is only created once a second value appears.
+  private soleValue = 0
+  private soleCount = 0
+  private counts: Map<number, number> | null = null
+
+  add(v: number): void {
+    if (this.counts === null) {
+      if (this.soleCount === 0) {
+        this.soleValue = v
+        this.soleCount = 1
+        this.max = v
+        return
+      }
+      if (v === this.soleValue) {
+        this.soleCount++
+        return
+      }
+      this.counts = new Map([[this.soleValue, this.soleCount]])
+      this.soleCount = 0
+    }
+    this.counts.set(v, (this.counts.get(v) ?? 0) + 1)
+    if (v > this.max) this.max = v
+  }
+
+  remove(v: number): void {
+    if (this.counts === null) {
+      if (this.soleCount > 0 && v === this.soleValue && --this.soleCount === 0) this.max = 0
+      return
+    }
+    const c = this.counts.get(v)
+    if (c === undefined) return
+    if (c > 1) {
+      this.counts.set(v, c - 1)
+      return
+    }
+    this.counts.delete(v)
+    if (v < this.max) return
+    let m = 0
+    for (const k of this.counts.keys()) if (k > m) m = k
+    this.max = m
+  }
+}
+
 export type SellerState = {
   qty: number
   bookCost: number
-  shippingBase: number
-  perAdditional: number
+  bases: MaxBag
+  perAdditionals: MaxBag
 }
 
 /**
@@ -157,7 +240,7 @@ export class CostTracker {
   }
 
   private sellerCost(s: SellerState): number {
-    return s.bookCost + shippingCost(s.qty, s.shippingBase, s.perAdditional)
+    return s.bookCost + shippingCost(s.qty, s.bases.max, s.perAdditionals.max)
   }
 
   addOffer(offer: SellerOffer): void {
@@ -165,30 +248,33 @@ export class CostTracker {
   }
 
   removeOffer(offer: SellerOffer): void {
-    this.removeBook(offer.seller_id, offer.total_price, offer.listings.length)
+    this.removeBook(offer.seller_id, offer.total_price, offer.listings.length, offer.shipping_base, offer.shipping_per_additional)
   }
 
   /** `cost` is the total book cost being added for `units` units. */
   addBook(sellerId: string, cost: number, units: number, shippingBase: number, perAdditional: number): void {
-    const s = this.sellers.get(sellerId)
+    let s = this.sellers.get(sellerId)
     if (s) {
       this.totalCost -= this.sellerCost(s)
-      s.qty += units
-      s.bookCost += cost
-      this.totalCost += this.sellerCost(s)
     } else {
-      const ns: SellerState = { qty: units, bookCost: cost, shippingBase, perAdditional }
-      this.sellers.set(sellerId, ns)
-      this.totalCost += this.sellerCost(ns)
+      s = { qty: 0, bookCost: 0, bases: new MaxBag(), perAdditionals: new MaxBag() }
+      this.sellers.set(sellerId, s)
     }
+    s.qty += units
+    s.bookCost += cost
+    s.bases.add(shippingBase)
+    s.perAdditionals.add(perAdditional)
+    this.totalCost += this.sellerCost(s)
   }
 
-  removeBook(sellerId: string, cost: number, units: number): void {
+  removeBook(sellerId: string, cost: number, units: number, shippingBase: number, perAdditional: number): void {
     const s = this.sellers.get(sellerId)
     if (!s) return
     this.totalCost -= this.sellerCost(s)
     s.qty -= units
     s.bookCost -= cost
+    s.bases.remove(shippingBase)
+    s.perAdditionals.remove(perAdditional)
     if (s.qty <= 0) {
       this.sellers.delete(sellerId)
     } else {
@@ -242,13 +328,13 @@ export function buildGroups(bookOptions: BookOption[], assignment: Assignment): 
     group.books_subtotal += offer.total_price
   }
 
-  // Shipping derives from the same per-seller unit count and params the
-  // strategies' cost model uses (offer params; a seller's params are uniform).
+  // Shipping derives from the same units and combined terms the strategies'
+  // cost model uses, over every listing in the group — never one representative
+  // listing, whose base may be lower than what other copies in the order quote.
   const groups: SellerGroup[] = []
   for (const group of groupMap.values()) {
-    const totalUnits = group.assignments.reduce((s, a) => s + a.listings.length, 0)
-    const first = group.assignments[0].listing
-    group.shipping = shippingCost(totalUnits, first.shipping_base, first.shipping_per_additional)
+    const units = group.assignments.flatMap((a) => a.listings)
+    group.shipping = shippingCost(units.length, maxShippingBase(units), maxShippingPerAdditional(units))
     group.group_total = group.books_subtotal + group.shipping
     groups.push(group)
   }

@@ -65,7 +65,8 @@ export function optimizeBookOptions(
     .map(({ item }) => item)
 
   // Naive baseline: each book bought as its own order from the seller with
-  // the cheapest fulfillable offer (qty units share one shipping charge).
+  // the cheapest fulfillable offer (qty units share one shipping charge,
+  // using that offer's own combined terms).
   const naive_total = bookOptions.reduce((sum, { offers }) => {
     let cheapest = Infinity
     for (const o of offers.values()) {
