@@ -1,8 +1,17 @@
 # Optimizer Review & Improvement Plan
 
-**Revision 1** — findings empirically verified against the live code; solutions
-re-checked for compute cost; one original recommendation (raising the exact
-strategy's candidate cap) withdrawn as unsafe and replaced.
+**Revision 2.**
+Revision log:
+- *Rev 1*: findings empirically verified with probe code; withdrew rev 0's
+  unsafe suggestion to raise the exact strategy's candidate cap (10¹² worst
+  case); added compute-budget envelope, node cap, and batch-endpoint finding.
+- *Rev 2*: double-checked rev 1's own solutions. Replaced "run exact and
+  local search, take the min" with the cheaper and stronger warm-start
+  design; reordered phases (determinism is a prerequisite for deterministic
+  exact search); corrected two proposed test invariants that don't hold for
+  heuristics; turned the combined-vs-single-source invariant into a
+  code-level guarantee; decomposed the work into PR-sized units with
+  acceptance criteria.
 
 The core algorithm of Earmarked is the seller-grouping optimizer
 (`src/lib/optimizer/`): given a stack of books and live listings, it assigns
@@ -16,10 +25,10 @@ buildBookOptions (filter + sort)          src/lib/optimizer/shared.ts
 ```
 
 The overall design is sound — incremental cost tracking (`CostTracker`),
-branch-and-bound with a valid lower bound, multi-start greedy + iterated local
-search — and 96 optimizer-related tests pass. The issues below are ordered by
-impact. Findings marked **[verified]** were reproduced with probe code against
-the current implementation.
+branch-and-bound with a valid lower bound, multi-start greedy + iterated
+local search — and 96 optimizer-related tests pass. Findings marked
+**[verified]** were reproduced with probe code against the current
+implementation.
 
 ## Findings
 
@@ -27,12 +36,12 @@ the current implementation.
 
 `exact.ts` caps candidates at `MAX_CANDIDATES_PER_BOOK = 6` sellers per book,
 chosen by cheapest standalone price. A seller that is slightly pricier per
-book but covers *many* books (the consolidation winner) can be truncated away.
-Probe: 10 books, each with 6 distinct cheap single-book sellers plus one
-seller "Z" carrying everything at 7th-cheapest price — **exact returned
+book but covers *many* books (the consolidation winner) can be truncated
+away. Probe: 10 books, each with 6 distinct cheap single-book sellers plus
+one seller "Z" carrying everything at 7th-cheapest price — **exact returned
 $49.90 while local search found the $41.90 optimum** (19% worse). Nothing
-cross-checks the two strategies, so the auto-selection rule (`≤12 books →
-exact`) actively picks the worse answer on this shape of cart.
+cross-checks the strategies, so the auto-selection rule (`≤12 books → exact`)
+actively picks the worse answer on this shape of cart.
 
 ### F2. Exact has no runtime guard and blows up adversarially [verified]
 
@@ -40,9 +49,9 @@ Branch-and-bound worst case is `candidates^books` (6¹² ≈ 2.2 × 10⁹ nodes)
 The lower bound prunes well when prices differ, but when many sellers carry
 the same books at near-identical prices the bound is weak. Probe: 12 books ×
 6 full-coverage sellers with prices within $0.05 of each other → **4,991ms**;
-a 10-book × 7-seller variant took ~9s. There is no node cap, no deadline, and
-no fallback — a plausible cart shape (popular books, many big sellers) can
-hang the `/api/optimize` route into a serverless timeout.
+a 10-book × 7-seller variant took ~9s. No node cap, no deadline, no fallback
+— a plausible cart shape (popular books, many big sellers) can hang
+`/api/optimize` into a serverless timeout.
 
 ### F3. Filter semantics diverge between optimizer and relaxation
 
@@ -56,8 +65,8 @@ independent implementations of "does this listing qualify".
 ### F4. Books with no qualifying listings vanish silently
 
 An item whose listings are all filtered out produces no assignment and no
-trace in `OptimizationResult`; `grand_total` looks like the cost of the whole
-stack when it only covers part of it.
+trace in `OptimizationResult`; `grand_total` looks like the cost of the
+whole stack when it only covers part of it.
 
 ### F5. `quantity > 1` assumes a used listing has unlimited stock
 
@@ -71,25 +80,25 @@ full base shipping per unit — inflating advertised savings.
 `local-search.ts` uses raw `Math.random()` and a wall-clock deadline, so the
 same cart can return different groupings on consecutive runs, and quality
 regressions can't be asserted in tests. The deadline is computed once before
-the multi-start loop: start 0's ILS loop runs until it expires, so starts 1–4
-get greedy + one improvement pass and **zero** ILS iterations. (The 2-swap
-pass has no deadline check either, though measured sweep cost — ~45k O(1)
-tracker operations at n=30 — makes that a minor concern in practice.)
+the multi-start loop: start 0's ILS loop runs until it expires, so starts
+1–4 get greedy + one improvement pass and **zero** ILS iterations. (The
+2-swap pass has no deadline check either, though measured sweep cost — ~45k
+O(1) tracker operations at n=30 — makes that minor in practice.)
 
 ### F7. The UI computes the same optimization twice, via five API calls [verified]
 
 `OptimizationPanel.filterBySource` returns the *identical* listings map for
 `'best'` and `'combined'`, and `updateAllResults` fires five parallel
 `/api/optimize` calls per search. Two of the five are byte-identical work,
-and all five re-run `buildBookOptions` filtering from scratch on overlapping
-data. ~40% of per-search optimizer compute (and network payload — the full
-listings map is re-uploaded five times) is redundant.
+all five re-run listing qualification from scratch on overlapping data, and
+the full listings map is uploaded five times. ~40% of per-search optimizer
+compute and payload is redundant.
 
 ### F8. Unvalidated input at the API boundary
 
 `/api/optimize` destructures `req.json()` straight into the optimizer. A
-malformed body throws mid-algorithm as an opaque 500; non-finite prices would
-silently corrupt cost comparisons. (Note: `zod` is **not** currently a
+malformed body throws mid-algorithm as an opaque 500; non-finite prices
+would silently corrupt cost comparisons. (`zod` is **not** currently a
 dependency — validation needs either a new dep or a hand-rolled guard.)
 
 ### F9. Minor internal inconsistencies
@@ -105,9 +114,6 @@ dependency — validation needs either a new dep or a hand-rolled guard.)
 - `CartItem.format` and `flexible` are ignored by the optimizer (format is
   enforced upstream via edition/ISBN selection — should be documented or
   asserted, not implicit).
-- (Withdrawn from rev 0: cross-ISBN listing duplication in
-  `buildBookOptions` — candidate ISBNs are already Set-deduped and listings
-  are keyed by ISBN, so duplicates can't actually arise.)
 
 ### F10. Test gaps
 
@@ -115,121 +121,138 @@ Good example-based coverage, but nothing that would catch a quality or
 runtime regression: no randomized/property tests, no brute-force oracle, no
 adversarial-runtime test, no determinism assertion, no benchmark.
 
-## Compute budget (target envelope)
+## Target compute envelope
 
-Design target for one optimize call: **p95 < 250ms, hard worst case < 1s**,
-deterministic. Current worst case is unbounded (F2). The budget allocation
-that achieves this:
+One optimize request: **p95 < 250ms, hard worst case < 1s, fully
+deterministic.** Current worst case is unbounded (F2). Allocation:
 
 | Component | Budget | Mechanism |
 |---|---|---|
-| buildBookOptions | O(listings) | shared once per request across sources (F7 fix) |
-| exact strategy | ≤ ~500k nodes | explicit node cap + adaptive opt-in (below) |
-| local search | fixed iteration count | per-start ILS iteration budget, seeded PRNG |
-| safety-net LS after exact | ≤ 50ms | reuses existing LS with small budget |
+| listing qualification | O(listings), once per request | qualify once, partition per source (F7 fix) |
+| local search (always runs) | fixed iteration count | seeded PRNG + per-start ILS iteration budget |
+| exact refinement (when gated in) | ≤ ~500k nodes ≈ 50–100ms | warm start + node cap + ordering (below) |
 
-**Adaptive strategy selection** replaces the blunt `≤12 books → exact` rule:
-estimate branching as Σ log(candidateCount_i); run exact only when the
-estimate fits the node budget (with the node cap as backstop), otherwise go
-straight to local search. This is simultaneously safer (F2) and less
-conservative — a 20-book cart where most books have 1–2 sellers is cheap to
-solve exactly and currently never gets the chance.
+**Solve order (replaces `≤12 books → exact`):**
+
+1. Always run seeded local search first — cheap, bounded, deterministic.
+2. Gate exact refinement on a branching estimate
+   (Σ log candidateCount_i ≲ log 10⁷): small/sparse carts qualify even with
+   >12 books; dense adversarial carts skip straight to the LS answer.
+3. When exact runs, it is **warm-started with the LS assignment as the
+   initial incumbent** (`bestCost` = LS cost). This is strictly better than
+   rev 1's "run both, take min": the search prunes far harder from node one
+   (upper bound is tight immediately), a node-cap abort still returns
+   something ≥ LS quality *by construction*, and there is one code path
+   instead of a comparison step.
+4. Node cap (counted nodes, not wall clock — deterministic) aborts pathological
+   searches; the incumbent at abort is the answer.
+
+Note the dependency this creates: exact's output is only deterministic if
+its warm start is, so seeding local search (F6) must land **before or with**
+the exact rework — reflected in the PR order below.
 
 ## Plan
 
-### Phase 1 — Correctness at the boundaries (small diffs, high impact)
+### Workstream A — Correctness at the boundaries (F3, F4, F5-savings)
 
-1. **Single qualification function.** Extract `listingQualifies(item, listing,
-   conditions, maxPrice)` into `shared.ts`; use it from both
-   `buildBookOptions` and `relaxation.ts`; fix relaxation's tri-state boolean
-   handling to match `types.ts` (F3). Tests for `false` = exclude on all
-   three flags, in both call sites.
-2. **Surface unassigned books.** Add `unassigned: CartItem[]` to
-   `OptimizationResult`; populate in `optimize()`; render in
-   `OptimizationPanel` (F4).
-3. **Fix `naive_total` for quantity**: one naive order per book =
-   `price × qty + shippingCost(qty, base, perAdditional)` (F5, savings part).
+1. Extract a single `listingQualifies(item, listing, conditions, maxPrice)`
+   into `shared.ts`; use it from `buildBookOptions` and `relaxation.ts`; fix
+   relaxation's tri-state boolean handling to match `types.ts`.
+2. Add `unassigned: CartItem[]` to `OptimizationResult`; populate in
+   `optimize()`; render in `OptimizationPanel`.
+3. Fix `naive_total`: one naive order per book =
+   `price × qty + shippingCost(qty, base, perAdditional)`.
 
-### Phase 2 — Bound and harden the exact strategy (F1, F2)
+### Workstream B — Determinism (F6) *(prerequisite for C)*
 
-4. **Node cap with graceful degradation.** Count explored nodes; at the cap
-   (deterministic, not wall-clock), stop and return the best incumbent found
-   so far. `optimize()` then polishes/cross-checks with local search (step 6),
-   so a capped run degrades to "very good" instead of "hung".
-5. **Better pruning at zero cost.** Order books most-constrained-first
-   (fewest candidates, then largest price spread) before branching — standard
-   variable-ordering, typically cuts nodes by orders of magnitude on exactly
-   the adversarial shapes measured in F2. Fix the candidate sort to use
-   `price + shipping_base` consistently.
-6. **Cross-check, don't trust.** Keep `MAX_CANDIDATES_PER_BOOK = 6` (do
-   **not** raise it — rev 0 of this plan suggested 10, which makes the F2
-   worst case ~10¹² nodes; withdrawn). Instead: (a) build each book's
-   candidate list as ~4 cheapest sellers + ~2 highest-cart-coverage sellers,
-   which is what the truncation probe shows exact actually misses; (b) in
-   `optimize()`, when exact ran, also run local search (≤50ms at these sizes)
-   and return whichever assignment `computeTotalCost` scores lower. Result is
-   provably ≥ as good as today's local search on every cart.
-7. **Adaptive strategy selection** per the compute-budget section: replace
-   `EXACT_BOOK_LIMIT` with a branching estimate against the node budget.
+4. Thread a seeded PRNG (mulberry32) through `solveGreedy` and `perturb`;
+   seed = stable hash of the input. Identical requests → identical answers
+   (also enables response memoization by input hash later).
+5. Replace the shared wall-clock deadline with per-start ILS iteration
+   budgets (keep one global wall-clock cap only as a serverless backstop);
+   add the budget check to the 2-swap loop.
 
-### Phase 3 — Determinism (F6)
+### Workstream C — Bound and strengthen exact search (F1, F2)
 
-8. **Seeded PRNG.** Thread mulberry32 (or similar) through
-   `solveGreedy(randomness)` and `perturb`; seed derived from a stable hash of
-   the input so identical requests give identical answers. This also makes
-   responses memoizable/cacheable by input hash if wanted later.
-9. **Iteration-based budgets.** Per-start ILS iteration counts instead of one
-   shared wall-clock deadline (keep a global wall-clock cap only as a
-   serverless backstop); budget check inside the 2-swap loop.
+6. Implement the solve order from the envelope section: LS-first,
+   branching-estimate gate, warm-started branch-and-bound, node cap with
+   incumbent return.
+7. Zero-cost pruning wins: order books most-constrained-first (fewest
+   candidates, then largest price spread) before branching; sort candidates
+   by `price + shipping_base` consistently.
+8. Candidate quality (keep cap at 6 — raising it is what rev 0 got wrong):
+   build each book's candidate list as ~4 cheapest sellers + ~2
+   highest-cart-coverage sellers. With warm start this is purely a quality
+   improvement — correctness no longer depends on the candidate set.
 
-### Phase 4 — Stop duplicating work at the API (F7, F8)
+### Workstream D — API efficiency and hardening (F7, F8)
 
-10. **Batch endpoint.** Change `/api/optimize` to accept the listings map
-    once plus a list of source filters, returning
-    `{ best, abe, thriftbooks, bwb, combined }` in one response: the server
-    filters per source itself, `best` aliases `combined`'s computation, and
-    the listings payload is uploaded once instead of five times. Sole client
-    is `OptimizationPanel.updateAllResults`, so the shape change is contained.
-11. **Validate input.** Hand-rolled type guard (~40 lines: items array shape,
-    finite numbers for price/shipping/quantity, string ids) returning 400
-    with a message — avoids adding a dependency; swap for zod if the project
-    adopts it elsewhere. Cap accepted payload size.
+9. Batch endpoint: `/api/optimize` accepts the listings map once plus
+   requested sources, returns `{ best, abe, thriftbooks, bwb, combined }`.
+   Server qualifies listings once and partitions by seller source; `best`
+   aliases `combined`. Payload uploaded once instead of five times. Sole
+   client is `OptimizationPanel.updateAllResults`.
+10. In the batch handler, enforce `combined ≤ min(single-source results)` in
+    code: every single-source assignment is feasible in the combined space,
+    so if a heuristic run of combined comes out worse, adopt the better
+    single-source assignment. (Rev 1 proposed asserting this as a test
+    invariant — that's wrong for heuristics in general; as a code-level min
+    over already-computed results it costs nothing and makes the invariant
+    true, so the test may then assert it strictly.)
+11. Validate input with a hand-rolled guard (~40 lines: array shapes, finite
+    numbers, string ids) returning 400 with a message; cap payload size.
+    Swap for zod only if the project adopts it more broadly.
 
-### Phase 5 — Model fidelity (F5)
+### Workstream E — Model fidelity (F5, F9)
 
-12. **Real quantity handling.** Represent a seller's offer for a book as its
-    k cheapest distinct listings; for `quantity: n`, cost = sum of the n
-    cheapest copies (unfulfillable at sellers with fewer than n copies).
-    Candidate entries become `{sellerId, listings, totalPrice}` so
-    `CostTracker` calls stay O(1). Touches `buildBookOptions`, all three
-    strategies, `buildGroups`.
-13. **One source of truth for totals.** Derive `SellerGroup.shipping` /
-    `group_total` from the same seller-state computation `computeTotalCost`
-    uses (F9).
+12. Real quantity handling: a seller's offer for a book = its k cheapest
+    distinct listings; `quantity: n` costs the sum of the n cheapest copies
+    (unfulfillable at sellers with fewer). Candidate entries become
+    `{sellerId, listings, totalPrice}` so `CostTracker` stays O(1).
+    **Note:** `SellerGroup.assignments[].listing` becomes `listings[]` — a
+    breaking type change that reaches `OptimizationPanel` rendering; this is
+    why E is its own PR.
+13. Derive `SellerGroup.shipping`/`group_total` from the same seller-state
+    computation `computeTotalCost` uses; drop the hardcoded fallbacks.
+14. Precompute `itemId → BookOption` and `seller → uncovered items` maps in
+    greedy (removes the O(n²·sellers) inner `find`s).
 
-### Phase 6 — Verification infrastructure (locks it all in)
+### Workstream F — Verification infrastructure (F10)
 
-14. **Property-based tests** with a seeded random instance generator:
-    - brute-force oracle: for n ≤ 6 books and ≤ 5 sellers, enumerate all
-      assignments (no candidate cap; ≤ 5⁶ ≈ 15.6k states) and assert the
-      shipped optimizer matches the optimum;
-    - dominance: local-search cost ≤ greedy cost; `optimize()` cost ≤ both;
-      combined-source result ≤ every single-source result;
-    - invariants: every assigned listing passes `listingQualifies`; group
-      totals sum to `grand_total`; `savings ≥ 0`; adding a listing never
-      increases the optimal cost;
-    - determinism: same input → identical result twice;
-    - **adversarial regression tests** from the F1/F2 probes: the 12×6
-      near-identical-prices cart must finish under the node cap in bounded
-      time, and the consolidation-seller cart must reach $41.90.
-15. **Benchmark script** (`npm run bench:optimizer`) over realistic sizes
-    (5/15/30/60 books, varying seller overlap) reporting cost gap vs
-    best-known and p95 latency, run when tuning constants.
+15. Property-based tests with a seeded instance generator:
+    - **Oracle**: n ≤ 6 books, ≤ 5 sellers → enumerate all ≤ 5⁶ ≈ 15.6k
+      assignments (no candidate cap); `optimize()` must match the optimum.
+      Monotonicity ("adding a listing never increases cost") is asserted
+      **against the oracle only** — it does not hold for heuristic paths
+      (rev 1 had this wrong).
+    - Dominance: `optimize()` cost ≤ greedy cost; combined ≤ each
+      single-source (guaranteed by step 10).
+    - Invariants: every assigned listing passes `listingQualifies`; group
+      totals sum to `grand_total`; `savings ≥ 0`; `unassigned` ∪ assigned =
+      all items.
+    - Determinism: same input twice → identical result.
+    - Adversarial regressions from the probes: 12×6 near-identical cart
+      completes under the node cap in bounded time; consolidation cart
+      reaches $41.90.
+16. `npm run bench:optimizer`: 5/15/30/60 books × varying seller overlap;
+    reports cost gap vs best-known and p95 latency; run when tuning
+    constants.
 
-### Suggested order
+## PR decomposition
 
-Phase 2 is now the highest-priority work (it fixes a measured wrong answer
-and a measured 5s hang); Phase 1 remains the cheapest. Land the Phase 6
-oracle + adversarial tests together with Phase 2 so the fixes are verified by
-the same probes that exposed them. Phase 5 step 12 is the only change that
-touches every strategy and should be its own PR.
+Ordered so each PR is independently shippable, verified by its own tests,
+and no PR depends on a later one:
+
+| PR | Contents | Size | Acceptance criteria |
+|---|---|---|---|
+| 1 | Workstream A | S | new filter-semantics tests pass in both call sites; `unassigned` populated; savings math test updated |
+| 2 | Workstream B | S | same-input-twice equality test; all existing quality tests still green; ILS iterations observed per start |
+| 3 | Workstream C + F15 oracle & adversarial tests | M | consolidation cart returns $41.90; 12×6 adversarial cart < 200ms; oracle equality on n ≤ 6; node cap covered by test |
+| 4 | Workstream D | M | one request per Find Deals; `best` === `combined` object; combined ≤ single-source enforced; 400 on malformed body |
+| 5 | Workstream E (+ UI updates) | M/L | qty-2 cart uses two distinct listings; group totals derived from `computeTotalCost`; UI renders multi-listing assignments |
+| 6 | Workstream F remainder (generator invariants, bench) | S/M | property suite in CI; bench script documented |
+
+PRs 1 and 2 are independent and can land in either order; PR 3 requires
+PR 2 (deterministic warm start). PR 3 fixes both measured defects (wrong
+answer + 5s hang) and is the payoff milestone; PRs 4–6 are efficiency,
+fidelity, and lock-in.
