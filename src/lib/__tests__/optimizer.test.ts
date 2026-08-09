@@ -283,6 +283,35 @@ describe('optimize', () => {
     expect(result.savings).toBeCloseTo(2.00)
   })
 
+  it('reports items with no qualifying listings in unassigned', () => {
+    const found = makeItem({ id: 'i1', isbn_preferred: 'isbn-1' })
+    const missing = makeItem({ id: 'i2', isbn_preferred: 'isbn-2', conditions: ['new'] })
+    const listings = new Map([
+      ['isbn-1', [makeListing({ seller_id: 'A', isbn: 'isbn-1', price: 5.00 })]],
+      ['isbn-2', [makeListing({ seller_id: 'A', isbn: 'isbn-2', price: 5.00, condition_normalized: 'fair' })]],
+    ])
+    const result = optimize([found, missing], listings)
+    expect(result.groups).toHaveLength(1)
+    expect(result.unassigned.map((i) => i.id)).toEqual(['i2'])
+  })
+
+  it('unassigned is empty when every item is assigned', () => {
+    const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1' })
+    const listing = makeListing({ seller_id: 'A', isbn: 'isbn-1', price: 5.00 })
+    const result = optimize([item], new Map([['isbn-1', [listing]]]))
+    expect(result.unassigned).toHaveLength(0)
+  })
+
+  it('naive_total treats quantity > 1 as one order, not shipping per unit', () => {
+    const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1', quantity: 3 })
+    const listing = makeListing({ seller_id: 'A', isbn: 'isbn-1', price: 5.00 })
+    const result = optimize([item], new Map([['isbn-1', [listing]]]))
+    // One naive order: 3 × $5 + (3.99 + 2 × 1.99) = 15 + 7.97 = 22.97
+    expect(result.naive_total).toBeCloseTo(22.97)
+    // Optimized result is the same single order, so savings must be 0
+    expect(result.savings).toBeCloseTo(0)
+  })
+
   it('savings is never negative', () => {
     // Single book — naive and optimised are the same
     const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1' })

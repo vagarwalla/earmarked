@@ -93,6 +93,8 @@ export interface SellerGroup {
 
 export interface OptimizationResult {
   groups: SellerGroup[]
+  // Items with no qualifying listings — not covered by grand_total
+  unassigned: CartItem[]
   grand_total: number
   naive_total: number
   savings: number

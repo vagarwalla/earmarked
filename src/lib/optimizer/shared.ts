@@ -1,6 +1,27 @@
-import type { CartItem, Listing, SellerGroup, OptimizationResult } from '../types'
+import type { CartItem, Condition, Listing, SellerGroup, OptimizationResult } from '../types'
 
 export type { CartItem, Listing, SellerGroup, OptimizationResult }
+
+/**
+ * Single source of truth for "does this listing satisfy this item's filters".
+ * Tri-state booleans follow types.ts: null = any, true = require, false = exclude.
+ * `conditions`/`maxPrice` default to the item's own values but can be overridden
+ * (the relaxation engine probes with expanded conditions / lifted price caps).
+ */
+export function listingQualifies(
+  item: CartItem,
+  l: Listing,
+  conditions: Condition[] = item.conditions ?? [],
+  maxPrice: number | null = item.max_price,
+): boolean {
+  return (
+    conditions.includes(l.condition_normalized) &&
+    (maxPrice == null || l.price <= maxPrice) &&
+    (item.signed_only == null || (item.signed_only ? l.signed : !l.signed)) &&
+    (item.first_edition_only == null || (item.first_edition_only ? l.first_edition : !l.first_edition)) &&
+    (item.dust_jacket_only == null || (item.dust_jacket_only ? l.dust_jacket : !l.dust_jacket))
+  )
+}
 
 export type BookOption = {
   item: CartItem
@@ -116,14 +137,7 @@ export function buildBookOptions(
       ...(item.isbns_candidates ?? []),
     ])]
     const rawListings = candidateIsbns.flatMap((isbn) => listingsByIsbn.get(isbn) ?? [])
-    const qualified = rawListings.filter(
-      (l) =>
-        (item.conditions ?? []).includes(l.condition_normalized) &&
-        (item.max_price == null || l.price <= item.max_price) &&
-        (item.signed_only == null || (item.signed_only ? l.signed : !l.signed)) &&
-        (item.first_edition_only == null || (item.first_edition_only ? l.first_edition : !l.first_edition)) &&
-        (item.dust_jacket_only == null || (item.dust_jacket_only ? l.dust_jacket : !l.dust_jacket))
-    )
+    const qualified = rawListings.filter((l) => listingQualifies(item, l))
     // Sort by total standalone cost (price + shipping_base) so candidate selection
     // in all strategies considers actual cost, not just book price.
     return { item, listings: qualified.sort((a, b) => (a.price + a.shipping_base) - (b.price + b.shipping_base)) }

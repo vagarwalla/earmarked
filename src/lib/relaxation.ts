@@ -1,4 +1,5 @@
 import type { CartItem, Condition, Listing } from './types'
+import { listingQualifies } from './optimizer/shared'
 
 export const CONDITION_ORDER: Condition[] = ['new', 'fine', 'good', 'fair']
 export const CONDITION_LABELS: Record<Condition, string> = {
@@ -44,13 +45,7 @@ export function computeListings(
   ])]
   return [...new Map(
     isbns.flatMap((isbn) => byIsbn[isbn] ?? []).map((l) => [l.listing_id, l])
-  ).values()].filter((l) =>
-    conditions.includes(l.condition_normalized) &&
-    (maxPrice == null || l.price <= maxPrice) &&
-    (!item.signed_only || l.signed) &&
-    (!item.first_edition_only || l.first_edition) &&
-    (!item.dust_jacket_only || l.dust_jacket)
-  )
+  ).values()].filter((l) => listingQualifies(item, l, conditions, maxPrice))
 }
 
 /** Find the minimal constraint relaxation that yields at least one listing. */

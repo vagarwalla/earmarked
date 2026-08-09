@@ -604,15 +604,26 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
               })}
             </div>
 
-            {missingItems.length > 0 && (
-              <div className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                <span>
-                  {missingItems.length === 1 ? '1 book is' : `${missingItems.length} books are`} missing from this total.{' '}
-                  <a href="#missing-books" className="underline font-medium hover:text-amber-900">See below</a>
-                </span>
-              </div>
-            )}
+            {(() => {
+              // Per-source truth from the optimizer when available (a book can be
+              // findable overall but unavailable from the active source).
+              const missingCount = activeResult?.unassigned
+                ? activeResult.unassigned.length
+                : missingItems.length
+              return missingCount > 0 && (
+                <div className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    {missingCount === 1 ? '1 book is' : `${missingCount} books are`} missing from this total.
+                    {missingItems.length > 0 && (
+                      <>
+                        {' '}<a href="#missing-books" className="underline font-medium hover:text-amber-900">See below</a>
+                      </>
+                    )}
+                  </span>
+                </div>
+              )
+            })()}
 
             {activeResult && activeResult.groups.length > 0 ? (
               <>
