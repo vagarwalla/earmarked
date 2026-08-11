@@ -134,7 +134,7 @@ export function BookSearch({ onSelect }: Props) {
           : <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         }
         <Input
-          className="pl-9"
+          className="pl-9 h-11 rounded-full bg-card border-border/80 shadow-sm"
           placeholder="Search for a book by title or author…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -166,7 +166,7 @@ export function BookSearch({ onSelect }: Props) {
         </div>
       )}
       {open && results.length > 0 && (
-        <div className="absolute z-50 top-full mt-1 w-full bg-background border rounded-lg shadow-lg max-h-80 overflow-y-auto">
+        <div className="absolute z-50 top-full mt-2 w-full bg-popover border border-border/80 rounded-xl shadow-xl max-h-80 overflow-y-auto">
           {results.map((book) => {
             // Use lazily-fetched covers once available, fall back to the single cover from search
             const covers = coverMap[book.work_id] ?? (book.cover_url ? [book.cover_url] : [])

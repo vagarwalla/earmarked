@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Plus, ShoppingCart } from 'lucide-react'
+import { BookMarked, Library, Plus, ShoppingCart } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { CreateCartDialog } from '@/components/CreateCartDialog'
 import { ThemeToggle } from '@/components/ThemeToggle'
@@ -42,11 +42,11 @@ export default function HomePage() {
   return (
     <main className="min-h-screen bg-background flex flex-col">
       {/* Header */}
-      <header className="border-b bg-background sticky top-0 z-10">
+      <header className="border-b border-border/70 bg-background/85 backdrop-blur-md sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="text-2xl leading-none">📚</span>
-            <span className="text-xl font-semibold">Earmarked</span>
+            <BookMarked className="h-5 w-5 text-primary" />
+            <span className="font-serif text-xl font-semibold tracking-tight">Earmarked</span>
           </div>
           <div className="flex items-center gap-2">
             <ThemeToggle />
@@ -82,13 +82,13 @@ export default function HomePage() {
           <p className="text-muted-foreground italic">No stacks yet — create one to get started.</p>
         ) : (
           <div className="max-w-sm">
-            <h2 className="text-base font-semibold mb-3 text-muted-foreground">All stacks — visible to everyone</h2>
-            <div className="space-y-1">
+            <h2 className="overline-label mb-3">All stacks — visible to everyone</h2>
+            <div className="space-y-1.5">
               {carts.map((cart) => (
                 <Link key={cart.id} href={`/stack/${cart.slug}`}>
-                  <div className="flex items-center justify-between px-4 py-3 rounded-lg border bg-card hover:shadow-sm hover:border-primary/40 transition-all group cursor-pointer">
+                  <div className="flex items-center justify-between px-4 py-3 rounded-xl border border-border/70 bg-card/60 hover:shadow-sm hover:border-primary/40 transition-all group cursor-pointer">
                     <div className="flex items-center gap-3 min-w-0">
-                      <span className="text-base shrink-0">📚</span>
+                      <Library className="h-4 w-4 text-muted-foreground shrink-0" />
                       <span className="font-medium truncate group-hover:text-primary transition-colors">{cart.name}</span>
                     </div>
                     <span className="text-sm text-muted-foreground shrink-0 ml-3">
