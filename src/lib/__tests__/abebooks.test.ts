@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { conditionMeets, normalizeCondition, fetchListingsByISBN } from '../abebooks'
+import { conditionMeets, normalizeCondition, fetchListingsByISBN, ABE_DEFAULT_SHIPPING } from '../abebooks'
 
 // ── conditionMeets ────────────────────────────────────────────────────────────
 
@@ -166,6 +166,27 @@ describe('fetchListingsByISBN — HTML parsing', () => {
     const { listings: [listing] } = await fetchListingsByISBN(ISBN)
     expect(listing.condition).toBe('Used - Like New')
     expect(listing.condition_normalized).toBe('fine')
+  })
+
+  it('treats an explicit 0.00 shipping cost as genuinely free', async () => {
+    const html = makeHtmlListing({ listingId: 'FREE1', sellerName: 'Free Ship Co', price: '6.00', shipping: '0.00', condition: 'Good' })
+    mockFetch(html)
+    const [listing] = await fetchListingsByISBN(ISBN)
+    expect(listing.shipping_base).toBe(0)
+  })
+
+  it('falls back to the standard rate when the shipping attribute is missing', async () => {
+    // A failed parse must not read as free shipping — that silently
+    // under-reports every total the optimizer builds on top of it.
+    const html = `<li data-test-id="listing-item">
+      <button data-listingid="77777" data-csa-c-cost="6.00"></button>
+      <span data-test-id="listing-book-condition">Used - Good</span>
+      <span class="seller-name">No Shipping Attr</span>
+    </li>`
+    mockFetch(html)
+    const [listing] = await fetchListingsByISBN(ISBN)
+    expect(listing.shipping_base).toBe(ABE_DEFAULT_SHIPPING)
+    expect(listing.shipping_base).toBeGreaterThan(0)
   })
 
   it('parses multiple listings', async () => {

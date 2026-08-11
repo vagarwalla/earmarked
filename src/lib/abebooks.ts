@@ -2,6 +2,10 @@ import type { Condition, Listing, SourceFetch } from './types'
 
 const SEARCH_URL = 'https://www.abebooks.com/servlet/SearchResults'
 
+// Used when a listing's shipping attribute is absent or unparseable. Standard
+// AbeBooks US rate — a conservative guess beats silently assuming free shipping.
+export const ABE_DEFAULT_SHIPPING = 3.99
+
 export function normalizeCondition(cond: string): Condition {
   const c = cond.toLowerCase()
   if (c.includes('new') && !c.includes('like') && !c.includes('as') && !c.includes('near')) return 'new'
@@ -105,7 +109,11 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
 
     const listingId = idMatch ? idMatch[1] : undefined
     const sellerId = sfMatch ? sfMatch[1] : undefined
-    const shipping = shipMatch ? parseFloat(shipMatch[1]) : 0
+    // A parsed "0.0" genuinely means free shipping, but a MISSING attribute
+    // means we failed to read it — defaulting that to free silently
+    // under-reports every total. Fall back to the standard US rate instead.
+    const parsedShipping = shipMatch ? parseFloat(shipMatch[1]) : NaN
+    const shipping = Number.isFinite(parsedShipping) ? parsedShipping : ABE_DEFAULT_SHIPPING
     const signed = signedRe.test(block)
     const first_edition = firstEditionRe.test(block)
     const descMatch = descRe.exec(block)
@@ -134,7 +142,7 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
       seller_id: sellerId ?? listingId ?? `seller_${listings.length}`,
       seller_name: sellerName,
       price,
-      shipping_base: isNaN(shipping) ? 0 : shipping,
+      shipping_base: shipping,
       shipping_per_additional: 1.99,
       condition,
       condition_normalized: normalizeCondition(condition),

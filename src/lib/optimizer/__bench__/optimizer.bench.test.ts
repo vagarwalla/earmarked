@@ -31,7 +31,9 @@ function makeInstance(seed: number, nBooks: number, nSellers: number, coverage: 
         seller_id: retailer ? 'thriftbooks' : `abe-${s}`,
         seller_name: `S${s}`,
         price: 1 + Math.round(rand() * 2000) / 100,
-        shipping_base: 3.99, shipping_per_additional: retailer ? 0 : 1.99,
+        // Per-listing bases, as AbeBooks actually quotes them
+        shipping_base: retailer ? 3.99 : [0, 0, 3.99, 5.99, 9.99][Math.floor(rand() * 5)],
+        shipping_per_additional: retailer ? 0 : 1.99,
         condition: 'Fine', condition_normalized: 'fine',
         signed: false, first_edition: false, dust_jacket: false,
         url: '', isbn: `isbn-${b}`,
