@@ -72,11 +72,22 @@ function generateInstance(seed: number, maxBooks = 20): Instance {
 
 const TRIALS = 60
 
+/**
+ * Disable the wall-clock backstop. It is a serverless safety net, not part of
+ * the search budget: when it fires under load it truncates the search at a
+ * point that depends on how busy the machine is, which makes the properties
+ * below (invariance, determinism, optimality) fail for reasons unrelated to
+ * the optimizer. The iteration budget is what these tests are asserting on.
+ */
+function runOptimize(items: CartItem[], listingsByIsbn: Map<string, Listing[]>) {
+  return optimize(items, listingsByIsbn, undefined, { deadlineMs: Infinity })
+}
+
 describe('optimizer properties (seeded random instances)', () => {
   it('grand_total is never worse than the greedy baseline', () => {
     for (let t = 0; t < TRIALS; t++) {
       const { items, listingsByIsbn } = generateInstance(1000 + t)
-      const result = optimize(items, listingsByIsbn)
+      const result = runOptimize(items, listingsByIsbn)
       const bookOptions = buildBookOptions(items, listingsByIsbn)
       const greedyCost = computeTotalCost(bookOptions, greedyStrategy.solve(bookOptions))
       expect(result.grand_total).toBeLessThanOrEqual(greedyCost + 1e-6)
@@ -86,7 +97,7 @@ describe('optimizer properties (seeded random instances)', () => {
   it('every assigned unit listing passes the item filters', () => {
     for (let t = 0; t < TRIALS; t++) {
       const { items, listingsByIsbn } = generateInstance(2000 + t)
-      const result = optimize(items, listingsByIsbn)
+      const result = runOptimize(items, listingsByIsbn)
       for (const group of result.groups) {
         for (const a of group.assignments) {
           for (const l of a.listings) {
@@ -100,7 +111,7 @@ describe('optimizer properties (seeded random instances)', () => {
   it('group totals are internally consistent and sum to grand_total', () => {
     for (let t = 0; t < TRIALS; t++) {
       const { items, listingsByIsbn } = generateInstance(3000 + t)
-      const result = optimize(items, listingsByIsbn)
+      const result = runOptimize(items, listingsByIsbn)
       let total = 0
       for (const g of result.groups) {
         const subtotals = g.assignments.reduce((s, a) => s + a.subtotal, 0)
@@ -115,7 +126,7 @@ describe('optimizer properties (seeded random instances)', () => {
   it('savings is non-negative and equals max(0, naive - grand)', () => {
     for (let t = 0; t < TRIALS; t++) {
       const { items, listingsByIsbn } = generateInstance(4000 + t)
-      const r = optimize(items, listingsByIsbn)
+      const r = runOptimize(items, listingsByIsbn)
       expect(r.savings).toBeGreaterThanOrEqual(0)
       expect(r.savings).toBeCloseTo(Math.max(0, r.naive_total - r.grand_total), 6)
     }
@@ -124,7 +135,7 @@ describe('optimizer properties (seeded random instances)', () => {
   it('assigned and unassigned items partition the cart', () => {
     for (let t = 0; t < TRIALS; t++) {
       const { items, listingsByIsbn } = generateInstance(5000 + t)
-      const r = optimize(items, listingsByIsbn)
+      const r = runOptimize(items, listingsByIsbn)
       const assigned = new Set(r.groups.flatMap((g) => g.assignments.map((a) => a.item.id)))
       const unassigned = new Set(r.unassigned.map((i) => i.id))
       expect(assigned.size + unassigned.size).toBe(items.length)
@@ -135,7 +146,7 @@ describe('optimizer properties (seeded random instances)', () => {
   it('marketplace assignments use distinct physical copies', () => {
     for (let t = 0; t < TRIALS; t++) {
       const { items, listingsByIsbn } = generateInstance(6000 + t)
-      const r = optimize(items, listingsByIsbn)
+      const r = runOptimize(items, listingsByIsbn)
       for (const g of r.groups) {
         if (g.seller_id === 'thriftbooks' || g.seller_id === 'betterworldbooks') continue
         for (const a of g.assignments) {
@@ -153,8 +164,8 @@ describe('optimizer properties (seeded random instances)', () => {
     // "whichever listing we saw first wins" bug in the shipping model.
     for (let t = 0; t < TRIALS; t++) {
       const { items, listingsByIsbn } = generateInstance(9000 + t)
-      const forward = optimize(items, listingsByIsbn)
-      const reversed = optimize([...items].reverse(), listingsByIsbn)
+      const forward = runOptimize(items, listingsByIsbn)
+      const reversed = runOptimize([...items].reverse(), listingsByIsbn)
       expect(reversed.grand_total).toBeCloseTo(forward.grand_total, 6)
       expect(reversed.naive_total).toBeCloseTo(forward.naive_total, 6)
     }
@@ -165,7 +176,7 @@ describe('optimizer properties (seeded random instances)', () => {
     // order quotes would be inventing a discount the seller never offered.
     for (let t = 0; t < TRIALS; t++) {
       const { items, listingsByIsbn } = generateInstance(9500 + t)
-      const r = optimize(items, listingsByIsbn)
+      const r = runOptimize(items, listingsByIsbn)
       for (const g of r.groups) {
         const units = g.assignments.flatMap((a) => a.listings)
         const maxBase = Math.max(...units.map((l) => l.shipping_base))
@@ -177,7 +188,7 @@ describe('optimizer properties (seeded random instances)', () => {
   it('reported grand_total matches the cost model the strategies minimize', () => {
     for (let t = 0; t < TRIALS; t++) {
       const { items, listingsByIsbn } = generateInstance(9800 + t)
-      const r = optimize(items, listingsByIsbn)
+      const r = runOptimize(items, listingsByIsbn)
       const bookOptions = buildBookOptions(items, listingsByIsbn)
       const assignment: Assignment = new Map(
         r.groups.flatMap((g) => g.assignments.map((a) => {
@@ -192,8 +203,8 @@ describe('optimizer properties (seeded random instances)', () => {
   it('optimize is deterministic on random instances', () => {
     for (let t = 0; t < 10; t++) {
       const { items, listingsByIsbn } = generateInstance(7000 + t)
-      const r1 = optimize(items, listingsByIsbn)
-      const r2 = optimize(items, listingsByIsbn)
+      const r1 = runOptimize(items, listingsByIsbn)
+      const r2 = runOptimize(items, listingsByIsbn)
       expect(JSON.stringify(r1)).toBe(JSON.stringify(r2))
     }
   })
@@ -224,7 +235,7 @@ describe('optimizer properties (seeded random instances)', () => {
       recurse(0)
       if (best === Infinity) continue
 
-      const result = optimize(items, listingsByIsbn)
+      const result = runOptimize(items, listingsByIsbn)
       expect(result.grand_total).toBeCloseTo(best, 6)
     }
   })

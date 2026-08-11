@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { optimize } from '../index'
-import { localSearchStrategy } from '../strategies/local-search'
+import { solveLocalSearch } from '../strategies/local-search'
 import { buildBookOptions } from '../shared'
 import type { CartItem, Condition, Listing } from '../../types'
 
@@ -42,11 +42,20 @@ function makeAmbiguousFixture() {
   return { items, listingsByIsbn }
 }
 
+// The wall-clock backstop is a serverless safety net, not part of the search
+// budget: if it fires under load the run is cut short at a machine-dependent
+// point, which is not the determinism these tests are about.
+const NO_DEADLINE = { deadlineMs: Infinity }
+
+function runOptimize(items: CartItem[], listingsByIsbn: Map<string, Listing[]>) {
+  return optimize(items, listingsByIsbn, undefined, NO_DEADLINE)
+}
+
 describe('optimizer determinism', () => {
-  it('localSearchStrategy returns the identical assignment for identical input', () => {
+  it('solveLocalSearch returns the identical assignment for identical input', () => {
     const { items, listingsByIsbn } = makeAmbiguousFixture()
-    const a = localSearchStrategy.solve(buildBookOptions(items, listingsByIsbn))
-    const b = localSearchStrategy.solve(buildBookOptions(items, listingsByIsbn))
+    const a = solveLocalSearch(buildBookOptions(items, listingsByIsbn), NO_DEADLINE)
+    const b = solveLocalSearch(buildBookOptions(items, listingsByIsbn), NO_DEADLINE)
     expect(a.size).toBe(b.size)
     for (const [itemId, offer] of a) {
       expect(b.get(itemId)?.listings.map((l) => l.listing_id)).toEqual(offer.listings.map((l) => l.listing_id))
@@ -55,8 +64,8 @@ describe('optimizer determinism', () => {
 
   it('optimize() returns byte-identical results for identical input', () => {
     const { items, listingsByIsbn } = makeAmbiguousFixture()
-    const r1 = optimize(items, listingsByIsbn)
-    const r2 = optimize(items, listingsByIsbn)
+    const r1 = runOptimize(items, listingsByIsbn)
+    const r2 = runOptimize(items, listingsByIsbn)
     expect(JSON.stringify(r1)).toBe(JSON.stringify(r2))
   })
 
@@ -68,8 +77,8 @@ describe('optimizer determinism', () => {
       { ...first[0], price: first[0].price + 0.01 },
       ...first.slice(1),
     ])
-    const r1 = optimize(items, perturbed)
-    const r2 = optimize(items, perturbed)
+    const r1 = runOptimize(items, perturbed)
+    const r2 = runOptimize(items, perturbed)
     expect(JSON.stringify(r1)).toBe(JSON.stringify(r2))
   })
 })
