@@ -27,7 +27,9 @@ export interface CartItem {
   conditions: Condition[]
   max_price: number | null
   flexible: boolean
-  signed_only: boolean | null       // null = any, true = only signed, false = exclude signed
+  // Opt-in "Only" filters: true narrows to copies with the attribute, false/null
+  // means no constraint. See listingQualifies in optimizer/shared.ts.
+  signed_only: boolean | null
   first_edition_only: boolean | null
   dust_jacket_only: boolean | null
   quantity: number

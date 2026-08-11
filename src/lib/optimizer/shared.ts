@@ -4,7 +4,14 @@ export type { CartItem, Listing, SellerGroup, OptimizationResult }
 
 /**
  * Single source of truth for "does this listing satisfy this item's filters".
- * Tri-state booleans follow types.ts: null = any, true = require, false = exclude.
+ *
+ * The collectible flags are opt-in narrowing filters, matching the "Only"
+ * toggles that set them: true requires the attribute, anything else (false from
+ * the column default, null from a row that predates it) imposes no constraint.
+ * They are deliberately not tri-state — nothing can express "exclude signed
+ * copies", so reading an untouched toggle as an exclusion silently emptied
+ * every stack.
+ *
  * `conditions`/`maxPrice` default to the item's own values but can be overridden
  * (the relaxation engine probes with expanded conditions / lifted price caps).
  */
@@ -17,9 +24,9 @@ export function listingQualifies(
   return (
     conditions.includes(l.condition_normalized) &&
     (maxPrice == null || l.price <= maxPrice) &&
-    (item.signed_only == null || (item.signed_only ? l.signed : !l.signed)) &&
-    (item.first_edition_only == null || (item.first_edition_only ? l.first_edition : !l.first_edition)) &&
-    (item.dust_jacket_only == null || (item.dust_jacket_only ? l.dust_jacket : !l.dust_jacket))
+    (!item.signed_only || l.signed) &&
+    (!item.first_edition_only || l.first_edition) &&
+    (!item.dust_jacket_only || l.dust_jacket)
   )
 }
 

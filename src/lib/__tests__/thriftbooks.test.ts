@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { fetchThriftBooksListings } from '../thriftbooks'
 
@@ -207,5 +208,51 @@ describe('fetchThriftBooksListings', () => {
     expect(results[0]?.url).toMatch(/\/w\/the-alchemist_paulo-coelho\/246270\/item\//)
     expect(results[0]?.url).toContain('selectedISBN=0062315005')
     expect(results[0]?.url).toContain('#edition=8060455')
+  })
+})
+
+// ── real captured page ────────────────────────────────────────────────────────
+// The hand-built fixtures above embed the conditions payload once. A live
+// ThriftBooks page embeds it twice, which is a difference the parser could not
+// see until this fixture existed.
+
+describe('fetchThriftBooksListings — against a live-captured page', () => {
+  const html = readFileSync(new URL('./fixtures/thriftbooks-work.html', import.meta.url), 'utf8')
+
+  async function parseFixture(isbn = '9780062315007') {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      url: 'https://www.thriftbooks.com/w/o-alquimista-by-paulo-coelho/246270/item/',
+      text: vi.fn().mockResolvedValue(html),
+    })
+    return fetchThriftBooksListings(isbn)
+  }
+
+  it('returns one listing per distinct copy, not one per embedded payload', async () => {
+    const { listings, error } = await parseFixture()
+    expect(error).toBeNull()
+    expect(listings.map((l) => l.condition).sort()).toEqual(['Good', 'New', 'Very Good'])
+  })
+
+  it('gives each distinct copy a stable id that does not depend on scan order', async () => {
+    const { listings } = await parseFixture()
+    const ids = listings.map((l) => l.listing_id)
+    expect(new Set(ids).size).toBe(ids.length)
+    const { listings: again } = await parseFixture()
+    expect(again.map((l) => l.listing_id)).toEqual(ids)
+  })
+
+  it('does not claim a dust jacket ThriftBooks never reported', async () => {
+    // `noDj` is only set when a copy is explicitly flagged as lacking one.
+    // Its absence is silence, not confirmation — and these are paperbacks.
+    const { listings } = await parseFixture()
+    expect(listings.every((l) => l.dust_jacket === false)).toBe(true)
+  })
+
+  it('prices the copies as the page lists them', async () => {
+    const { listings } = await parseFixture()
+    const byCondition = Object.fromEntries(listings.map((l) => [l.condition, l.price]))
+    expect(byCondition).toEqual({ 'Very Good': 9.29, Good: 8.19, New: 14.79 })
   })
 })

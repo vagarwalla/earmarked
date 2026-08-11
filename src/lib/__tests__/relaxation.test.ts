@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { computeListings, findSuggestion, findEditionOptions, findCheaperSuggestion, findShippingRelaxSuggestions } from '../relaxation'
+import { buildBookOptions } from '../optimizer/shared'
 import type { CartItem, Condition, Edition, Listing } from '../types'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -125,7 +126,7 @@ describe('computeListings', () => {
     expect(result[0].listing_id).toBe('l2')
   })
 
-  it('excludes signed listings when signed_only is false (types.ts tri-state: false = exclude)', () => {
+  it('keeps signed listings when signed_only is false (false = no filter)', () => {
     const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1', signed_only: false })
     const byIsbn = makeByIsbn([
       ['isbn-1', [
@@ -134,8 +135,7 @@ describe('computeListings', () => {
       ]],
     ])
     const result = computeListings(item, byIsbn, ['fine'], null)
-    expect(result).toHaveLength(1)
-    expect(result[0].listing_id).toBe('l1')
+    expect(result.map((l) => l.listing_id)).toEqual(['l1', 'l2'])
   })
 
   it('keeps all listings when signed_only is null (any)', () => {
@@ -151,17 +151,27 @@ describe('computeListings', () => {
   })
 
   it('matches optimizer semantics: relaxation and buildBookOptions qualify the same listings', () => {
-    // Regression for the divergence where relaxation treated false as "any"
-    // while the optimizer treated false as "exclude".
-    const item = makeItem({
-      id: 'i1', isbn_preferred: 'isbn-1',
-      signed_only: false, first_edition_only: false, dust_jacket_only: false,
-    })
+    // Regression for the divergence where the two paths disagreed about what a
+    // collectible flag means. Asserted as parity rather than a fixed list, so
+    // the two cannot drift apart again whatever the semantics become.
     const signedListing = makeListing({ listing_id: 'l-signed', isbn: 'isbn-1', price: 3, condition_normalized: 'fine', signed: true })
+    const feListing = makeListing({ listing_id: 'l-fe', isbn: 'isbn-1', price: 4, condition_normalized: 'fine', first_edition: true })
+    const djListing = makeListing({ listing_id: 'l-dj', isbn: 'isbn-1', price: 6, condition_normalized: 'fine', dust_jacket: true })
     const plainListing = makeListing({ listing_id: 'l-plain', isbn: 'isbn-1', price: 5, condition_normalized: 'fine' })
-    const byIsbn = makeByIsbn([['isbn-1', [signedListing, plainListing]]])
-    const relaxed = computeListings(item, byIsbn, item.conditions, item.max_price)
-    expect(relaxed.map((l) => l.listing_id)).toEqual(['l-plain'])
+    const all = [signedListing, feListing, djListing, plainListing]
+
+    for (const flags of [
+      { signed_only: false, first_edition_only: false, dust_jacket_only: false },
+      { signed_only: null, first_edition_only: null, dust_jacket_only: null },
+      { signed_only: true, first_edition_only: null, dust_jacket_only: null },
+      { signed_only: null, first_edition_only: true, dust_jacket_only: null },
+      { signed_only: null, first_edition_only: null, dust_jacket_only: true },
+    ]) {
+      const item = makeItem({ id: 'i1', isbn_preferred: 'isbn-1', ...flags })
+      const relaxed = computeListings(item, makeByIsbn([['isbn-1', all]]), item.conditions, item.max_price)
+      const [opt] = buildBookOptions([item], new Map([['isbn-1', all]]))
+      expect(relaxed.map((l) => l.listing_id).sort()).toEqual(opt.listings.map((l) => l.listing_id).sort())
+    }
   })
 
   it('filters out non-first-edition listings when first_edition_only is true', () => {
