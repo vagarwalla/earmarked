@@ -171,7 +171,7 @@ describe('fetchListingsByISBN — HTML parsing', () => {
   it('treats an explicit 0.00 shipping cost as genuinely free', async () => {
     const html = makeHtmlListing({ listingId: 'FREE1', sellerName: 'Free Ship Co', price: '6.00', shipping: '0.00', condition: 'Good' })
     mockFetch(html)
-    const [listing] = await fetchListingsByISBN(ISBN)
+    const { listings: [listing] } = await fetchListingsByISBN(ISBN)
     expect(listing.shipping_base).toBe(0)
   })
 
@@ -184,7 +184,7 @@ describe('fetchListingsByISBN — HTML parsing', () => {
       <span class="seller-name">No Shipping Attr</span>
     </li>`
     mockFetch(html)
-    const [listing] = await fetchListingsByISBN(ISBN)
+    const { listings: [listing] } = await fetchListingsByISBN(ISBN)
     expect(listing.shipping_base).toBe(ABE_DEFAULT_SHIPPING)
     expect(listing.shipping_base).toBeGreaterThan(0)
   })
