@@ -7,7 +7,7 @@
 // Uses @sparticuz/chromium for Vercel serverless compatibility and
 // playwright-core for browser automation.
 
-import type { Listing } from './types'
+import type { Listing, SourceFetch } from './types'
 import { normalizeCondition } from './abebooks'
 import { chromium as pw, type Browser, type BrowserContext } from 'playwright-core'
 import chromium from '@sparticuz/chromium'
@@ -76,7 +76,7 @@ interface BWBItem {
   } | null
 }
 
-export async function fetchBWBListings(isbn: string): Promise<Listing[]> {
+export async function fetchBWBListings(isbn: string): Promise<SourceFetch> {
   let context: BrowserContext | null = null
   try {
     const browser = await getBrowser()
@@ -94,7 +94,7 @@ export async function fetchBWBListings(isbn: string): Promise<Listing[]> {
     const title = await page.title()
     if (title.includes('Just a moment') || title.includes('Attention') || title.includes('blocked')) {
       console.error('BWB: blocked by Cloudflare for ISBN', isbn)
-      return []
+      return { listings: [], error: 'blocked by Cloudflare' }
     }
 
     // Extract the detailObject from the page
@@ -103,16 +103,15 @@ export async function fetchBWBListings(isbn: string): Promise<Listing[]> {
       return typeof detailObject !== 'undefined' ? detailObject : null
     })
 
-    if (!detail) {
-      console.error('BWB: detailObject not found for ISBN', isbn)
-      return []
-    }
+    // No detailObject is BWB's answer for an ISBN it doesn't stock — a real
+    // "nothing here", not a failure, so it isn't reported as one.
+    if (!detail) return { listings: [], error: null }
 
     const productUrl = page.url()
-    return parseBWBDetail(detail, isbn, productUrl)
+    return { listings: parseBWBDetail(detail, isbn, productUrl), error: null }
   } catch (err) {
-    console.error('BWB fetch error:', err)
-    return []
+    console.error(`BWB fetch error for ${isbn}:`, err)
+    return { listings: [], error: (err as Error).message }
   } finally {
     if (context) await context.close().catch(() => {})
   }

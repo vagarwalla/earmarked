@@ -77,7 +77,7 @@ describe('fetchBWBListings', () => {
       },
     })
 
-    const results = await fetchBWBListings('9780062315007')
+    const { listings: results } = await fetchBWBListings('9780062315007')
 
     expect(results).toHaveLength(2)
 
@@ -119,22 +119,24 @@ describe('fetchBWBListings', () => {
       },
     })
 
-    const results = await fetchBWBListings('1234567890')
+    const { listings: results } = await fetchBWBListings('1234567890')
     expect(results).toHaveLength(1)
     expect(results[0].condition).toBe('New')
   })
 
-  it('returns empty array when blocked by Cloudflare', async () => {
+  it('reports an error when blocked by Cloudflare', async () => {
     mockTitle.mockResolvedValue('Just a moment...')
-    const results = await fetchBWBListings('9780062315007')
+    const { listings: results, error } = await fetchBWBListings('9780062315007')
     expect(results).toHaveLength(0)
+    expect(error).toBe('blocked by Cloudflare')
   })
 
-  it('returns empty array when detailObject is not found', async () => {
+  it('treats a missing detailObject as "not stocked", not a failure', async () => {
     mockTitle.mockResolvedValue('Some Valid Title')
     mockEvaluate.mockResolvedValue(null)
-    const results = await fetchBWBListings('9780062315007')
+    const { listings: results, error } = await fetchBWBListings('9780062315007')
     expect(results).toHaveLength(0)
+    expect(error).toBeNull()
   })
 
   it('includes Ex-Library in condition text', async () => {
@@ -159,7 +161,7 @@ describe('fetchBWBListings', () => {
       },
     })
 
-    const results = await fetchBWBListings('1111111111')
+    const { listings: results } = await fetchBWBListings('1111111111')
     expect(results).toHaveLength(1)
     expect(results[0].condition).toBe('Used Good, Ex-Library')
   })

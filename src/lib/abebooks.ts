@@ -1,4 +1,4 @@
-import type { Condition, Listing } from './types'
+import type { Condition, Listing, SourceFetch } from './types'
 
 const SEARCH_URL = 'https://www.abebooks.com/servlet/SearchResults'
 
@@ -32,7 +32,7 @@ function searchUrl(isbn: string): string {
   return `${SEARCH_URL}?isbn=${isbn}&sortby=17&n=100110615`
 }
 
-export async function fetchListingsByISBN(isbn: string): Promise<Listing[]> {
+export async function fetchListingsByISBN(isbn: string): Promise<SourceFetch> {
   try {
     const res = await fetch(searchUrl(isbn), {
       headers: {
@@ -43,15 +43,15 @@ export async function fetchListingsByISBN(isbn: string): Promise<Listing[]> {
     })
 
     if (!res.ok) {
-      console.error(`AbeBooks search failed: ${res.status}`)
-      return []
+      console.error(`AbeBooks search failed for ${isbn}: ${res.status}`)
+      return { listings: [], error: `HTTP ${res.status}` }
     }
 
     const html = await res.text()
-    return parseListingsFromHTML(html, isbn)
+    return { listings: parseListingsFromHTML(html, isbn), error: null }
   } catch (err) {
-    console.error('AbeBooks fetch error:', err)
-    return []
+    console.error(`AbeBooks fetch error for ${isbn}:`, err)
+    return { listings: [], error: (err as Error).message }
   }
 }
 

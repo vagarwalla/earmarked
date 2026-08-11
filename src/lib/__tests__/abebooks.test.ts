@@ -116,7 +116,7 @@ describe('fetchListingsByISBN — HTML parsing', () => {
     const html = `<ul>${makeHtmlListing({ listingId: '11111111', sellerId: '99001', sellerName: 'Great Books', price: '8.99', shipping: '3.99', condition: 'Used - Like New' })}</ul>`
     mockFetch(html)
 
-    const listings = await fetchListingsByISBN(ISBN)
+    const { listings } = await fetchListingsByISBN(ISBN)
     expect(listings).toHaveLength(1)
 
     const l = listings[0]
@@ -130,7 +130,7 @@ describe('fetchListingsByISBN — HTML parsing', () => {
   it('sets listing url from href attribute', async () => {
     const html = makeHtmlListing({ listingId: '123456', sellerName: 'S1', price: '9.00', condition: 'New' })
     mockFetch(html)
-    const [listing] = await fetchListingsByISBN(ISBN)
+    const { listings: [listing] } = await fetchListingsByISBN(ISBN)
     expect(listing.url).toContain('123456')
   })
 
@@ -139,7 +139,7 @@ describe('fetchListingsByISBN — HTML parsing', () => {
     // Listing with no data-csa-c-cost attribute
     const noCost = `<li data-test-id="listing-item" data-listingid="22222"><span class="seller-name">S2</span></li>`
     mockFetch(`<ul>${noCost}${withPrice}</ul>`)
-    const listings = await fetchListingsByISBN(ISBN)
+    const { listings } = await fetchListingsByISBN(ISBN)
     expect(listings).toHaveLength(1)
     expect(listings[0].listing_id).toBe('11111')
   })
@@ -155,7 +155,7 @@ describe('fetchListingsByISBN — HTML parsing', () => {
       <a href="/book/id/99999/bd"></a>
     </li>`
     mockFetch(html)
-    const [listing] = await fetchListingsByISBN(ISBN)
+    const { listings: [listing] } = await fetchListingsByISBN(ISBN)
     expect(listing.condition).toBe('Very good')
     expect(listing.condition_normalized).toBe('good')
   })
@@ -163,7 +163,7 @@ describe('fetchListingsByISBN — HTML parsing', () => {
   it('falls back to listing-book-condition when optional condition is absent', async () => {
     const html = makeHtmlListing({ listingId: '88888', sellerName: 'S1', price: '7.00', condition: 'Used - Like New' })
     mockFetch(html)
-    const [listing] = await fetchListingsByISBN(ISBN)
+    const { listings: [listing] } = await fetchListingsByISBN(ISBN)
     expect(listing.condition).toBe('Used - Like New')
     expect(listing.condition_normalized).toBe('fine')
   })
@@ -174,27 +174,30 @@ describe('fetchListingsByISBN — HTML parsing', () => {
       ${makeHtmlListing({ listingId: 'L2', sellerName: 'Seller Two', price: '9.99', condition: 'Like New' })}
     </ul>`
     mockFetch(html)
-    const listings = await fetchListingsByISBN(ISBN)
+    const { listings } = await fetchListingsByISBN(ISBN)
     expect(listings).toHaveLength(2)
   })
 })
 
 describe('fetchListingsByISBN — error handling', () => {
-  it('returns a placeholder when the HTTP response is not ok', async () => {
+  it('reports an error when the HTTP response is not ok', async () => {
     mockFetch('Service unavailable', false)
-    const listings = await fetchListingsByISBN(ISBN)
+    const { listings, error } = await fetchListingsByISBN(ISBN)
     expect(listings).toHaveLength(0)
+    expect(error).toBeTruthy()
   })
 
-  it('returns a placeholder when fetch throws', async () => {
+  it('reports an error when fetch throws', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network error')))
-    const listings = await fetchListingsByISBN(ISBN)
+    const { listings, error } = await fetchListingsByISBN(ISBN)
     expect(listings).toHaveLength(0)
+    expect(error).toBe('Network error')
   })
 
-  it('returns empty array when HTML has no recognisable listings', async () => {
+  it('reports no error when the page simply has no listings', async () => {
     mockFetch('<html><body>No results found</body></html>')
-    const listings = await fetchListingsByISBN(ISBN)
+    const { listings, error } = await fetchListingsByISBN(ISBN)
     expect(listings).toHaveLength(0)
+    expect(error).toBeNull()
   })
 })

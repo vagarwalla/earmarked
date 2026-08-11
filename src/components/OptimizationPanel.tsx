@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import type { CartItem, Condition, Edition, Listing, OptimizationResult, PriceResponse } from '@/lib/types'
+import type { CartItem, Condition, Edition, Listing, OptimizationResult, PriceResponse, SourceInfo } from '@/lib/types'
 import { getSellerSource } from '@/lib/optimizer/batch'
 import {
   CONDITION_LABELS,
@@ -405,7 +405,7 @@ const SOURCE_BADGE: Record<'abe' | 'thriftbooks' | 'bwb', { label: string; class
 // dozens of books come up empty would otherwise fan out into hundreds of
 // sequential scrapes. Books past the batch size are probed on request.
 const ALT_COVERS_PER_BOOK = 6
-const COVER_PROBE_CONCURRENCY = 3
+const COVER_PROBE_CONCURRENCY = 2
 const COVER_PROBE_BATCH = 20
 
 // One request returns every source view — the server qualifies listings once
@@ -435,6 +435,11 @@ export function OptimizationPanel({ items, cartSlug, onUpdateItem }: Props) {
   const [resultsBySource, setResultsBySource] = useState<Partial<Record<SourceId, OptimizationResult>>>({})
   const [listingsByIsbn, setListingsByIsbn] = useState<Record<string, Listing[]>>({})
   const [searched, setSearched] = useState(false)
+  // Health of the last price lookup — a blocked or timed-out source is not the
+  // same as a book nobody is selling, and the panel must not conflate them.
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const [sourceHealth, setSourceHealth] = useState<SourceInfo[]>([])
+  const [uncheckedIsbns, setUncheckedIsbns] = useState<string[]>([])
   const [conditionOverrides, setConditionOverrides] = useState<Record<string, Condition[]>>({})
   const [maxPriceOverrides, setMaxPriceOverrides] = useState<Record<string, number | null>>({})
   const [isbnCandidateOverrides, setIsbnCandidateOverrides] = useState<Record<string, string[]>>({})
@@ -461,6 +466,9 @@ export function OptimizationPanel({ items, cartSlug, onUpdateItem }: Props) {
     setListingsByIsbn({})
     setSearched(false)
     setEditionPickerFor(null)
+    setSearchError(null)
+    setSourceHealth([])
+    setUncheckedIsbns([])
     setAltEditions({})
     setCoverProbeStatus({})
     setCoverProbeBudget(COVER_PROBE_BATCH)
@@ -477,13 +485,24 @@ export function OptimizationPanel({ items, cartSlug, onUpdateItem }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ isbns }),
       })
+      // A failed request used to parse into an empty listing map, which the panel
+      // then reported as "no listings — try relaxing constraints".
+      if (!priceRes.ok) {
+        const detail = await priceRes.json().catch(() => null)
+        throw new Error(detail?.error ?? `price lookup failed (${priceRes.status})`)
+      }
       const priceData: PriceResponse = await priceRes.json()
       const byIsbn: Record<string, Listing[]> = priceData.listings ?? {}
       setListingsByIsbn(byIsbn)
+      setSourceHealth(priceData.sources ?? [])
+      setUncheckedIsbns(priceData.unchecked_isbns ?? [])
       setSearched(true)
 
       await updateAllResults(byIsbn, items)
     } catch (err) {
+      // Held in state as well as a toast: a toast vanishes, and a silent failure
+      // here is indistinguishable from "these books have no listings".
+      setSearchError((err as Error).message)
       toast.error('Failed to find deals: ' + (err as Error).message)
     } finally {
       setLoading(false)
@@ -637,6 +656,9 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
 
   const missingItems = itemListingCounts.filter((x) => x.listings.length === 0)
   const foundAnyListings = itemListingCounts.some((x) => x.listings.length > 0)
+
+  const failedSources = sourceHealth.filter((s) => s.failed > 0)
+  const searchIncomplete = failedSources.length > 0 || uncheckedIsbns.length > 0
 
   // A book has an entry in coverProbeStatus from the moment it is queued, so the
   // keys double as the count of books already claimed against the batch budget.
@@ -912,6 +934,54 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
         )
       })()}
 
+      {searchError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 space-y-1.5">
+          <div className="flex items-center gap-1.5 text-sm font-medium text-red-800">
+            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+            Couldn&apos;t search for listings
+          </div>
+          <p className="text-xs text-red-700">{searchError}</p>
+          <button
+            disabled={loading}
+            onClick={findDeals}
+            className="text-xs font-medium px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 flex items-center gap-1"
+          >
+            {loading && <Loader2 className="h-3 w-3 animate-spin" />}
+            Try again
+          </button>
+        </div>
+      )}
+
+      {/* Source outages — kept distinct from "nobody is selling this book" */}
+      {searched && searchIncomplete && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 space-y-1.5">
+          <div className="flex items-center gap-1.5 text-sm font-medium text-red-800">
+            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+            The listing search didn&apos;t complete — results below are missing sellers
+          </div>
+          {failedSources.map((s) => (
+            <div key={s.name} className="text-xs text-red-700">
+              <span className="font-medium">{s.name}</span>: {s.failed} lookup{s.failed !== 1 ? 's' : ''} failed
+              {s.error ? ` (${s.error})` : ''}
+            </div>
+          ))}
+          {uncheckedIsbns.length > 0 && (
+            <div className="text-xs text-red-700">
+              {uncheckedIsbns.length} edition{uncheckedIsbns.length !== 1 ? 's were' : ' was'} not checked before the
+              search ran out of time.
+            </div>
+          )}
+          <button
+            disabled={loading}
+            onClick={findDeals}
+            className="text-xs font-medium px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 flex items-center gap-1"
+          >
+            {loading && <Loader2 className="h-3 w-3 animate-spin" />}
+            Search again
+          </button>
+        </div>
+      )}
+
       {/* Books with no listings — both relaxation axes searched automatically */}
       {searched && missingItems.length > 0 && (() => {
         const anyProbing = missingWithOptions.some((m) => m.probing)
@@ -928,7 +998,9 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
                 ? ' — checking other conditions and covers…'
                 : anyOptions
                   ? ' — here is what other conditions and covers turned up'
-                  : ' — try relaxing constraints'}
+                  : searchIncomplete
+                    ? ' — the search above didn\'t complete, so this may not be the whole picture'
+                    : ' — try relaxing constraints'}
             </span>
           </div>
           {missingWithOptions.map(({ item, maxPrice, suggestion, nearMiss, coverOptions, probing }) => {

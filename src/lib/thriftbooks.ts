@@ -12,7 +12,7 @@
 //   We filter to conditions whose `ean` (or `isbn`) matches the requested ISBN,
 //   and where price > 0.
 
-import type { Listing } from './types'
+import type { Listing, SourceFetch } from './types'
 import { normalizeCondition } from './abebooks'
 
 const SEARCH_BASE = 'https://www.thriftbooks.com/browse/?b.search='
@@ -24,7 +24,7 @@ const HEADERS = {
   'Accept-Language': 'en-US,en;q=0.9',
 }
 
-export async function fetchThriftBooksListings(isbn: string): Promise<Listing[]> {
+export async function fetchThriftBooksListings(isbn: string): Promise<SourceFetch> {
   try {
     const res = await fetch(`${SEARCH_BASE}${encodeURIComponent(isbn)}`, {
       headers: HEADERS,
@@ -32,15 +32,15 @@ export async function fetchThriftBooksListings(isbn: string): Promise<Listing[]>
       signal: AbortSignal.timeout(15000),
     })
     if (!res.ok) {
-      console.error(`ThriftBooks search failed: ${res.status}`)
-      return []
+      console.error(`ThriftBooks search failed for ${isbn}: ${res.status}`)
+      return { listings: [], error: `HTTP ${res.status}` }
     }
     const html = await res.text()
     const finalUrl = res.url
-    return parseThriftBooksHTML(html, finalUrl, isbn)
+    return { listings: parseThriftBooksHTML(html, finalUrl, isbn), error: null }
   } catch (err) {
-    console.error('ThriftBooks fetch error:', err)
-    return []
+    console.error(`ThriftBooks fetch error for ${isbn}:`, err)
+    return { listings: [], error: (err as Error).message }
   }
 }
 

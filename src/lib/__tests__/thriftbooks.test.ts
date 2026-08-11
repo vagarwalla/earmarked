@@ -96,7 +96,7 @@ describe('fetchThriftBooksListings', () => {
     }
     globalThis.fetch = vi.fn().mockResolvedValue(mockResponse)
 
-    const results = await fetchThriftBooksListings('9780062315007')
+    const { listings: results } = await fetchThriftBooksListings('9780062315007')
 
     expect(results.length).toBeGreaterThan(0)
     for (const r of results) {
@@ -123,7 +123,7 @@ describe('fetchThriftBooksListings', () => {
     }
     globalThis.fetch = vi.fn().mockResolvedValue(mockResponse)
 
-    const results = await fetchThriftBooksListings('9780062315007')
+    const { listings: results } = await fetchThriftBooksListings('9780062315007')
     const likeNew = results.find(r => r.condition.includes('Like New'))
     const acceptable = results.find(r => r.condition.includes('Acceptable'))
 
@@ -143,7 +143,7 @@ describe('fetchThriftBooksListings', () => {
       text: vi.fn().mockResolvedValue(html),
     })
 
-    const results = await fetchThriftBooksListings('9780062315007')
+    const { listings: results } = await fetchThriftBooksListings('9780062315007')
     expect(results.every(r => r.price > 0)).toBe(true)
   })
 
@@ -160,7 +160,7 @@ describe('fetchThriftBooksListings', () => {
       text: vi.fn().mockResolvedValue(html),
     })
 
-    const results = await fetchThriftBooksListings('9780062315007')
+    const { listings: results } = await fetchThriftBooksListings('9780062315007')
     expect(results.every(r => r.isbn === '9780062315007')).toBe(true)
     expect(results.some(r => r.listing_id.includes('9999'))).toBe(false)
   })
@@ -176,20 +176,22 @@ describe('fetchThriftBooksListings', () => {
       text: vi.fn().mockResolvedValue(html),
     })
 
-    const results = await fetchThriftBooksListings('9780062315007')
+    const { listings: results } = await fetchThriftBooksListings('9780062315007')
     expect(results[0]?.condition).toContain('Ex-Library')
   })
 
-  it('returns [] on HTTP error', async () => {
+  it('reports an error on HTTP error', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 503, url: '' })
-    const results = await fetchThriftBooksListings('9780062315007')
+    const { listings: results, error } = await fetchThriftBooksListings('9780062315007')
     expect(results).toEqual([])
+    expect(error).toBe('HTTP 503')
   })
 
-  it('returns [] on network error', async () => {
+  it('reports an error on network error', async () => {
     globalThis.fetch = vi.fn().mockRejectedValue(new Error('Network failure'))
-    const results = await fetchThriftBooksListings('9780062315007')
+    const { listings: results, error } = await fetchThriftBooksListings('9780062315007')
     expect(results).toEqual([])
+    expect(error).toBe('Network failure')
   })
 
   it('builds correct listing URL using slug and workId', async () => {
@@ -201,7 +203,7 @@ describe('fetchThriftBooksListings', () => {
       text: vi.fn().mockResolvedValue(html),
     })
 
-    const results = await fetchThriftBooksListings('9780062315007')
+    const { listings: results } = await fetchThriftBooksListings('9780062315007')
     expect(results[0]?.url).toMatch(/\/w\/the-alchemist_paulo-coelho\/246270\/item\//)
     expect(results[0]?.url).toContain('selectedISBN=0062315005')
     expect(results[0]?.url).toContain('#edition=8060455')

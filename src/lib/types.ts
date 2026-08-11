@@ -103,13 +103,27 @@ export interface OptimizationResult {
   savings: number
 }
 
+/**
+ * One source's answer for one ISBN. An outage is not an empty shelf: `error`
+ * is null only when the source actually answered, so callers can tell
+ * "nobody is selling this" apart from "we never got to ask".
+ */
+export interface SourceFetch {
+  listings: Listing[]
+  error: string | null
+}
+
 export interface SourceInfo {
   name: string
   search_url: string  // link users can click to browse manually
   found: number       // number of listings found (0 = no results)
+  failed: number      // ISBN lookups that errored outright (blocked, timed out, unparseable)
+  error: string | null // first failure seen, for diagnostics
 }
 
 export interface PriceResponse {
   listings: Record<string, Listing[]>
   sources: SourceInfo[]
+  // ISBNs dropped because the request ran out of time — not "no listings"
+  unchecked_isbns: string[]
 }
