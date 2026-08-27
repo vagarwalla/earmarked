@@ -9,8 +9,15 @@ const NUM_STARTS = 5
 const ILS_PERTURB_MIN = 2
 const ILS_PERTURB_MAX = 4
 // Wall-clock backstop only (serverless safety) — the primary budget is
-// iteration-based so results are deterministic for a given input.
-const HARD_DEADLINE_MS = 1000
+// iteration-based so results are deterministic for a given input. Callers that
+// need strict determinism (tests) pass deadlineMs: Infinity to disable it.
+export const HARD_DEADLINE_MS = 1000
+
+export type LocalSearchOptions = {
+  seed?: number
+  /** Wall-clock backstop in ms. Infinity runs the iteration budget to completion. */
+  deadlineMs?: number
+}
 
 /** ILS iterations per start. Iteration cost grows with n, so the count shrinks. */
 function ilsIterations(n: number): number {
@@ -76,10 +83,14 @@ function localSearchImprove(
 
       for (let i = 0; i < bookOptions.length; i++) {
         const optI = bookOptions[i]
-        const offerI = assignment.get(optI.item.id)
-        if (!offerI) continue
 
         for (let j = i + 1; j < bookOptions.length; j++) {
+          // Both offers are re-read every pair: a commit earlier in this j loop
+          // reassigns book i, and removing a stale offer from the tracker
+          // desynchronizes it from `assignment` — which made totalCost drift
+          // down without bound and this loop never terminate.
+          const offerI = assignment.get(optI.item.id)
+          if (!offerI) break
           const optJ = bookOptions[j]
           const offerJ = assignment.get(optJ.item.id)
           if (!offerJ) continue
@@ -179,11 +190,14 @@ function perturb(
  * applies single-swap local search, then perturbs and re-optimizes for a
  * fixed number of iterations per start. All randomness comes from a PRNG
  * seeded by the input, so identical inputs give identical results; a
- * wall-clock cap exists only as a serverless backstop.
+ * wall-clock cap exists only as a serverless backstop. Under CPU contention
+ * that cap truncates the search at input-dependent points, so callers that
+ * need reproducible output across runs pass deadlineMs: Infinity.
  */
-export function solveLocalSearch(bookOptions: BookOption[], seed?: number): Assignment {
+export function solveLocalSearch(bookOptions: BookOption[], opts: LocalSearchOptions = {}): Assignment {
   if (bookOptions.length === 0) return new Map()
 
+  const { seed, deadlineMs = HARD_DEADLINE_MS } = opts
   const rand = mulberry32(seed ?? seedFromBookOptions(bookOptions))
 
   // Top offers per book (offers are sorted by total_price + shipping_base)
@@ -198,7 +212,7 @@ export function solveLocalSearch(bookOptions: BookOption[], seed?: number): Assi
 
   let bestAssignment: Assignment = new Map()
   let bestCost = Infinity
-  const hardDeadline = Date.now() + HARD_DEADLINE_MS
+  const hardDeadline = Date.now() + deadlineMs
   const iterations = ilsIterations(bookOptions.length)
   // The full 2-swap pass is quadratic in books × candidates; beyond a dozen
   // books it dominates runtime, so ILS iterations run single-swap only and

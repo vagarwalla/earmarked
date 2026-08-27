@@ -25,6 +25,16 @@ function exactSearchLogNodes(bookOptions: BookOption[]): number {
   return logNodes
 }
 
+export type OptimizeOptions = {
+  /**
+   * Wall-clock backstop for local search, in ms. Defaults to the serverless
+   * cap; pass Infinity to run the deterministic iteration budget to
+   * completion (tests that assert reproducible totals need this — under CPU
+   * contention the cap truncates different inputs at different points).
+   */
+  deadlineMs?: number
+}
+
 /**
  * Default solve order:
  *   1. Seeded local search — cheap, bounded, deterministic.
@@ -32,8 +42,8 @@ function exactSearchLogNodes(bookOptions: BookOption[]): number {
  *      branch-and-bound. The warm start makes the result never worse than
  *      local search, even when the node budget aborts the search.
  */
-function solveAuto(bookOptions: BookOption[]): Assignment {
-  const ls = solveLocalSearch(bookOptions)
+function solveAuto(bookOptions: BookOption[], options: OptimizeOptions): Assignment {
+  const ls = solveLocalSearch(bookOptions, { deadlineMs: options.deadlineMs })
   if (exactSearchLogNodes(bookOptions) > EXACT_GATE_MAX_LOG_NODES) return ls
   return solveExact(bookOptions, { warmStart: ls })
 }
@@ -41,9 +51,10 @@ function solveAuto(bookOptions: BookOption[]): Assignment {
 export function optimize(
   items: CartItem[],
   listingsByIsbn: Map<string, Listing[]>,
-  strategy?: OptimizerStrategy
+  strategy?: OptimizerStrategy,
+  options: OptimizeOptions = {}
 ): OptimizationResult {
-  return optimizeBookOptions(buildBookOptions(items, listingsByIsbn), strategy)
+  return optimizeBookOptions(buildBookOptions(items, listingsByIsbn), strategy, options)
 }
 
 /**
@@ -53,9 +64,10 @@ export function optimize(
  */
 export function optimizeBookOptions(
   bookOptions: BookOption[],
-  strategy?: OptimizerStrategy
+  strategy?: OptimizerStrategy,
+  options: OptimizeOptions = {}
 ): OptimizationResult {
-  const assignment = strategy ? strategy.solve(bookOptions) : solveAuto(bookOptions)
+  const assignment = strategy ? strategy.solve(bookOptions) : solveAuto(bookOptions, options)
   const groups = buildGroups(bookOptions, assignment)
 
   const grand_total = groups.reduce((s, g) => s + g.group_total, 0)
