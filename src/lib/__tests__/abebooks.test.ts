@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { conditionMeets, normalizeCondition, fetchListingsByISBN, ABE_DEFAULT_SHIPPING } from '../abebooks'
 
@@ -102,10 +103,10 @@ function makeHtmlListing(opts: {
   const sfAttr = sellerId ? `href="/${sellerId}/${sellerId}/sf"` : ''
   const hrefAttr = href ?? `href="/book/id/${listingId}/bd"`
   // data-listingid must be inside the <li> content (not on the tag) for the regex to find it
-  return `<li data-test-id="listing-item">
+  return `<li data-test-id="listing-item-${listingId}">
     <button data-listingid="${listingId}" data-csa-c-cost="${price}" data-csa-c-shipping-cost="${shipping}"></button>
     <span data-test-id="listing-book-condition">${condition}</span>
-    <span class="seller-name">${sellerName}</span>
+    <a data-test-id="listing-seller-link" href="/seller/sf">${sellerName}</a>
     <a ${hrefAttr}></a>
     ${sellerId ? `<a ${sfAttr}></a>` : ''}
   </li>`
@@ -220,5 +221,66 @@ describe('fetchListingsByISBN — error handling', () => {
     const { listings, error } = await fetchListingsByISBN(ISBN)
     expect(listings).toHaveLength(0)
     expect(error).toBeNull()
+  })
+})
+
+// ── real captured page ────────────────────────────────────────────────────────
+// Every fixture above is hand-written, so it re-encodes whatever markup the
+// parser already expects and keeps passing after AbeBooks changes its HTML.
+// This one is captured from a live search-results page.
+
+describe('fetchListingsByISBN — against a live-captured search page', () => {
+  const html = readFileSync(new URL('./fixtures/abebooks-srp.html', import.meta.url), 'utf8')
+  const FIXTURE_ISBN = '9780062315007'
+
+  async function parseFixture() {
+    mockFetch(html)
+    return fetchListingsByISBN(FIXTURE_ISBN)
+  }
+
+  it('finds every listing on the page', async () => {
+    const { listings, error } = await parseFixture()
+    expect(error).toBeNull()
+    expect(listings).toHaveLength(4)
+  })
+
+  it('reads price, shipping and condition off each listing', async () => {
+    const { listings } = await parseFixture()
+    expect(listings.map((l) => l.price)).toEqual([5.54, 6.03, 6.39, 595])
+    expect(listings.map((l) => l.shipping_base)).toEqual([0, 0, 0, 6.95])
+    expect(listings.map((l) => l.condition_normalized)).toEqual(['fair', 'fair', 'good', 'new'])
+  })
+
+  it('reads the condition as text, not as the markup around it', async () => {
+    // The quality sits inside nested spans. Keeping the raw fragment put markup
+    // on screen and broke normalizeCondition, which saw the "as" in `class=`.
+    const { listings } = await parseFixture()
+    expect(listings.map((l) => l.condition)).toEqual([
+      'Used - Fair',
+      'Used - Fair',
+      'Used - Very good',
+      'New',
+    ])
+    expect(listings.every((l) => !/[<>]/.test(l.condition))).toBe(true)
+  })
+
+  it('attributes each listing to the bookseller offering it', async () => {
+    const { listings } = await parseFixture()
+    expect(listings[0].seller_name).toBe('Dream Books Co.')
+    expect(listings[0].seller_id).toBe('54248992')
+    // Distinct sellers must stay distinct, or the optimizer merges their orders.
+    expect(new Set(listings.map((l) => l.seller_id)).size).toBe(4)
+  })
+
+  it('flags the signed first edition and nothing else', async () => {
+    const { listings } = await parseFixture()
+    expect(listings.filter((l) => l.signed).map((l) => l.price)).toEqual([595])
+    expect(listings.filter((l) => l.first_edition).map((l) => l.price)).toEqual([595])
+  })
+
+  it('links each listing to its own detail page', async () => {
+    const { listings } = await parseFixture()
+    expect(listings[0].url).toMatch(/^https:\/\/www\.abebooks\.com\/.+\/\d+\/bd$/)
+    expect(new Set(listings.map((l) => l.url)).size).toBe(4)
   })
 })

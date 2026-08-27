@@ -137,7 +137,7 @@ describe('buildBookOptions — signed_only filter', () => {
     expect(opt.listings[0].signed).toBe(true)
   })
 
-  it('keeps non-signed listings when signed_only is false', () => {
+  it('keeps every listing when signed_only is false', () => {
     const item = makeItem({ id: 'i1', signed_only: false })
     const listings = new Map([
       [`isbn-i1`, [
@@ -146,10 +146,9 @@ describe('buildBookOptions — signed_only filter', () => {
       ]],
     ])
     const [opt] = buildBookOptions([item], listings)
-    // signed_only = false means "exclude signed" per the filter logic:
-    // (item.signed_only ? l.signed : !l.signed) when signed_only is false → !l.signed
-    expect(opt.listings).toHaveLength(1)
-    expect(opt.listings[0].signed).toBe(false)
+    // false is the column default and what an untouched "Only" toggle stores.
+    // It is the absence of a filter, not a request to exclude signed copies.
+    expect(opt.listings).toHaveLength(2)
   })
 
   it('passes through all listings when signed_only is null', () => {

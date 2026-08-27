@@ -8,9 +8,12 @@
 //   directly in the HTML (no JS execution needed).  We extract:
 //     - The canonical work URL  → slug + workId for building listing links
 //     - JSON `conditions` arrays grouped by media type, each entry having:
-//         quality, isbn, ean, idAmazon, price, exLib, noDj
+//         quality, isbn, ean, idIq, idAmazon, price, exLib, noDj
 //   We filter to conditions whose `ean` (or `isbn`) matches the requested ISBN,
 //   and where price > 0.
+//
+//   The payload appears more than once per page, so the same copy is read
+//   several times and has to be de-duplicated by inventory id.
 
 import type { Listing, SourceFetch } from './types'
 import { normalizeCondition } from './abebooks'
@@ -48,10 +51,61 @@ interface TBCondition {
   quality: string
   isbn: string
   ean: string
+  /** Stable inventory id for this copy — unique per quality/edition. */
+  idIq: number
   idAmazon: number
   price: number
   exLib: boolean
   noDj: boolean
+}
+
+/**
+ * Pull out every `"conditions":[...]` array by matching brackets, then JSON.parse
+ * it. Reading the fields off the raw text with one big regex instead would tie
+ * us to the order ThriftBooks happens to serialise its keys in, and go quietly
+ * empty the day that changes.
+ */
+function extractConditionArrays(html: string): TBCondition[][] {
+  const arrays: TBCondition[][] = []
+  const KEY = '"conditions":'
+
+  for (let at = html.indexOf(KEY); at !== -1; at = html.indexOf(KEY, at + KEY.length)) {
+    const open = html.indexOf('[', at + KEY.length)
+    if (open === -1) continue
+
+    let depth = 0
+    let inString = false
+    let escaped = false
+    let close = -1
+
+    for (let i = open; i < html.length; i++) {
+      const ch = html[i]
+      if (escaped) {
+        escaped = false
+      } else if (ch === '\\') {
+        escaped = true
+      } else if (ch === '"') {
+        inString = !inString
+      } else if (!inString) {
+        if (ch === '[') depth++
+        else if (ch === ']' && --depth === 0) {
+          close = i
+          break
+        }
+      }
+    }
+    if (close === -1) continue
+
+    try {
+      const parsed: unknown = JSON.parse(html.slice(open, close + 1))
+      if (Array.isArray(parsed)) arrays.push(parsed as TBCondition[])
+    } catch {
+      // A block we cannot parse is one source of copies lost, not a failed page.
+    }
+    at = close
+  }
+
+  return arrays
 }
 
 function parseThriftBooksHTML(html: string, pageUrl: string, requestedIsbn: string): Listing[] {
@@ -80,41 +134,23 @@ function parseThriftBooksHTML(html: string, pageUrl: string, requestedIsbn: stri
   const isbn13 = requestedIsbn.length === 13 ? requestedIsbn : null
   const isbn10 = requestedIsbn.length === 10 ? requestedIsbn : null
 
-  // Locate all `conditions` JSON arrays in the page.
-  // The structure is: ..."conditions":[{...},{...}]...
-  // We use a simple regex to grab each element.
-  const conditionBlockRe = /"conditions":\[([^\]]+)\]/g
-  let blockMatch: RegExpExecArray | null
-  let listingIdx = 0
+  // A work page carries the same media/conditions payload more than once (the
+  // server-rendered markup and the hydration state each embed a copy), so the
+  // same physical copy shows up in several blocks. Keying by the inventory id
+  // collapses them — without it the optimizer sees phantom duplicate stock and
+  // will happily "buy" two of a book ThriftBooks has one of.
+  const seen = new Set<string>()
 
-  while ((blockMatch = conditionBlockRe.exec(html)) !== null) {
-    const blockText = blockMatch[1]
-    // Each condition is a JSON object; extract key fields via regex
-    // because the arrays can be large and JSON.parse on the whole string is error-prone.
-    const condRe = /\{[^{}]*"quality":"([^"]+)"[^{}]*"isbn":"([^"]*)"[^{}]*"ean":"([^"]*)"[^{}]*"idAmazon":(\d+)[^{}]*"price":([\d.]+)[^{}]*"exLib":(true|false)[^{}]*"noDj":(true|false)[^{}]*/g
-    let condMatch: RegExpExecArray | null
-    while ((condMatch = condRe.exec(blockText)) !== null) {
-      const [, quality, condIsbn10, condEan, idAmazonStr, priceStr, exLibStr, noDjStr] = condMatch
-      const cond: TBCondition = {
-        quality,
-        isbn: condIsbn10,
-        ean: condEan,
-        idAmazon: parseInt(idAmazonStr, 10),
-        price: parseFloat(priceStr),
-        exLib: exLibStr === 'true',
-        noDj: noDjStr === 'true',
-      }
-
+  for (const conditions of extractConditionArrays(html)) {
+    for (const cond of conditions) {
       // Filter: must match the requested ISBN (either 10 or 13 digit)
-      const matchesIsbn =
-        (isbn13 && (cond.ean === isbn13)) ||
-        (isbn10 && (cond.isbn === isbn10)) ||
-        // Also handle the case where caller passes 13-digit but we compare isbn10
-        (requestedIsbn.length === 13 && cond.ean === requestedIsbn) ||
-        (requestedIsbn.length === 10 && cond.isbn === requestedIsbn)
-
+      const matchesIsbn = isbn13 ? cond.ean === isbn13 : cond.isbn === isbn10
       if (!matchesIsbn) continue
-      if (cond.price <= 0) continue
+      if (!(cond.price > 0)) continue
+
+      const key = `${cond.idIq ?? cond.idAmazon}_${cond.quality}_${cond.price}`
+      if (seen.has(key)) continue
+      seen.add(key)
 
       // Build the listing URL
       const listingUrl =
@@ -129,7 +165,7 @@ function parseThriftBooksHTML(html: string, pageUrl: string, requestedIsbn: stri
       const conditionText = conditionParts.join(', ')
 
       listings.push({
-        listing_id: `tb_${cond.idAmazon}_${listingIdx++}`,
+        listing_id: `tb_${cond.idIq ?? cond.idAmazon}`,
         seller_id: 'thriftbooks',
         seller_name: 'ThriftBooks',
         price: cond.price,
@@ -139,7 +175,10 @@ function parseThriftBooksHTML(html: string, pageUrl: string, requestedIsbn: stri
         condition_normalized: normalizeCondition(cond.quality),
         signed: false,
         first_edition: false,
-        dust_jacket: !cond.noDj,
+        // `noDj` marks copies known to be missing a jacket. Its absence says
+        // nothing — most of this catalogue is paperback — so claiming a jacket
+        // here would both mislead and hijack the "dust jacket only" filter.
+        dust_jacket: false,
         url: listingUrl,
         isbn: requestedIsbn,
       })

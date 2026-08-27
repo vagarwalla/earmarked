@@ -59,40 +59,79 @@ export async function fetchListingsByISBN(isbn: string): Promise<SourceFetch> {
   }
 }
 
+/**
+ * Readable text from a fragment of markup. AbeBooks wraps most values in nested
+ * spans, and the raw fragment is not safe to keep: it reaches the UI as the
+ * condition label, and stray markup also derails normalizeCondition (the "as" in
+ * `class=` reads as "as new").
+ */
+function text(fragment: string): string {
+  return fragment
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#x27;|&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** Condition text without the "Condition:" prefix the screen-reader copy carries. */
+function stripLabel(fragment: string): string {
+  return text(fragment).replace(/^Condition:\s*/i, '')
+}
+
+/**
+ * One string per listing, each running from its container marker to the start
+ * of the next. Listings nest their own <li> chips, so the enclosing element
+ * cannot be matched by a balanced-tag regex; the marker is the reliable seam.
+ */
+function splitListingBlocks(html: string): string[] {
+  const markerRe = /<li[^>]*data-test-id="listing-item(?:-[^"]*)?"/g
+  const starts: number[] = []
+  for (let m = markerRe.exec(html); m !== null; m = markerRe.exec(html)) starts.push(m.index)
+
+  return starts.map((start, i) => html.slice(start, starts[i + 1] ?? html.length))
+}
+
 function parseListingsFromHTML(html: string, isbn: string): Listing[] {
   const listings: Listing[] = []
 
-  // AbeBooks uses server-rendered HTML with these exact attributes (verified March 2026):
-  // - Listing container: <li data-test-id="listing-item">
+  // AbeBooks uses server-rendered HTML with these exact attributes (verified
+  // against a live search page, August 2026 — see __tests__/fixtures/abebooks-srp.html):
+  // - Listing container: <li data-test-id="listing-item-{listingId}">
   // - Price:             data-csa-c-cost="7.40"  (on the "Add to basket" button)
-  // - Shipping:          data-csa-c-shipping-cost="0.0"
+  // - Shipping:          data-csa-c-shipping-cost="0"
   // - Listing ID:        data-listingid="32405132647"
-  // - Condition:         data-test-id="listing-book-condition">Used - Softcover</span>
-  // - Signed:            data-test-id="listing-signed">Signed</span>  (only present if signed)
-  // - First Edition:     data-test-id="listing-firstedition">First Edition</span>  (only if FE)
-  // - Dust Jacket:       no dedicated element — appears as "With dust jacket" in listing-description
-  // - Seller name:       seller-name">World of Books
+  // - Condition:         data-test-id="listing-condition">Used - Fair</span>
+  // - Signed / 1st ed:   <ul aria-label="Attributes"> chips, e.g. aria-label="Signed"
+  // - Dust Jacket:       no chip — only ever mentioned in the description text
+  // - Seller name:       data-test-id="listing-seller-link" ...>Dream Books Co.</a>
+  // - Seller ID:         href="/{slug}/{sellerId}/sf"
   // - Book detail URL:   href="/{slug}/{listingId}/bd"
-
-  const listingBlockRe = /<li[^>]*data-test-id="listing-item"[^>]*>([\s\S]*?)<\/li>/g
+  //
+  // Blocks are split on the container marker rather than matched as <li>…</li>:
+  // a listing contains nested <li> chips, so a non-greedy match stops early and
+  // truncates the block before the price.
   const idRe = /data-listingid="(\d+)"/
   const costRe = /data-csa-c-cost="([\d.]+)"/
   const shipRe = /data-csa-c-shipping-cost="([\d.]+)"/
-  const condRe = /data-test-id="listing-book-condition"[^>]*>([\s\S]*?)<\/span>/
+  // The quality appears twice: once inside a wrapper that also carries a
+  // screen-reader copy, and once on its own as plain text. Prefer the latter.
+  const condRe = /data-test-id="listing-condition"[^>]*>([\s\S]*?)<\/span>/
+  const bookCondRe = /data-test-id="listing-book-condition(?:-\d+)?"[^>]*>([\s\S]*?)<\/(?:p|span)>/
   // listing-optional-condition holds the actual quality ("Condition: Very good", "Condition: Fair", etc.)
   // It is more precise than listing-book-condition which often only says "Used - Hardcover"
   const optCondRe = /data-test-id="listing-optional-condition"[^>]*>([\s\S]*?)<\/span>/
-  const signedRe = /data-test-id="listing-signed"/
-  const firstEditionRe = /data-test-id="listing-firstedition"/
-  const descRe = /data-test-id="listing-description"[^>]*>([\s\S]*?)<\/p>/
-  const sellerRe = /seller-name">([^<]+)/
+  const attributesRe = /<ul[^>]*aria-label="Attributes"[\s\S]*?<\/ul>/
+  const descRe = /data-test-id="(?:listing-description|description-\d+)"[^>]*>([\s\S]*?)<\/p>/
+  const sellerRe = /data-test-id="listing-seller-link"[^>]*>([^<]+)</
   const hrefRe = /href="(\/[^"]+\/\d+\/bd)"/
   const sfRe = /href="\/[^"]+\/(\d+)\/sf(?:\?[^"]*)?"/
 
-  let m: RegExpExecArray | null
-  while ((m = listingBlockRe.exec(html)) !== null) {
-    const block = m[1]
-
+  for (const block of splitListingBlocks(html)) {
     const costMatch = costRe.exec(block)
     if (!costMatch) continue
 
@@ -114,16 +153,21 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
     // under-reports every total. Fall back to the standard US rate instead.
     const parsedShipping = shipMatch ? parseFloat(shipMatch[1]) : NaN
     const shipping = Number.isFinite(parsedShipping) ? parsedShipping : ABE_DEFAULT_SHIPPING
-    const signed = signedRe.test(block)
-    const first_edition = firstEditionRe.test(block)
+    // Collectible attributes are chips in an "Attributes" list, alongside the
+    // binding. Scoping to that list keeps a description that merely discusses a
+    // first edition from being read as one.
+    const attributes = attributesRe.exec(block)?.[0] ?? ''
+    const signed = /aria-label="Signed"/.test(attributes)
+    const first_edition = /aria-label="First Edition"/.test(attributes)
     const descMatch = descRe.exec(block)
-    const dust_jacket = descMatch ? /with dust jacket/i.test(descMatch[1]) : false
+    const dust_jacket = descMatch ? /\bwith dust ?jacket\b/i.test(descMatch[1]) : false
 
     // Prefer listing-optional-condition (e.g. "Condition: Very good") over
     // listing-book-condition (e.g. "Used - Hardcover") — the latter is a format
     // label and often omits quality info entirely.
-    const rawCond = condMatch ? condMatch[1].trim() : 'Good'
-    const optCond = optCondMatch ? optCondMatch[1].trim().replace(/^Condition:\s*/i, '') : null
+    const bookCondMatch = bookCondRe.exec(block)
+    const rawCond = stripLabel(condMatch?.[1] ?? bookCondMatch?.[1] ?? 'Good') || 'Good'
+    const optCond = optCondMatch ? stripLabel(optCondMatch[1]) : null
     const condition = optCond ?? rawCond
 
     // Skip non-book media — check condition text for format keywords
@@ -132,7 +176,7 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
     const NON_BOOK = [/\bcd\b/, /\bdvd\b/, /\bvhs\b/, /\bcassette\b/, /\bvinyl\b/, /\baudio cd\b/, /\bmp3\b/, /\bdigital\b/]
     if (NON_BOOK.some((r) => r.test(condLower))) continue
 
-    const sellerName = sellerMatch ? sellerMatch[1].trim() : 'AbeBooks Seller'
+    const sellerName = sellerMatch ? text(sellerMatch[1]) : 'AbeBooks Seller'
     const url = hrefMatch
       ? `https://www.abebooks.com${hrefMatch[1]}`
       : searchUrl(isbn)
