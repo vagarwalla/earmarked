@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# press — local pipeline state, extracted articles, and generated issues
+.press/
