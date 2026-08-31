@@ -418,11 +418,25 @@ export async function extractFromUrl(opts: ExtractOptions): Promise<ExtractedArt
 
   const attempted: ExtractionRung[] = []
   let html = ''
+  /** Why the live fetch failed, kept so the digest can say something useful. */
+  let fetchFailure: string | null = null
   try {
-    html = (await fetchText(url)).text
+    const response = await fetchText(url)
+    // A dead link must not become pages. Substack, and most publishers, answer
+    // a missing post with a full soft-404 — their publication homepage, served
+    // under a 404 status. It extracts perfectly well, which is the danger: the
+    // ladder would hand back several pages of someone's archive index as if it
+    // were the saved article, and nothing downstream would notice until it was
+    // printed. The status line is the only reliable signal that this happened.
+    if (response.status >= 400) {
+      throw new ExtractionError(`fetch returned HTTP ${response.status}`, [])
+    }
+    html = response.text
   } catch (err) {
-    // The page is unreachable, but Raindrop may have kept a copy.
-    console.warn(`press/extract: fetch failed for ${url}: ${(err as Error).message}`)
+    // Unreachable or refused, but Raindrop may have kept a copy from when it
+    // still worked — which is exactly the case the cache rung exists for.
+    fetchFailure = (err as Error).message
+    console.warn(`press/extract: fetch failed for ${url}: ${fetchFailure}`)
   }
 
   let result: RungResult | null = null
@@ -452,8 +466,10 @@ export async function extractFromUrl(opts: ExtractOptions): Promise<ExtractedArt
   }
 
   if (!result) {
+    // "HTTP 404" is something the weekly digest can act on; "no rung produced"
+    // is not, so the fetch failure wins when there was one.
     throw new ExtractionError(
-      `no rung produced at least ${MIN_ARTICLE_CHARS} characters of article`,
+      fetchFailure ?? `no rung produced at least ${MIN_ARTICLE_CHARS} characters of article`,
       attempted,
     )
   }

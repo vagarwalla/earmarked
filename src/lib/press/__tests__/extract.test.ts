@@ -371,6 +371,56 @@ describe('extractFromUrl', () => {
     expect(article.title).toMatch(/Salt Roads/)
   })
 
+  it('refuses a soft-404 rather than printing a publication homepage', async () => {
+    // Substack answers a missing post with its publication homepage under a
+    // 404. That page extracts cleanly, so only the status distinguishes it
+    // from a real article — and without the check it becomes printed pages.
+    const err = await extractFromUrl({
+      itemId: 'item404',
+      url: 'https://quarry.example.com/p/deleted-post',
+      deps: {
+        fetchText: async () => ({
+          text: fixture('article.html'), // plausible, extractable, and not the saved piece
+          url: 'https://quarry.example.com/p/deleted-post',
+          status: 404,
+        }),
+        storeImages: noImages as never,
+      },
+    }).catch((e: ExtractionError) => e)
+
+    expect(err).toBeInstanceOf(ExtractionError)
+    expect((err as ExtractionError).message).toMatch(/HTTP 404/)
+  })
+
+  it('refuses a 5xx page for the same reason', async () => {
+    await expect(
+      extractFromUrl({
+        itemId: 'item500',
+        url: 'https://quarry.example.com/p/x',
+        deps: {
+          fetchText: async () => ({ text: fixture('article.html'), url: 'x', status: 503 }),
+          storeImages: noImages as never,
+        },
+      }),
+    ).rejects.toThrow(/HTTP 503/)
+  })
+
+  it('falls back to the Raindrop copy when the live page has since 404ed', async () => {
+    // The common case for a saved link: it worked when it was saved.
+    const { rung, article } = await extractFromUrl({
+      itemId: 'item404b',
+      url: 'https://quarry.example.com/p/deleted-post',
+      raindropId: '99',
+      deps: {
+        fetchText: async () => ({ text: '<html><body>gone</body></html>', url: 'x', status: 404 }),
+        storeImages: noImages as never,
+        fetchRaindropCache: async () => fixture('article.html'),
+      },
+    })
+    expect(rung).toBe('raindrop-cache')
+    expect(article.title).toMatch(/Salt Roads/)
+  })
+
   it('still tries the cache when the page could not be fetched at all', async () => {
     const { rung } = await extractFromUrl({
       itemId: 'item4',
