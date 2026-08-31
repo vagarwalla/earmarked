@@ -62,8 +62,12 @@ import {
   type ComposedIssue,
   type PressIssue,
   type PressItem,
+  tocMeta,
   type TocEntry,
 } from './types'
+
+// Re-exported so existing callers and tests keep one import site.
+export { tocMeta }
 
 // ── Closing decision ─────────────────────────────────────────────────────────
 
@@ -153,16 +157,6 @@ export async function loadEntries(
 
 /** Rough capacity of one TOC page; only used to sanity-check the rendered count. */
 const TOC_ENTRIES_PER_PAGE = 18
-
-/**
- * The byline and the publication are often the same string on a personal blog
- * ("Joe Carlsmith · Joe Carlsmith"), which reads as a mistake on the page.
- */
-export function tocMeta(entry: Pick<TocEntry, 'byline' | 'sourceName'>): string {
-  const parts = [entry.byline, entry.sourceName].filter((p): p is string => Boolean(p))
-  const unique = parts.filter((p, i) => parts.findIndex((q) => q.toLowerCase() === p.toLowerCase()) === i)
-  return unique.join(' · ')
-}
 
 export function buildTocSection(issueName: string, issueNumber: number, toc: TocEntry[]): string {
   const rows = toc

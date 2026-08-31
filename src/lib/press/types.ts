@@ -207,6 +207,19 @@ export interface TocEntry {
   pageCount: number
 }
 
+/**
+ * The byline and the publication are often the same string on a personal blog
+ * ("Joe Carlsmith · Joe Carlsmith"), which reads as a mistake on the page.
+ *
+ * Lives here rather than in compose.ts so the review UI can use it: importing
+ * it from compose would pull pdf-lib and the whole render chain into the page.
+ */
+export function tocMeta(entry: Pick<TocEntry, 'byline' | 'sourceName'>): string {
+  const parts = [entry.byline, entry.sourceName].filter((p): p is string => Boolean(p))
+  const unique = parts.filter((p, i) => parts.findIndex((q) => q.toLowerCase() === p.toLowerCase()) === i)
+  return unique.join(' · ')
+}
+
 export interface ComposedIssue {
   issueId: string
   number: number

@@ -306,6 +306,22 @@ async function compose(state: State, force: boolean): Promise<void> {
   await writeFile(path.join(outDir, 'interior.pdf'), interior)
   await writeFile(path.join(outDir, 'cover.pdf'), cover.pdf)
   await writeFile(path.join(outDir, 'toc.json'), JSON.stringify(toc, null, 2))
+  // The name only exists at compose time; the review UI at /press reads it back.
+  await writeFile(
+    path.join(outDir, 'meta.json'),
+    JSON.stringify(
+      {
+        number: state.issueNumber,
+        name,
+        pageCount: pages,
+        builtAt: new Date().toISOString(),
+        preflight: problems,
+        articles: ready.map((i) => ({ id: i.id, title: i.title, url: i.url, pageCount: i.pageCount })),
+      },
+      null,
+      2,
+    ),
+  )
 
   console.log(`\n── ${name} · Issue ${state.issueNumber} ──`)
   for (const e of toc) console.log(`   p.${String(e.startPage).padStart(3)}  ${e.title}`)
