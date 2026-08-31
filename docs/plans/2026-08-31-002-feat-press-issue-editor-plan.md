@@ -1,15 +1,15 @@
 ---
 title: "feat: press issue editor — reorder, add and remove articles before printing"
 date: 2026-08-31
-status: proposed
+status: active
 type: feat
 depends_on: 2026-08-27-001-feat-press-magazine-pipeline-plan.md
 ---
 
 # feat: press issue editor
 
-**Not built.** This is the plan for the next pass on `/press`, recorded now so
-the read-only review page built today does not have to be redesigned around it.
+**Built.** Landed as described; the three open questions below were decided
+before implementation and their answers are recorded there.
 
 ## Summary
 
@@ -68,13 +68,46 @@ link, not by editing here.
 person's reading. It stays local-only (`pressUiEnabled()`), and the deployed
 approval email remains the remote surface.
 
-## Open questions
+## Open questions — decided
 
-1. Should reordering be free, or should the chronological default be preserved
-   with manual overrides layered on top? Chronological has been the implicit
-   organising principle so far.
-2. Should an edited issue keep its LLM-generated name, or be re-named after the
-   contents change? Re-naming is cheap; a name that no longer matches the
-   contents is worse than a stale one.
-3. Does a draft need to survive `--printed`, i.e. is there ever a reason to
-   re-print a past issue?
+1. **Should reordering be free, or should the chronological default be
+   preserved with manual overrides layered on top?** Free. The draft's
+   `itemIds` array *is* the running order. Chronological survives only as the
+   seed: `selectForIssue` still picks the oldest saves up to the threshold the
+   first time an issue is drafted, and is never consulted for that issue again.
+   Layering overrides on a sort key would have been a second model to keep in
+   step with `press_items.issue_id`, for no gain the editor could show.
+
+2. **Should an edited issue keep its LLM-generated name, or be re-named?**
+   Re-named, on every rebuild. A name that no longer matches the contents is
+   worse than a stale one, and `nameIssue()` is one Haiku call. Observed in
+   practice: reordering issue 1 renamed it from "Doing Good Seriously" to
+   "Doing Good Right", which is the intended behaviour and worth knowing about
+   before it surprises someone.
+
+3. **Does a draft need to survive `--printed`?** Yes, sealed rather than
+   deleted. `--printed` flips the draft to `state: 'ordered'` instead of
+   dropping it, so a past issue's contents stay inspectable and its articles
+   stay visibly spoken for (`claimedItemIds`). Every edit to an `ordered`
+   issue is refused server-side, and the UI renders it as a plain list with no
+   drag handles. Re-printing a past issue is still not a thing you can do from
+   here.
+
+## What landed
+
+- `src/lib/press/issues.ts` — the state file's shape, `withStateLock`, and the
+  draft model (`ensureDraft`, `applyIssueAction`, `claimedItemIds`).
+- `src/lib/press/build.ts` — the compose step, lifted out of `press-run.ts` so
+  the runner and the Rebuild button share it, plus `withBuildLock`.
+- `POST /api/press/issue/[number]` for reorder/remove/add, and
+  `POST /api/press/issue/[number]/rebuild` streaming NDJSON progress.
+- `src/app/press/IssueEditor.tsx` — `@dnd-kit` drag-to-reorder over two linked
+  lists (the issue and the waiting list), a live page total against the
+  threshold, and the Rebuild button.
+- `scripts/press-run.ts` now writes the draft at compose time and reports from
+  it thereafter; long steps run outside the state lock so the editor is never
+  frozen behind a 30-article extraction.
+
+Dirtiness is derived, not stored: the UI compares the draft against
+`meta.json`, so a build from any direction reconciles it and there is no flag
+to get out of step.

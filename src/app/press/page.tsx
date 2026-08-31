@@ -6,6 +6,10 @@
  * back to the originals so a bad extraction can be spotted, and what is still
  * waiting in `hw` for the next issue.
  *
+ * The open issue is editable — reorder, drop, pull one forward, rebuild — via
+ * `IssueEditor`; a printed issue is fixed and reads as a plain list. Both come
+ * from the same draft in `.press/state.json`.
+ *
  * A server component reading `.press/` directly — there is no database in the
  * local setup, and the files are the state.
  */
@@ -19,15 +23,15 @@ import {
   pressUiEnabled,
   readState,
 } from '@/lib/press/local'
-import { tocMeta } from '@/lib/press/types'
+import { loadSettings } from '@/lib/press/settings'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { IssueEditor } from './IssueEditor'
 import { IssuePreview } from './IssuePreview'
 
 export const dynamic = 'force-dynamic'
 
-const PAGE_THRESHOLD = Number.parseInt(process.env.PRESS_PAGE_THRESHOLD ?? '100', 10) || 100
-
-function hostOf(url: string): string {
+function hostOf(url: string | null): string {
+  if (!url) return ''
   try {
     return new URL(url).hostname.replace(/^www\./, '')
   } catch {
@@ -39,18 +43,18 @@ export default async function PressPage() {
   // The page lists what V has been reading; it has no place on a public deploy.
   if (!pressUiEnabled()) notFound()
 
+  const threshold = loadSettings().pageThreshold
   const state = await readState()
-  const issues = await listIssues(state)
+  const issues = await listIssues(state, threshold)
 
-  // Articles stay `laid_out` until an issue is actually ordered, so anything
-  // already composed into one would otherwise be counted twice — once in the
-  // issue and again as still waiting.
-  const composed = new Set(issues.flatMap((i) => i.articles.map((a) => a.id)))
-  const pending = pendingItems(state).filter((i) => !composed.has(i.id))
+  const waiting = pendingItems(state).map((i) => ({
+    id: i.id,
+    title: i.title,
+    url: i.url,
+    pageCount: i.pageCount ?? 0,
+  }))
   const skipped = itemsInState(state, 'skipped')
   const failed = itemsInState(state, 'failed')
-
-  const pendingPages = pending.reduce((n, i) => n + (i.pageCount ?? 0), 0)
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-10">
@@ -66,8 +70,8 @@ export default async function PressPage() {
 
       {issues.length === 0 && (
         <p className="text-muted-foreground rounded-lg border border-dashed p-8 text-center text-sm">
-          Nothing composed yet. Run{' '}
-          <code className="bg-muted rounded px-1.5 py-0.5">npx tsx scripts/press-run.ts --compose</code>
+          Nothing here yet. Run{' '}
+          <code className="bg-muted rounded px-1.5 py-0.5">npx tsx scripts/press-run.ts</code>
         </p>
       )}
 
@@ -77,7 +81,10 @@ export default async function PressPage() {
             <div>
               <h2 className="font-serif text-2xl">{issue.name}</h2>
               <p className="text-muted-foreground mt-0.5 text-xs">
-                Issue {issue.number} · {issue.pageCount} pages · {formatBytes(issue.interiorBytes)}
+                Issue {issue.number}
+                {issue.built
+                  ? ` · ${issue.pageCount} pages · ${formatBytes(issue.interiorBytes)}`
+                  : ' · not built yet'}
                 {issue.printed && ' · printed'}
                 {issue.builtAt && ` · built ${issue.builtAt.slice(0, 10)}`}
               </p>
@@ -85,7 +92,7 @@ export default async function PressPage() {
             <div className="flex gap-2 text-sm">
               {issue.hasInterior && (
                 <a
-                  className="rounded-md border px-3 py-1.5 hover:bg-accent"
+                  className="hover:bg-accent rounded-md border px-3 py-1.5"
                   href={`/api/press/file/${issue.number}/interior.pdf?download`}
                 >
                   Interior PDF
@@ -93,7 +100,7 @@ export default async function PressPage() {
               )}
               {issue.hasCover && (
                 <a
-                  className="rounded-md border px-3 py-1.5 hover:bg-accent"
+                  className="hover:bg-accent rounded-md border px-3 py-1.5"
                   href={`/api/press/file/${issue.number}/cover.pdf?download`}
                 >
                   Cover PDF
@@ -102,20 +109,23 @@ export default async function PressPage() {
             </div>
           </div>
 
-          {issue.hasInterior && <IssuePreview issueNumber={issue.number} />}
+          {issue.hasInterior && (
+            <IssuePreview issueNumber={issue.number} version={issue.builtAt} />
+          )}
 
-          <ol className="mt-6 divide-y rounded-lg border">
-            {issue.toc.map((entry) => {
-              const source = issue.articles.find((a) => a.id === entry.itemId)
-              return (
+          {issue.printed ? (
+            // Its raindrops have been archived and the copy bought; what it
+            // contains is now a matter of record rather than a decision.
+            <ol className="mt-6 divide-y rounded-lg border">
+              {issue.contents.map((entry) => (
                 <li key={entry.itemId} className="flex items-baseline gap-4 px-4 py-3">
                   <span className="text-muted-foreground w-10 shrink-0 text-right text-xs tabular-nums">
-                    p.{entry.startPage}
+                    {entry.startPage === null ? '' : `p.${entry.startPage}`}
                   </span>
                   <span className="min-w-0 flex-1">
-                    {source ? (
+                    {entry.url ? (
                       <a
-                        href={source.url}
+                        href={entry.url}
                         target="_blank"
                         rel="noreferrer"
                         className="font-serif hover:underline"
@@ -126,53 +136,28 @@ export default async function PressPage() {
                       <span className="font-serif">{entry.title}</span>
                     )}
                     <span className="text-muted-foreground block text-xs">
-                      {tocMeta(entry) || (source ? hostOf(source.url) : '')}
+                      {[entry.byline, entry.sourceName].filter(Boolean).join(' · ') ||
+                        hostOf(entry.url)}
                     </span>
                   </span>
                   <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
                     {entry.pageCount}pp
                   </span>
                 </li>
-              )
-            })}
-          </ol>
+              ))}
+            </ol>
+          ) : (
+            <IssueEditor
+              issueNumber={issue.number}
+              contents={issue.contents}
+              waiting={waiting}
+              dirty={issue.dirty}
+              built={issue.built}
+              threshold={threshold}
+            />
+          )}
         </section>
       ))}
-
-      <section className="mb-12">
-        <h2 className="font-serif text-xl">
-          Waiting for the next issue{' '}
-          <span className="text-muted-foreground text-sm font-sans">
-            {pending.length} articles · {pendingPages} of {PAGE_THRESHOLD} pages
-          </span>
-        </h2>
-        <div className="bg-muted mt-3 h-1.5 w-full overflow-hidden rounded-full">
-          <div
-            className="bg-foreground h-full rounded-full"
-            style={{ width: `${Math.min(100, (pendingPages / PAGE_THRESHOLD) * 100)}%` }}
-          />
-        </div>
-        <ol className="mt-4 divide-y rounded-lg border">
-          {pending.map((item) => (
-            <li key={item.id} className="flex items-baseline gap-4 px-4 py-3">
-              <span className="min-w-0 flex-1">
-                <a href={item.url} target="_blank" rel="noreferrer" className="font-serif hover:underline">
-                  {item.title ?? item.url}
-                </a>
-                <span className="text-muted-foreground block text-xs">{hostOf(item.url)}</span>
-              </span>
-              <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
-                {item.pageCount ?? '?'}pp
-              </span>
-            </li>
-          ))}
-          {pending.length === 0 && (
-            <li className="text-muted-foreground px-4 py-6 text-center text-sm">
-              Nothing waiting. Save something to hw.
-            </li>
-          )}
-        </ol>
-      </section>
 
       {(skipped.length > 0 || failed.length > 0) && (
         <section className="text-muted-foreground mb-12 text-sm">

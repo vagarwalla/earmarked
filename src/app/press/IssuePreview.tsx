@@ -8,11 +8,20 @@
 
 import { useState } from 'react'
 
-export function IssuePreview({ issueNumber }: { issueNumber: number }) {
+export function IssuePreview({
+  issueNumber,
+  version,
+}: {
+  issueNumber: number
+  /** When the file was last written. Changing it is what reloads the viewer. */
+  version: string | null
+}) {
   // Collapsed by default: the contents list is what gets reviewed, and a
   // full-height PDF viewer would push it below the fold on every visit.
   const [open, setOpen] = useState(false)
-  const src = `/api/press/file/${issueNumber}/interior.pdf`
+  // A rebuild replaces interior.pdf at the same URL, and neither the embedded
+  // viewer nor the browser cache would notice on their own.
+  const src = `/api/press/file/${issueNumber}/interior.pdf?v=${encodeURIComponent(version ?? '')}`
 
   return (
     <div>
