@@ -1,0 +1,482 @@
+/*
+ * press — magazine interior stylesheet (CSS Paged Media).
+ *
+ * Rendered by the Vivliostyle CLI (Chromium engine), so this may use modern
+ * CSS: `column-span: all`, page margin boxes, named pages, hyphenation.
+ *
+ * The page box itself — size and margins — is NOT here. It is derived from the
+ * print-spec constants in `src/lib/press/types.ts` and injected as a <style>
+ * block by `documentStyle()` in render.ts, so the 7x10 trim and Lulu's bleed
+ * are stated exactly once in the codebase.
+ *
+ * House rules, enforced by src/lib/press/__tests__/layout.test.ts: this file
+ * contains no at-rule that imports a stylesheet, no embedded font face, and no
+ * external reference of any kind. The renderer must never touch the network —
+ * article content arrives through an open email door, and U3 has already
+ * localised every image. Fonts are plain family stacks, with fallbacks that
+ * exist in a Linux container (Liberation/DejaVu) as well as on a Mac.
+ *
+ * Design: Nat Geo-ish. One serif for reading, one sans for furniture
+ * (running heads, folios, captions, bylines). Deliberately spare.
+ */
+
+/* ── Tokens ───────────────────────────────────────────────────────────────── */
+
+:root {
+  --serif: Georgia, "Iowan Old Style", "Palatino Linotype", Palatino,
+    "Liberation Serif", "DejaVu Serif", "Times New Roman", Times, serif;
+  --sans: "Helvetica Neue", Helvetica, Arial, "Liberation Sans", "DejaVu Sans",
+    sans-serif;
+
+  --ink: #14100c;
+  --ink-soft: #55504a;
+  --rule: #cbc5bb;
+  --rule-strong: #14100c;
+  --accent: #9a7530;
+  --paper: #ffffff;
+
+  --body-size: 10pt;
+  --body-leading: 13.6pt;
+  --column-gap: 18pt;
+}
+
+/* ── Base ─────────────────────────────────────────────────────────────────── */
+
+html {
+  font-family: var(--serif);
+  font-size: var(--body-size);
+  line-height: var(--body-leading);
+  color: var(--ink);
+  background: var(--paper);
+  /* Hyphenation needs a language; the template sets lang="en" on <html>. */
+  -webkit-hyphens: auto;
+  hyphens: auto;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+}
+
+p {
+  margin: 0;
+  orphans: 3;
+  widows: 3;
+}
+
+/* ── Running head and folio ───────────────────────────────────────────────────
+ * Custom properties are not reliably inherited into page margin boxes, so the
+ * furniture stack is written out literally here. The folio shows the page
+ * number alone; render.ts overrides `content` to prefix the issue number for a
+ * real issue (measurement renders have no meaningful issue number yet).
+ */
+
+@page {
+  @top-center {
+    content: string(articletitle);
+    font-family: "Helvetica Neue", Helvetica, Arial, "Liberation Sans",
+      "DejaVu Sans", sans-serif;
+    font-size: 7.5pt;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #55504a;
+    vertical-align: bottom;
+    padding-bottom: 16pt;
+  }
+}
+
+@page :left {
+  @bottom-left {
+    content: counter(page);
+    font-family: "Helvetica Neue", Helvetica, Arial, "Liberation Sans",
+      "DejaVu Sans", sans-serif;
+    font-size: 7.5pt;
+    letter-spacing: 0.09em;
+    color: #55504a;
+    vertical-align: top;
+    padding-top: 20pt;
+  }
+}
+
+@page :right {
+  @bottom-right {
+    content: counter(page);
+    font-family: "Helvetica Neue", Helvetica, Arial, "Liberation Sans",
+      "DejaVu Sans", sans-serif;
+    font-size: 7.5pt;
+    letter-spacing: 0.09em;
+    text-align: right;
+    color: #55504a;
+    vertical-align: top;
+    padding-top: 20pt;
+  }
+}
+
+/* Openers are full-bleed: no running head, but they keep the folio (see the
+ * bottom margin reserved for `@page opener` in documentStyle()). */
+@page opener:left {
+  @top-center { content: none; }
+}
+
+@page opener:right {
+  @top-center { content: none; }
+}
+
+/* ── Article ──────────────────────────────────────────────────────────────── */
+
+.article {
+  break-before: page;
+}
+
+.article:first-child {
+  break-before: auto;
+}
+
+/* ── Opener ───────────────────────────────────────────────────────────────── */
+
+.opener {
+  page: opener;
+  break-after: page;
+  break-inside: avoid;
+}
+
+.opener-figure {
+  margin: 0;
+  height: 430pt;
+  overflow: hidden;
+}
+
+.opener-figure img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.opener-text {
+  padding: 34pt 58pt 0 58pt;
+}
+
+/* A text-only opener still gets a full title page, just more air above it. */
+.opener--text .opener-text {
+  padding-top: 190pt;
+}
+
+.kicker {
+  font-family: var(--sans);
+  font-size: 7.5pt;
+  line-height: 1.2;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 12pt;
+}
+
+.article-title {
+  string-set: articletitle content(text);
+  font-family: var(--serif);
+  font-weight: normal;
+  font-size: 32pt;
+  line-height: 1.06;
+  letter-spacing: -0.012em;
+  margin: 0;
+  -webkit-hyphens: none;
+  hyphens: none;
+}
+
+.opener--text .article-title {
+  font-size: 38pt;
+}
+
+.dek {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 12.5pt;
+  line-height: 1.35;
+  color: var(--ink-soft);
+  margin-top: 14pt;
+  max-width: 320pt;
+}
+
+.byline {
+  font-family: var(--sans);
+  font-size: 8pt;
+  line-height: 1.3;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  margin-top: 18pt;
+  padding-top: 10pt;
+  border-top: 0.5pt solid var(--rule-strong);
+  display: inline-block;
+}
+
+.byline .sep {
+  color: var(--rule);
+  padding: 0 0.5em;
+}
+
+.lead-caption {
+  font-family: var(--sans);
+  font-size: 7.5pt;
+  line-height: 1.35;
+  color: var(--ink-soft);
+  margin-top: 20pt;
+  max-width: 300pt;
+}
+
+/* ── Body ─────────────────────────────────────────────────────────────────── */
+
+.article-body {
+  column-count: 2;
+  column-gap: var(--column-gap);
+  /* Paged media wants columns filled to the page, not balanced. */
+  column-fill: auto;
+  text-align: justify;
+  text-justify: inter-word;
+  -webkit-hyphens: auto;
+  hyphens: auto;
+  hyphenate-limit-chars: 6 3 3;
+}
+
+.article-body > p + p {
+  text-indent: 1.1em;
+}
+
+/* The first paragraph opens flush, in the magazine manner. */
+.article-body > p:first-of-type {
+  text-indent: 0;
+}
+
+.article-body > p:first-of-type::first-line {
+  font-variant: small-caps;
+  letter-spacing: 0.03em;
+}
+
+h2,
+h3 {
+  font-family: var(--sans);
+  font-weight: 600;
+  color: var(--ink);
+  text-align: left;
+  -webkit-hyphens: none;
+  hyphens: none;
+  /* No heading may sit alone at the foot of a column or page. */
+  break-after: avoid;
+  break-inside: avoid;
+  page-break-after: avoid;
+}
+
+h2 {
+  font-size: 11pt;
+  line-height: 1.25;
+  letter-spacing: 0.02em;
+  margin: 16pt 0 6pt;
+}
+
+h3 {
+  font-size: 9pt;
+  line-height: 1.3;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin: 14pt 0 4pt;
+}
+
+h2 + p,
+h3 + p {
+  text-indent: 0;
+}
+
+blockquote {
+  margin: 14pt 0;
+  padding-top: 8pt;
+  border-top: 0.5pt solid var(--rule);
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 11pt;
+  line-height: 1.4;
+  text-align: left;
+  color: var(--ink);
+  break-inside: avoid;
+}
+
+blockquote p {
+  margin: 0;
+}
+
+blockquote cite {
+  display: block;
+  margin-top: 6pt;
+  font-family: var(--sans);
+  font-style: normal;
+  font-size: 7.5pt;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.list {
+  margin: 10pt 0;
+  padding-left: 14pt;
+  text-align: left;
+}
+
+.list li {
+  margin-bottom: 4pt;
+}
+
+.rule {
+  width: 36pt;
+  margin: 16pt auto;
+  border: 0;
+  border-top: 0.5pt solid var(--rule);
+}
+
+/* ── Figures ──────────────────────────────────────────────────────────────── */
+
+figure.figure {
+  margin: 0 0 14pt;
+  break-inside: avoid;
+}
+
+figure.figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* Landscape plates get the full measure, across both columns. This is the
+ * rule WeasyPrint could not do and the reason for the Chromium engine. */
+.figure--wide {
+  column-span: all;
+  margin: 16pt 0 18pt;
+}
+
+.figure--portrait,
+.figure--square {
+  margin-top: 6pt;
+}
+
+figcaption {
+  font-family: var(--sans);
+  font-size: 7.5pt;
+  line-height: 1.4;
+  color: var(--ink-soft);
+  text-align: left;
+  -webkit-hyphens: none;
+  hyphens: none;
+  margin-top: 5pt;
+  padding-top: 4pt;
+  border-top: 0.5pt solid var(--rule);
+}
+
+.figure--wide figcaption {
+  max-width: 300pt;
+}
+
+/* ── Article end ──────────────────────────────────────────────────────────── */
+
+.article-source {
+  margin-top: 14pt;
+  padding-top: 6pt;
+  border-top: 0.5pt solid var(--rule);
+  font-family: var(--sans);
+  font-size: 7pt;
+  line-height: 1.4;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  text-align: left;
+  -webkit-hyphens: none;
+  hyphens: none;
+  break-inside: avoid;
+}
+
+.article-source .sep {
+  color: var(--rule);
+  padding: 0 0.4em;
+}
+
+.article-source .end-mark {
+  color: var(--ink);
+  padding-right: 0.5em;
+}
+
+/* ── Table of contents (U5 front matter) ─────────────────────────────────────
+   Built by compose.ts once every article has been measured, so the page
+   numbers here are real positions rather than estimates. */
+
+.toc {
+  break-before: page;
+  break-after: page;
+  column-count: 1;
+}
+
+.toc-masthead {
+  font-family: var(--serif);
+  font-size: 30pt;
+  line-height: 1.06;
+  letter-spacing: -0.012em;
+  font-weight: 400;
+  margin: 0 0 4pt;
+}
+
+.toc-issue {
+  font-family: var(--sans);
+  font-size: 8pt;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin: 0 0 22pt;
+  padding-bottom: 10pt;
+  border-bottom: 0.75pt solid var(--ink);
+}
+
+.toc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: toc;
+}
+
+.toc-entry {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "title page"
+    "meta  page";
+  column-gap: 14pt;
+  align-items: baseline;
+  padding: 7pt 0;
+  border-bottom: 0.4pt solid var(--rule);
+  break-inside: avoid;
+}
+
+.toc-title {
+  grid-area: title;
+  font-family: var(--serif);
+  font-size: 11.5pt;
+  line-height: 1.3;
+}
+
+.toc-meta {
+  grid-area: meta;
+  font-family: var(--sans);
+  font-size: 7.5pt;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  padding-top: 2pt;
+}
+
+.toc-meta:empty {
+  display: none;
+}
+
+.toc-page {
+  grid-area: page;
+  align-self: center;
+  font-family: var(--sans);
+  font-size: 10pt;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+}

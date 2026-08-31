@@ -1,0 +1,7 @@
+name = "press-email-in"
+main = "worker.js"
+compatibility_date = "2026-08-01"
+
+# Secrets — set with `wrangler secret put`, never listed here:
+#   PRESS_WEBHOOK_URL            https://<the app>/api/press/email-in
+#   PRESS_EMAIL_WEBHOOK_SECRET   must match PRESS_EMAIL_WEBHOOK_SECRET in Vercel

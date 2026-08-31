@@ -1,0 +1,15 @@
+<!-- Table of contents section, injected into the interior document shell by
+     src/lib/press/compose.ts (buildTocSection). Kept here as the reference
+     shape of the markup press.css styles; compose.ts builds it directly so the
+     page numbers can be filled in after the articles have been measured. -->
+<section class="toc" id="toc">
+  <h1 class="toc-masthead">{{ISSUE_NAME}}</h1>
+  <p class="toc-issue">Issue {{ISSUE_NUMBER}}</p>
+  <ol class="toc-list">
+    <li class="toc-entry">
+      <span class="toc-title">{{TITLE}}</span>
+      <span class="toc-meta">{{BYLINE}} · {{SOURCE}}</span>
+      <span class="toc-page">{{PAGE}}</span>
+    </li>
+  </ol>
+</section>

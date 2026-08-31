@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{ISSUE_NAME}}</title>
+    <!-- Self-contained: the cover is a single spread with its own page box,
+         and like every other press document it references nothing remote. -->
+    <style>
+      @page {
+        size: {{COVER_WIDTH}}pt {{COVER_HEIGHT}}pt;
+        margin: 0;
+      }
+      html, body { margin: 0; padding: 0; }
+      body {
+        width: {{COVER_WIDTH}}pt;
+        height: {{COVER_HEIGHT}}pt;
+        display: grid;
+        /* back | spine | front — bleed is absorbed by the outer edges. */
+        grid-template-columns: 1fr {{SPINE_WIDTH}}pt 1fr;
+        background: #f4f1ea;
+        color: #17171a;
+        font-family: Georgia, "Liberation Serif", "DejaVu Serif", serif;
+      }
+
+      .panel { padding: 54pt 48pt; box-sizing: border-box; }
+
+      /* ── Front ── */
+      .front {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        border-left: 0.5pt solid rgba(23, 23, 26, 0.18);
+      }
+      .masthead {
+        font-size: 46pt;
+        line-height: 1.04;
+        letter-spacing: -0.015em;
+        margin: 0;
+        font-weight: 400;
+      }
+      .front-foot {
+        font-family: Helvetica, Arial, "Liberation Sans", sans-serif;
+        font-size: 9.5pt;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: rgba(23, 23, 26, 0.62);
+      }
+      .front-foot p { margin: 0 0 4pt; }
+
+      /* ── Spine ── */
+      .spine {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-left: 0.5pt solid rgba(23, 23, 26, 0.18);
+      }
+      .spine span {
+        writing-mode: vertical-rl;
+        font-family: Helvetica, Arial, "Liberation Sans", sans-serif;
+        font-size: 8.5pt;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+
+      /* ── Back ── */
+      .back { display: flex; flex-direction: column; justify-content: flex-end; }
+      .back h2 {
+        font-family: Helvetica, Arial, "Liberation Sans", sans-serif;
+        font-size: 9pt;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: rgba(23, 23, 26, 0.62);
+        margin: 0 0 12pt;
+        font-weight: 400;
+      }
+      .back ul { list-style: none; margin: 0; padding: 0; }
+      .back li {
+        font-size: 11pt;
+        line-height: 1.42;
+        padding: 3pt 0;
+        border-bottom: 0.4pt solid rgba(23, 23, 26, 0.12);
+      }
+      .back li:last-child { border-bottom: none; }
+    </style>
+  </head>
+  <body>
+    <section class="panel back">
+      <h2>In this issue</h2>
+      <ul>
+{{BACK_LIST}}
+      </ul>
+    </section>
+    <section class="spine"><span>{{ISSUE_NAME}} &middot; {{ISSUE_NUMBER}}</span></section>
+    <section class="panel front">
+      <h1 class="masthead">{{ISSUE_NAME}}</h1>
+      <div class="front-foot">
+        <p>Issue {{ISSUE_NUMBER}}</p>
+        <p>{{DATE_RANGE}}</p>
+      </div>
+    </section>
+  </body>
+</html>

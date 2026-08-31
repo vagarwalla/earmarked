@@ -2,7 +2,7 @@
 
 Find cheap used books and minimize shipping costs. Build a list of books, pick your preferred editions, and Earmarked finds the cheapest way to buy them all by grouping sellers.
 
-Also home to **press** (planned): a pipeline that turns saved reading (Raindrop, newsletters, links, PDFs) into a printed magazine, ordered through the Lulu Print API when an issue fills ~100 pages. See [docs/plans/2026-08-27-001-feat-press-magazine-pipeline-plan.md](docs/plans/2026-08-27-001-feat-press-magazine-pipeline-plan.md).
+Also home to **press**: a pipeline that turns saved reading (Raindrop, newsletters, links, PDFs) into a printed magazine, ordered through the Lulu Print API when an issue fills ~100 pages. Built but not yet deployed — see [docs/press-runbook.md](docs/press-runbook.md) for configuration and setup, and [the plan](docs/plans/2026-08-27-001-feat-press-magazine-pipeline-plan.md) for the design reasoning.
 
 ## What it does
 

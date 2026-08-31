@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="{{LANG}}">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{DOC_TITLE}}</title>
+    <!-- Relative, on-disk only. Nothing in this document may reference the
+         network: render.ts writes press.css and images/ next to this file. -->
+    <link rel="stylesheet" href="press.css" />
+    <style>
+{{RENDER_STYLE}}
+    </style>
+  </head>
+  <body class="press-doc" data-issue="{{ISSUE_NUMBER}}" data-start-page="{{START_PAGE}}" data-measurement="{{MEASUREMENT}}">
+{{ARTICLES}}
+  </body>
+</html>

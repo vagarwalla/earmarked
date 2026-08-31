@@ -1,0 +1,29 @@
+# press worker. Deploy with: fly deploy -c worker/fly.toml
+#
+# Secrets are set with `fly secrets set`, never listed here — this repo is
+# public. docs/press-runbook.md has the full list.
+
+app = "press-worker"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PRESS_STORAGE_BUCKET = "press"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # Chromium rendering a 100-page interior needs real headroom; 512MB is the
+  # floor and the plan says to measure and resize once a real issue has run.
+  memory = "1gb"
+
+# The scheduler runs in-process, so the machine must never be stopped when
+# idle — Fly's defaults would suspend it and the weekly tick would simply
+# never fire. This is the ~$2-3/month the plan accepts.
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
