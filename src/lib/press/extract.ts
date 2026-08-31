@@ -70,6 +70,33 @@ const STRIP_SELECTORS = [
   'template',
 ]
 
+/**
+ * Comment threads. A forum post and its replies are one page to the extractor,
+ * and the replies can be several times the length of the piece — an EA Forum
+ * post came through as 24 printed pages, 19 of them other people's comments.
+ * Nobody saved the link for the comments, and they are expensive in print.
+ */
+const COMMENT_SELECTORS = [
+  '#comments',
+  '#comment',
+  '#disqus_thread',
+  '[class~="comments"]',
+  '[class~="comment"]',
+  // Real comment markup is hyphenated or camelCased far more often than it is
+  // a bare `comment` class: the EA Forum wraps replies in `comment-body` and
+  // `bg-comment-even`, and neither `.comment` nor `.comments` touches those.
+  // Anchoring on the separator keeps this off words like "commentary".
+  '[class*="comment-"]',
+  '[class*="-comment"]',
+  '[class*="comment_"]',
+  '[class*="Comment"]',
+  '[id*="comment-"]',
+  '[data-testid*="omment"]',
+  '.giscus',
+  '.utterances',
+  'section[aria-label*="omment"]',
+]
+
 /** Newsletter chrome: the unsubscribe footer, the "view in browser" line, the share row. */
 const NEWSLETTER_CRUFT = [
   /unsubscribe/i,
@@ -80,6 +107,31 @@ const NEWSLETTER_CRUFT = [
   /©\s*\d{4}\s/,
   /^\s*sent to\s+\S+@\S+/i,
 ]
+
+/** querySelectorAll that cannot take an extraction down over one bad selector. */
+function safeQueryAll(scope: Element | Document, selector: string): Element[] {
+  try {
+    return Array.from(scope.querySelectorAll(selector))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Drop comment threads before either extractor chooses what the article is.
+ *
+ * This has to happen on the raw document, not on the extracted output: both
+ * defuddle and Readability unwrap and re-wrap markup as they go, so by the
+ * time we see their result the `<div class="CommentsList…">` is gone and its
+ * paragraphs are indistinguishable from the article's own. Worse, a long
+ * thread is a large block of prose, so leaving it in makes the extractors
+ * *more* confident they have found the content.
+ */
+export function stripCommentSections(doc: Document): void {
+  for (const selector of COMMENT_SELECTORS) {
+    for (const el of safeQueryAll(doc, selector)) el.remove()
+  }
+}
 
 /**
  * Remove every reference that would make the renderer touch the network, and
@@ -93,8 +145,8 @@ export function stripExternalReferences(root: Element | Document): void {
   const doc = 'ownerDocument' in root && root.ownerDocument ? root.ownerDocument : (root as Document)
   const scope = 'querySelectorAll' in root ? root : doc
 
-  for (const selector of STRIP_SELECTORS) {
-    for (const el of Array.from(scope.querySelectorAll(selector))) el.remove()
+  for (const selector of [...STRIP_SELECTORS, ...COMMENT_SELECTORS]) {
+    for (const el of safeQueryAll(scope, selector)) el.remove()
   }
 
   // Attributes worth keeping, per tag. Everything else goes.
@@ -146,6 +198,17 @@ function textOf(el: Element): string {
 /** Inline markup we keep inside a paragraph; everything else is flattened to text. */
 const INLINE_KEEP = new Set(['EM', 'I', 'STRONG', 'B', 'A', 'CODE', 'SUP', 'SUB', 'BR'])
 
+/**
+ * Elements whose contents are separate lines in the source. Unwrapping one
+ * without putting a space back fuses the words either side of it — a
+ * blockquote holding `<p>…God.</p><cite>Hildegard</cite>` renders as
+ * "God.Hildegard", which is visible in print and easy to miss in a diff.
+ */
+const BLOCK_LEVEL = new Set([
+  'P', 'DIV', 'SECTION', 'ASIDE', 'FOOTER', 'HEADER', 'CITE', 'LI', 'UL', 'OL',
+  'BLOCKQUOTE', 'FIGCAPTION', 'FIGURE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+])
+
 function inlineHtml(el: Element): string {
   const doc = el.ownerDocument
   const clone = el.cloneNode(true) as Element
@@ -154,6 +217,9 @@ function inlineHtml(el: Element): string {
       // Unwrap: keep the words, drop the element.
       const parent = node.parentNode
       if (!parent) continue
+      if (BLOCK_LEVEL.has(node.tagName)) {
+        parent.insertBefore(doc.createTextNode(' '), node)
+      }
       while (node.firstChild) parent.insertBefore(node.firstChild, node)
       parent.removeChild(node)
     } else if (node.tagName === 'A') {
@@ -164,7 +230,6 @@ function inlineHtml(el: Element): string {
       parent.removeChild(node)
     }
   }
-  void doc
   return clone.innerHTML.replace(/\s+/g, ' ').trim()
 }
 
@@ -219,8 +284,14 @@ export function toBlocks(root: Element): { blocks: ArticleBlock[]; images: Candi
           break
         }
         case 'blockquote': {
+          // A quotation's source usually sits in its own <cite> or <footer>.
+          // Lifted out here so the layout can set it as an attribution line
+          // rather than running it on as part of the quotation.
+          const source = child.querySelector('cite, footer')
+          const attribution = source ? textOf(source) : ''
+          if (source) source.remove()
           const html = inlineHtml(child)
-          if (html) blocks.push({ type: 'quote', html })
+          if (html) blocks.push({ type: 'quote', html, ...(attribution ? { attribution } : {}) })
           break
         }
         case 'figure': {
@@ -352,6 +423,7 @@ function buildRung(
 export function extractWithDefuddle(html: string, url: string): RungResult | null {
   try {
     const dom = parseHtml(html, url)
+    stripCommentSections(dom.window.document)
     const result = new Defuddle(dom.window.document, { url }).parse()
     if (!result?.content) return null
     return buildRung(result.content, url, {
@@ -370,6 +442,7 @@ export function extractWithDefuddle(html: string, url: string): RungResult | nul
 export function extractWithReadability(html: string, url: string): RungResult | null {
   try {
     const dom = parseHtml(html, url)
+    stripCommentSections(dom.window.document)
     const result = new Readability(dom.window.document).parse()
     if (!result?.content) return null
     return buildRung(result.content, url, {

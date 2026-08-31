@@ -154,12 +154,22 @@ export async function loadEntries(
 /** Rough capacity of one TOC page; only used to sanity-check the rendered count. */
 const TOC_ENTRIES_PER_PAGE = 18
 
+/**
+ * The byline and the publication are often the same string on a personal blog
+ * ("Joe Carlsmith · Joe Carlsmith"), which reads as a mistake on the page.
+ */
+export function tocMeta(entry: Pick<TocEntry, 'byline' | 'sourceName'>): string {
+  const parts = [entry.byline, entry.sourceName].filter((p): p is string => Boolean(p))
+  const unique = parts.filter((p, i) => parts.findIndex((q) => q.toLowerCase() === p.toLowerCase()) === i)
+  return unique.join(' · ')
+}
+
 export function buildTocSection(issueName: string, issueNumber: number, toc: TocEntry[]): string {
   const rows = toc
     .map(
       (e) => `      <li class="toc-entry">
         <span class="toc-title">${escapeHtml(e.title)}</span>
-        <span class="toc-meta">${escapeHtml([e.byline, e.sourceName].filter(Boolean).join(' · '))}</span>
+        <span class="toc-meta">${escapeHtml(tocMeta(e))}</span>
         <span class="toc-page">${e.startPage}</span>
       </li>`,
     )

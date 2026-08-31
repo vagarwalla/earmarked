@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { PDFDocument } from 'pdf-lib'
 import {
+  tocMeta,
   shouldCloseIssue,
   weeksBetween,
   computeToc,
@@ -192,6 +193,25 @@ describe('computeToc', () => {
       { kind: 'pdf', item: item({ id: 'p', source: 'pdf', title: 'A report' }), pdf: new Uint8Array(), pageCount: 6 },
     ] as ComposeEntry[]
     expect(computeToc(withPdf, [6], 1)[0]).toMatchObject({ title: 'A report', startPage: 2, pageCount: 6 })
+  })
+})
+
+describe('tocMeta', () => {
+  it('does not print a personal blog’s author twice', () => {
+    expect(tocMeta({ byline: 'Joe Carlsmith', sourceName: 'Joe Carlsmith' })).toBe('Joe Carlsmith')
+    expect(tocMeta({ byline: 'Andy Masley', sourceName: 'andy masley' })).toBe('Andy Masley')
+  })
+
+  it('keeps both when they genuinely differ', () => {
+    expect(tocMeta({ byline: 'Scott Alexander', sourceName: 'Slate Star Codex' })).toBe(
+      'Scott Alexander · Slate Star Codex',
+    )
+  })
+
+  it('copes with either half missing', () => {
+    expect(tocMeta({ byline: null, sourceName: 'NEST' })).toBe('NEST')
+    expect(tocMeta({ byline: 'A Writer', sourceName: null })).toBe('A Writer')
+    expect(tocMeta({ byline: null, sourceName: null })).toBe('')
   })
 })
 

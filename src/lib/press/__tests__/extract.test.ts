@@ -16,6 +16,7 @@ import {
   extractWithDefuddle,
   extractWithReadability,
   stripExternalReferences,
+  stripCommentSections,
   hasExternalReferences,
   parseHtml,
   articleLength,
@@ -234,6 +235,86 @@ describe('stripExternalReferences', () => {
     const html = dom.window.document.body.innerHTML
     expect(html).not.toContain('javascript:')
     expect(html).not.toContain('data:image')
+  })
+})
+
+describe('comment threads', () => {
+  it('does not print the replies under a forum post', async () => {
+    // A real EA Forum post came through as 24 printed pages, 19 of them
+    // other people's comments. Nobody saved the link for the comments.
+    const body = '<p>Article body long enough to clear the minimum length check. </p>'.repeat(12)
+    const html = `<article><h1>A post</h1>${body}
+      <section id="comments"><div class="comment"><p>${'A reader replies at length. '.repeat(80)}</p></div></section>
+      <div class="CommentsListSection"><p>${'And another reply. '.repeat(80)}</p></div>
+    </article>`
+
+    const { article } = await extractFromUrl({
+      itemId: 'c1',
+      url: 'https://forum.example.com/posts/x',
+      deps: {
+        fetchText: async () => ({ text: html, url: 'https://forum.example.com/posts/x', status: 200 }),
+        storeImages: noImages as never,
+      },
+    })
+
+    const text = JSON.stringify(article)
+    expect(text).toMatch(/Article body/)
+    expect(text).not.toMatch(/A reader replies/)
+    expect(text).not.toMatch(/And another reply/)
+  })
+
+  it('strips the comment container before either extractor sees it', () => {
+    const dom = parseHtml(
+      '<body><article><p>body</p></article><div class="comment-body"><p>a reply</p></div></body>',
+    )
+    stripCommentSections(dom.window.document)
+    expect(dom.window.document.body.textContent).toContain('body')
+    expect(dom.window.document.body.textContent).not.toContain('a reply')
+  })
+
+  it('keeps the article when a stray selector cannot be parsed', () => {
+    // stripExternalReferences must never take an extraction down with it.
+    const dom = parseHtml('<body><p>kept</p></body>')
+    expect(() => stripExternalReferences(dom.window.document.body)).not.toThrow()
+    expect(dom.window.document.body.innerHTML).toContain('kept')
+  })
+})
+
+describe('block-level unwrapping', () => {
+  it('does not fuse the words either side of an unwrapped block', async () => {
+    // Seen in a real issue: "…breath of God.Saint Hildegard of Bingen".
+    const html = `<article><h1>T</h1>${'<p>Body text that is long enough to clear the minimum. </p>'.repeat(12)}
+      <blockquote><p>I am a feather on the breath of God.</p><cite>Saint Hildegard of Bingen</cite></blockquote></article>`
+    const { article } = await extractFromUrl({
+      itemId: 'q1',
+      url: 'https://example.com/q',
+      deps: {
+        fetchText: async () => ({ text: html, url: 'https://example.com/q', status: 200 }),
+        storeImages: noImages as never,
+      },
+    })
+    const quote = article.blocks.find((b) => b.type === 'quote')
+    expect(quote).toBeDefined()
+    expect(JSON.stringify(article)).not.toMatch(/God\.Saint/)
+  })
+
+  it('lifts a quotation’s source into its own attribution line', async () => {
+    const html = `<article><h1>T</h1>${'<p>Body text that is long enough to clear the minimum. </p>'.repeat(12)}
+      <blockquote><p>I am a feather on the breath of God.</p><cite>Saint Hildegard of Bingen</cite></blockquote></article>`
+    const { article } = await extractFromUrl({
+      itemId: 'q2',
+      url: 'https://example.com/q',
+      deps: {
+        fetchText: async () => ({ text: html, url: 'https://example.com/q', status: 200 }),
+        storeImages: noImages as never,
+      },
+    })
+    const quote = article.blocks.find((b) => b.type === 'quote') as Extract<
+      (typeof article.blocks)[number],
+      { type: 'quote' }
+    >
+    expect(quote.attribution).toBe('Saint Hildegard of Bingen')
+    expect(quote.html).not.toMatch(/Hildegard/)
   })
 })
 
