@@ -8,14 +8,20 @@
  */
 
 // ── Print spec (KTD1) ────────────────────────────────────────────────────────
-// Lulu 7×10 "Executive", perfect bound, standard colour on 80# coated, glossy
-// cover. Trim price is identical to 8.5×11 at both colour tiers, so 7×10 wins
-// on weight and on looking like a magazine.
+// Lulu 7×10 "Executive", perfect bound, standard colour on 60# uncoated,
+// glossy cover. Trim price is identical to 8.5×11 at both colour tiers, so 7×10
+// wins on weight and on looking like a magazine.
+//
+// The stock was 80# coated until 2026-09-01. Uncoated is $0.83 cheaper on a
+// 106-page issue at the same 444 ppi — so the spine arithmetic below is
+// unaffected — and press prints long-form essays with few photographs, which
+// is the reading uncoated stock is better at anyway. Coated is still one
+// settings field away (`lulu_package_id`) if an issue ever turns photographic.
 
 export const PT_PER_INCH = 72
 
 /** Lulu package id observed on the live calculator, 2026-08-27. Verify against the API package list (U6). */
-export const LULU_PACKAGE_ID = '0700X1000.FC.STD.PB.080CW444.GXX'
+export const LULU_PACKAGE_ID = '0700X1000.FC.STD.PB.060UW444.GXX'
 
 export const PRINT_SPEC = {
   trimWidthIn: 7,
@@ -89,7 +95,7 @@ export function coverSizePt(pages: number): { width: number; height: number } {
 /**
  * What a Lulu POD package id actually specifies.
  *
- * `0700X1000.FC.STD.PB.080CW444.GXX` is six dot-separated fields: trim, colour,
+ * `0700X1000.FC.STD.PB.060UW444.GXX` is six dot-separated fields: trim, colour,
  * colour quality, binding, paper stock, cover finish. It is the single most
  * consequential string in press — it decides the size, the paper and the price
  * — and it is unreadable, so the review page decodes it rather than carrying a

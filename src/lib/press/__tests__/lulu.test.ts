@@ -53,7 +53,7 @@ function settings(over: Partial<PressSettings> = {}): PressSettings {
     luluClientKey: 'key',
     luluClientSecret: 'secret',
     luluSandbox: true,
-    luluPackageId: '0700X1000.FC.STD.PB.080CW444.GXX',
+    luluPackageId: '0700X1000.FC.STD.PB.060UW444.GXX',
     anthropicApiKey: null,
     shipping: address,
     pageThreshold: 100,

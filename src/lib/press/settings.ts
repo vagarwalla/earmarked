@@ -110,7 +110,7 @@ export function loadSettings(): PressSettings {
     luluClientKey: env('LULU_CLIENT_KEY'),
     luluClientSecret: env('LULU_CLIENT_SECRET'),
     luluSandbox: env('LULU_SANDBOX') !== 'false',
-    luluPackageId: env('LULU_PACKAGE_ID') || '0700X1000.FC.STD.PB.080CW444.GXX',
+    luluPackageId: env('LULU_PACKAGE_ID') || '0700X1000.FC.STD.PB.060UW444.GXX',
 
     anthropicApiKey: env('ANTHROPIC_API_KEY') || null,
 
