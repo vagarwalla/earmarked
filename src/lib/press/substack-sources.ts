@@ -89,6 +89,17 @@ export const CAP_BY_SOURCE: Record<string, number> = {
   // slots keeps what is left from crowding out quieter topics.
   'natesilver.substack.com': 2,
   'theargument.substack.com': 2,
+  // These three came into the config already represented by hand-picked items
+  // the reconcile will not touch, so the default three would stack on top of
+  // what is already there. The cap is a judgement about total presence in the
+  // collection, not about a single harvest — each number is the default less
+  // the hand-picked count, floored at one so the source still stays current.
+  'www.global-developments.org': 1,   // 6 hand-picked
+  'www.broadstreet.blog': 2,          // 3 hand-picked
+  // 2 hand-picked, and Buckner also publishes at traditionsofconflict.com,
+  // which is a separate host and so invisible to this cap. Dedupe him by
+  // author, not by domain.
+  'traditionsofconflict.substack.com': 2,
 }
 
 /** Sources held to a higher bar than the global floor, with the reason. */
