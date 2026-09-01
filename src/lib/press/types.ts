@@ -440,7 +440,43 @@ export interface PrintQuote {
   totalCents: number
   currency: string
   shippingCents: number | null
+  /** Print cost of the whole job — every line item summed. */
   printCents: number | null
+  /**
+   * Print cost per line item, in the order the lines were quoted.
+   *
+   * One line is the overwhelmingly common case and `printCents` answers it.
+   * A bundle needs this: the issues in it are separate rows in `press_orders`
+   * and each has to record what *it* cost, which cannot be recovered from a
+   * single total once the job is placed.
+   */
+  lineCents: (number | null)[]
+}
+
+/**
+ * Split a bundle's cost back out over its line items.
+ *
+ * Print cost is Lulu's own per-line number. Shipping is not attributable — one
+ * parcel carries the whole bundle, and that is the entire reason for bundling
+ * — so it is divided evenly, with the remainder going to the earliest lines so
+ * the parts sum to the total exactly rather than to a cent less.
+ */
+export function allocateQuote(quote: PrintQuote, lines: number): number[] {
+  if (lines <= 0) return []
+  const shipping = quote.shippingCents ?? 0
+  const share = Math.floor(shipping / lines)
+  const remainder = shipping - share * lines
+
+  const print = Array.from({ length: lines }, (_, i) => quote.lineCents[i] ?? null)
+  const known = print.reduce<number>((a, c) => a + (c ?? 0), 0)
+
+  return print.map((cents, i) => {
+    // A line Lulu did not price still owes its share of the parcel. Falling
+    // back to an even split of whatever print cost is unaccounted for beats
+    // recording zero, which would read as "this issue was free".
+    const base = cents ?? Math.max(0, ((quote.printCents ?? known) - known)) / lines
+    return Math.round(base) + share + (i < remainder ? 1 : 0)
+  })
 }
 
 export type ActionKind = 'approve' | 'skip' | 'drop' | 'preview'
