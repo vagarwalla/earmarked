@@ -42,3 +42,8 @@ next-env.d.ts
 
 # press — local pipeline state, extracted articles, and generated issues
 .press/
+
+# Agent worktrees. These are git worktrees, not files: committed, they become
+# gitlinks with no .gitmodules entry, and every Vercel build fails to clone
+# them ("Failed to fetch one or more git submodules") then dies at upload.
+.claude/worktrees/
