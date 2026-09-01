@@ -86,6 +86,69 @@ export function coverSizePt(pages: number): { width: number; height: number } {
   }
 }
 
+/**
+ * What a Lulu POD package id actually specifies.
+ *
+ * `0700X1000.FC.STD.PB.080CW444.GXX` is six dot-separated fields: trim, colour,
+ * colour quality, binding, paper stock, cover finish. It is the single most
+ * consequential string in press — it decides the size, the paper and the price
+ * — and it is unreadable, so the review page decodes it rather than carrying a
+ * prose description that can drift out of step with the id actually in use.
+ *
+ * Unknown codes are returned verbatim instead of guessed: a wrong confident
+ * answer about what is being printed is worse than an unfamiliar code.
+ */
+export interface PackageSpec {
+  trim: string
+  colour: string
+  quality: string
+  binding: string
+  paper: string
+  coverFinish: string
+  raw: string
+}
+
+const BINDINGS: Record<string, string> = {
+  PB: 'Perfect bound',
+  CO: 'Coil bound',
+  CW: 'Wire-o bound',
+  SS: 'Saddle stitched',
+  LW: 'Linen wrap hardcover',
+  CA: 'Case wrap hardcover',
+}
+const COLOURS: Record<string, string> = { FC: 'Full colour', BW: 'Black and white' }
+const QUALITY: Record<string, string> = { STD: 'Standard', PRE: 'Premium' }
+const FINISHES: Record<string, string> = { GXX: 'Gloss laminate', MXX: 'Matte laminate' }
+
+/** e.g. "080CW444" -> "80# coated white (444 ppi)". */
+function describePaper(code: string): string {
+  const m = /^(\d{3})(CW|UW|CC)(\d{3})$/.exec(code)
+  if (!m) return code
+  const stock = { CW: 'coated white', UW: 'uncoated white', CC: 'coated cream' }[m[2]] ?? m[2]
+  return `${Number.parseInt(m[1], 10)}# ${stock} (${Number.parseInt(m[3], 10)} ppi)`
+}
+
+/** e.g. "0700X1000" -> "7 × 10 in". */
+function describeTrim(code: string): string {
+  const m = /^(\d{4})X(\d{4})$/.exec(code)
+  if (!m) return code
+  const inches = (n: string) => String(Number.parseInt(n, 10) / 100).replace(/\.0+$/, '')
+  return `${inches(m[1])} × ${inches(m[2])} in`
+}
+
+export function describePackage(packageId: string = LULU_PACKAGE_ID): PackageSpec {
+  const [trim, colour, quality, binding, paper, finish] = packageId.split('.')
+  return {
+    trim: trim ? describeTrim(trim) : packageId,
+    colour: COLOURS[colour] ?? colour ?? '—',
+    quality: QUALITY[quality] ?? quality ?? '—',
+    binding: BINDINGS[binding] ?? binding ?? '—',
+    paper: paper ? describePaper(paper) : '—',
+    coverFinish: FINISHES[finish] ?? finish ?? '—',
+    raw: packageId,
+  }
+}
+
 // ── Items ────────────────────────────────────────────────────────────────────
 
 export type ItemSource = 'raindrop' | 'email_link' | 'newsletter' | 'pdf' | 'x'
@@ -123,6 +186,18 @@ export interface PressItem {
   page_count: number | null
   failure_reason: string | null
   raw_email_path: string | null
+  /** This item is a linkpost: it exists to point at the items below it (migration 014). */
+  is_linkpost: boolean
+  /** The linkpost that named this item, when one did. */
+  linkpost_parent_id: string | null
+  /** The words that linkpost pointed with. */
+  linkpost_anchor: string | null
+  /**
+   * When this item was last examined for linkposting. Distinct from
+   * `is_linkpost = false`, which is an answer; NULL is "never asked", and is
+   * what the backfill walks.
+   */
+  linkpost_scanned_at: string | null
   created_at: string
   updated_at: string
 }
@@ -229,6 +304,40 @@ export interface ArticleFootnote {
   html: string
 }
 
+/**
+ * How a linkpost points. A `pointer` is a crosspost — it exists to send you to
+ * one piece. A `roundup` names several. They print the same way; the word is
+ * kept because it is what the marker on the page should say.
+ */
+export type LinkpostKind = 'roundup' | 'pointer'
+
+/** One piece a linkpost sends the reader to. */
+export interface LinkpostTarget {
+  url: string
+  /** The words the linkpost pointed with — the label, when nothing better exists. */
+  anchor: string
+  /** What the linkpost says it is, in a few words. Null when nothing was said. */
+  note: string | null
+}
+
+/** Set on a linkpost itself: what it is, and what it named. */
+export interface LinkpostMarker {
+  kind: LinkpostKind
+  /** One line, printed nowhere; kept for the event log and the CLI. */
+  reason: string
+  targets: LinkpostTarget[]
+}
+
+/** Set on a piece that reached the issue because a linkpost pointed at it. */
+export interface LinkpostOrigin {
+  /** Title of the linkpost that named it. */
+  title: string
+  /** Canonical URL of that linkpost, for the source line. */
+  url: string | null
+  /** The words it pointed with. */
+  anchor: string | null
+}
+
 export interface Article {
   title: string
   byline: string | null
@@ -246,6 +355,14 @@ export interface Article {
    * the field, and must keep loading rather than fail preflight.
    */
   footnotes?: ArticleFootnote[]
+  /**
+   * Present when this piece is a linkpost. Optional for the same reason the
+   * footnotes are: extractions stored before linkposts existed must keep
+   * loading. See src/lib/press/linkpost.ts.
+   */
+  linkpost?: LinkpostMarker
+  /** Present when a linkpost is why this piece is in the issue. */
+  linkpostOf?: LinkpostOrigin
 }
 
 // ── Layout (U4) ──────────────────────────────────────────────────────────────
@@ -273,6 +390,10 @@ export interface TocEntry {
   sourceName: string | null
   startPage: number
   pageCount: number
+  /** This entry is a linkpost; the entries under it are what it named. */
+  isLinkpost?: boolean
+  /** Title of the linkpost that brought this entry into the issue. */
+  linkpostOf?: string | null
 }
 
 /**

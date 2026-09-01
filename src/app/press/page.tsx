@@ -19,8 +19,10 @@ import { formatBytes, pressUiEnabled } from '@/lib/press/local'
 import { loadReview } from '@/lib/press/review'
 import { loadSettings } from '@/lib/press/settings'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { Badge } from '@/components/ui/badge'
 import { IssueEditor } from './IssueEditor'
 import { IssuePreview } from './IssuePreview'
+import { PrintSpec } from './PrintSpec'
 
 export const dynamic = 'force-dynamic'
 
@@ -37,7 +39,9 @@ export default async function PressPage() {
   // The page lists what V has been reading; it has no place on a public deploy.
   if (!pressUiEnabled()) notFound()
 
-  const threshold = loadSettings().pageThreshold
+  const settings = loadSettings()
+  const threshold = settings.pageThreshold
+  const packageId = settings.luluPackageId
   // `.press/` on V's machine, Postgres + Storage when deployed. Same shape.
   const { issues, waiting, skipped, failed } = await loadReview(threshold)
 
@@ -98,6 +102,8 @@ export default async function PressPage() {
             </div>
           </div>
 
+          <PrintSpec packageId={packageId} pageCount={issue.pageCount} />
+
           {issue.hasInterior && (
             <IssuePreview
               issueNumber={issue.number}
@@ -115,7 +121,9 @@ export default async function PressPage() {
                   <span className="text-muted-foreground w-10 shrink-0 text-right text-xs tabular-nums">
                     {entry.startPage === null ? '' : `p.${entry.startPage}`}
                   </span>
-                  <span className="min-w-0 flex-1">
+                  {/* Indented under the linkpost that brought it in, exactly as
+                      it printed. */}
+                  <span className={`min-w-0 flex-1 ${entry.linkpostOf ? 'pl-4' : ''}`}>
                     {entry.url ? (
                       <a
                         href={entry.url}
@@ -128,10 +136,23 @@ export default async function PressPage() {
                     ) : (
                       <span className="font-serif">{entry.title}</span>
                     )}
+                    {entry.isLinkpost && (
+                      <Badge
+                        variant="outline"
+                        className="ml-2 align-middle text-[10px] font-normal tracking-wide uppercase"
+                      >
+                        Linkpost
+                      </Badge>
+                    )}
                     <span className="text-muted-foreground block text-xs">
                       {[entry.byline, entry.sourceName].filter(Boolean).join(' · ') ||
                         hostOf(entry.url)}
                     </span>
+                    {entry.linkpostOf && (
+                      <span className="text-muted-foreground block truncate text-xs italic">
+                        Linkpost of {entry.linkpostOf}
+                      </span>
+                    )}
                   </span>
                   <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
                     {entry.pageCount}pp
