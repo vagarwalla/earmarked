@@ -55,6 +55,10 @@ import {
   PRINT_SPEC,
   coverSizePt,
   spineWidthPt,
+  spineTakesText,
+  spineTextHeightPt,
+  BLEED_PT,
+  COVER_SAFETY_PT,
   MEDIA_HEIGHT_PT,
   MEDIA_WIDTH_PT,
   type Article,
@@ -269,35 +273,164 @@ export function __resetComposeCache(): void {
   coverTemplateCache = null
 }
 
+/**
+ * The dateline a cover carries: when the issue was made up, not the span its
+ * contents were originally published over. Those are very different numbers —
+ * issue 1 holds a piece from 2014 — and "February 2014 – August 2026" on a
+ * cover says something false about the object.
+ */
+export function issueDateline(at: Date | string = new Date()): string {
+  const d = at instanceof Date ? at : new Date(at)
+  if (Number.isNaN(d.getTime())) return ''
+  // Local time, deliberately not UTC: this is an editorial date, not a
+  // timestamp. Building on the evening of 31 August west of Greenwich would
+  // otherwise print "September" on a magazine made up in August.
+  return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+}
+
 export interface CoverOptions {
   issueName: string
   issueNumber: number
   pageCount: number
+  /** Free line printed under the masthead — see `issueDateline`. */
   dateRange: string
   toc: TocEntry[]
 }
 
 /**
+ * Cover palette. Warm-dominant with two cool anchors, in the register of a
+ * riso-printed art magazine — saturated enough to carry a cover, muted enough
+ * not to fight the interior's black-on-cream.
+ */
+export const COVER_PALETTE = [
+  '#E9A93A', // marigold
+  '#D9603B', // persimmon
+  '#B8324B', // crimson
+  '#6E3A6B', // plum
+  '#2B4C9B', // ultramarine
+  '#1E7F6B', // viridian
+] as const
+
+/**
+ * The palette rotated by the issue number, so consecutive issues do not come
+ * out the same colour. Deterministic: the same issue always prints the same.
+ */
+export function paletteFor(issueNumber: number, length = COVER_PALETTE.length): string[] {
+  const n = COVER_PALETTE.length
+  const offset = ((Math.trunc(issueNumber) - 1) % n + n) % n
+  return Array.from({ length }, (_, i) => COVER_PALETTE[(offset + i) % n])
+}
+
+/** Concentric hard-stop bands radiating from the panel's outer bottom corner. */
+function orbitGradient(colors: string[]): string {
+  const stops = colors
+    .map((c, i) => {
+      const from = (i / colors.length) * 100
+      const to = ((i + 1) / colors.length) * 100
+      return `${c} ${from.toFixed(1)}% ${to.toFixed(1)}%`
+    })
+    .join(', ')
+  // 118% so the outermost band still covers the far corner of the box.
+  return `radial-gradient(circle at 100% 100%, ${stops}, transparent 118%)`
+}
+
+/**
+ * Set the issue title at a size that still fits the panel. Measured against
+ * the 7" trim less both safety margins; the thresholds are character counts
+ * because there is no text metric available at build time.
+ */
+function themeClass(name: string): string {
+  const longestWord = Math.max(...name.split(/\s+/).map((w) => w.length), 0)
+  if (name.length > 52 || longestWord > 15) return 'theme-name--verylong'
+  if (name.length > 30 || longestWord > 12) return 'theme-name--long'
+  return ''
+}
+
+/**
+ * Size step for the run of titles on the back. Driven by total characters
+ * rather than piece count: four long essay titles set more text than ten short
+ * ones, and it is the text that has to fit the panel.
+ */
+export function contentsClass(toc: TocEntry[]): string {
+  // Titles plus roughly three characters of separator apiece.
+  const chars = toc.reduce((n, e) => n + e.title.length + 3, 0)
+  if (chars > 700) return 'contents--verylong'
+  if (chars > 450) return 'contents--long'
+  if (chars < 180) return 'contents--short'
+  return ''
+}
+
+/**
+ * The spine panel. Lulu refuses spine text below `minPagesForSpineText` — a
+ * thinner spine cannot hold the words clear of the faces once the binder's
+ * drift is allowed for — so a thin issue gets a bare spine rather than a
+ * rejected cover.
+ */
+function spineContent(opts: CoverOptions): string {
+  if (!spineTakesText(opts.pageCount)) return ''
+  return [
+    `<span class="spine-text">${escapeHtml(opts.issueName)}</span>`,
+    `<span class="spine-num">No. ${opts.issueNumber}</span>`,
+  ].join('')
+}
+
+/**
  * The cover is one spread — back, spine, front — sized to the interior's page
- * count, because the spine width is a function of it. Typographic in v1: the
- * masthead and cover design language are V's, not this repo's (see the plan's
- * Deferred list).
+ * count, because the spine width is a function of it.
+ *
+ * The art is drawn in CSS, not placed as an image: Lulu wants 300 PPI on the
+ * cover and the extracted article art is web-sized. See `templates/cover.html`.
  */
 export function buildCoverHtml(opts: CoverOptions): string {
   const { width, height } = coverSizePt(opts.pageCount)
   const spine = spineWidthPt(opts.pageCount)
-  const backList = opts.toc
-    .map((e) => `        <li>${escapeHtml(e.title)}</li>`)
-    .join('\n')
 
-  return coverTemplate()
-    .replace(/\{\{COVER_WIDTH\}\}/g, width.toFixed(2))
-    .replace(/\{\{COVER_HEIGHT\}\}/g, height.toFixed(2))
-    .replace(/\{\{SPINE_WIDTH\}\}/g, spine.toFixed(2))
-    .replace(/\{\{ISSUE_NAME\}\}/g, escapeHtml(opts.issueName))
-    .replace(/\{\{ISSUE_NUMBER\}\}/g, String(opts.issueNumber))
-    .replace(/\{\{DATE_RANGE\}\}/g, escapeHtml(opts.dateRange))
-    .replace(/\{\{BACK_LIST\}\}/g, backList)
+  // Titles only, run together as one block. Bylines and page numbers belong
+  // to the contents page inside; repeating them on the back made it a second,
+  // worse index instead of a look at what the issue is.
+  const backList = opts.toc
+    .map((e) => escapeHtml(e.title))
+    .join('<span class="c-sep">\u25c6</span>')
+
+  // Spine text is sized off the clearance Lulu requires either side of it, so
+  // it shrinks with the spine instead of overflowing onto the faces.
+  const spineTextHeight = Math.max(spineTextHeightPt(opts.pageCount), 4)
+
+  const colors = paletteFor(opts.issueNumber)
+
+  const values: Record<string, string> = {
+    ART_ORBIT: orbitGradient(colors),
+    // The accent picks up the first colour of this issue's rotation, so the
+    // rules and the spine numeral belong to the same palette as the art.
+    ACCENT: colors[0],
+    PALETTE_BAND: colors.map((c) => `<span style="background:${c}"></span>`).join(''),
+    COVER_WIDTH: width.toFixed(2),
+    COVER_HEIGHT: height.toFixed(2),
+    SPINE_WIDTH: spine.toFixed(2),
+    // Each outer panel is one trim plus the bleed it absorbs at its outer edge.
+    PANEL_WIDTH: ((width - spine) / 2).toFixed(2),
+    // Safety inside the trim; the outer edges carry the bleed on top of it.
+    SAFETY_TOP: (COVER_SAFETY_PT + BLEED_PT).toFixed(2),
+    SAFETY_OUTER: (COVER_SAFETY_PT + BLEED_PT).toFixed(2),
+    SAFETY_INNER: COVER_SAFETY_PT.toFixed(2),
+    SPINE_PAD: (COVER_SAFETY_PT + BLEED_PT).toFixed(2),
+    SPINE_TEXT_HEIGHT: spineTextHeight.toFixed(2),
+    SPINE_FONT: Math.min(8.5, spineTextHeight * 0.72).toFixed(2),
+    SPINE_CONTENT: spineContent(opts),
+    ISSUE_NAME: escapeHtml(opts.issueName),
+    ISSUE_NUMBER: String(opts.issueNumber),
+    DATE_RANGE: escapeHtml(opts.dateRange),
+    PAGE_COUNT: String(opts.pageCount),
+    THEME_CLASS: themeClass(opts.issueName),
+    CONTENTS_CLASS: contentsClass(opts.toc),
+    BACK_LIST: backList,
+  }
+
+  // A function replacement, so `$&` and friends in the values stay literal.
+  return coverTemplate().replace(
+    /\{\{([A-Z_]+)\}\}/g,
+    (whole, key: string) => (key in values ? values[key] : whole),
+  )
 }
 
 // ── Validation ───────────────────────────────────────────────────────────────
@@ -340,20 +473,6 @@ export async function preflightInterior(pdf: Uint8Array): Promise<PreflightProbl
 }
 
 // ── Compose ──────────────────────────────────────────────────────────────────
-
-export function dateRangeOf(items: PressItem[]): string {
-  const dates = items
-    .map((i) => i.published_at ?? i.created_at)
-    .filter(Boolean)
-    .map((d) => new Date(d as string))
-    .filter((d) => !Number.isNaN(d.getTime()))
-    .sort((a, b) => a.getTime() - b.getTime())
-  if (dates.length === 0) return ''
-  const fmt = (d: Date) => d.toISOString().slice(0, 10)
-  return dates.length === 1 || fmt(dates[0]) === fmt(dates[dates.length - 1])
-    ? fmt(dates[0])
-    : `${fmt(dates[0])} – ${fmt(dates[dates.length - 1])}`
-}
 
 export interface ComposeResult extends ComposedIssue {
   skipped: { item: PressItem; reason: string }[]
@@ -463,7 +582,9 @@ export async function composeIssue(issue: PressIssue, deps: ComposeDeps = {}): P
         issueName: name,
         issueNumber: issue.number,
         pageCount,
-        dateRange: dateRangeOf(items),
+        // The month the issue was made up, not the span its contents were
+        // published over — see `issueDateline`.
+        dateRange: issueDateline(deps.now),
         toc,
       }),
       new Map(),

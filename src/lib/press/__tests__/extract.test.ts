@@ -19,6 +19,8 @@ import {
   stripCommentSections,
   hasExternalReferences,
   parseHtml,
+  extractFootnotes,
+  toBlocks,
   articleLength,
   attachImages,
   ExtractionError,
@@ -686,5 +688,136 @@ describe('attachImages', () => {
     const out = attachImages(blocks, stored)
     expect(out).toHaveLength(2)
     expect(out[1]).toMatchObject({ type: 'figure', image: { path: 'items/i/images/00.jpg' } })
+  })
+})
+
+// ── Footnotes ────────────────────────────────────────────────────────────────
+
+describe('extractFootnotes', () => {
+  const root = (html: string) =>
+    parseHtml(`<body><div id="r">${html}</div></body>`).window.document.getElementById('r')!
+
+  it('lifts a Pandoc/WordPress apparatus and keeps the source numbering', () => {
+    const el = root(`
+      <p>Living amongst the Nazis.<sup>1</sup></p>
+      <p>A casual greeting.<sup>2</sup></p>
+      <div class="footnotes">
+        <ol>
+          <li id="fn1">The first note. <a href="#fnref1">↩</a></li>
+          <li id="fn2">The second note. <a href="#fnref2">↩</a></li>
+        </ol>
+      </div>`)
+    const notes = extractFootnotes(el)
+    expect(notes).toEqual([
+      { marker: '1', html: 'The first note.' },
+      { marker: '2', html: 'The second note.' },
+    ])
+    // And they are gone from the tree, so toBlocks cannot also emit them.
+    expect(el.querySelector('.footnotes')).toBeNull()
+    expect(toBlocks(el).blocks.filter((b) => b.type === 'para')).toHaveLength(2)
+  })
+
+  it('reads a Substack apparatus, where each note is its own div', () => {
+    const notes = extractFootnotes(
+      root(`
+        <p>Body.<sup>1</sup></p>
+        <div class="footnote">
+          <a class="footnote-number" href="#f1">1</a>
+          <div class="footnote-content"><p>Substack note.</p></div>
+        </div>`),
+    )
+    expect(notes).toEqual([{ marker: '1', html: 'Substack note.' }])
+  })
+
+  it('reads a bare "Notes" heading followed by an ordered list', () => {
+    // The EA Forum marks its apparatus no other way.
+    const el = root(`
+      <p>Body.<sup>1</sup></p>
+      <h2>Notes</h2>
+      <ol><li>Thinking of classical utilitarianism.</li><li>And the other one.</li></ol>`)
+    const notes = extractFootnotes(el)
+    expect(notes.map((n) => n.marker)).toEqual(['1', '2'])
+    expect(notes[0].html).toBe('Thinking of classical utilitarianism.')
+    // The heading goes too, or the article ends on an empty "Notes".
+    expect(el.querySelector('h2')).toBeNull()
+    expect(el.querySelector('ol')).toBeNull()
+  })
+
+  it('does not mistake an ordinary ordered list for notes', () => {
+    const el = root('<p>Body.</p><h2>Recommended reading</h2><ol><li>A book</li></ol>')
+    expect(extractFootnotes(el)).toEqual([])
+    expect(el.querySelector('ol')).not.toBeNull()
+  })
+
+  it('strips the back-link and a repeated leading number', () => {
+    const notes = extractFootnotes(
+      root('<div class="footnotes"><ol><li id="fn-3">3. The note itself. ↩︎</li></ol></div>'),
+    )
+    expect(notes).toEqual([{ marker: '3', html: 'The note itself.' }])
+  })
+
+  it('keeps emphasis inside a note but drops the link', () => {
+    const notes = extractFootnotes(
+      root('<div class="footnotes"><ol><li id="fn1">See <em>Don’t Look Up</em>, <a href="https://x.test">here</a>.</li></ol></div>'),
+    )
+    expect(notes[0].html).toContain('<em>Don’t Look Up</em>')
+    expect(notes[0].html).toContain('here')
+    expect(notes[0].html).not.toContain('href')
+  })
+
+  it('reads a "reference" apparatus, where the note is split from its number', () => {
+    // joecarlsmith.com and other bespoke essay themes call these references,
+    // never footnotes, and keep the number in its own anchor.
+    const el = root(`
+      <p>The point.<sup class="article-reference" id="ref-55">55</sup></p>
+      <div class="single-essay__references-item reference" id="reference-item-55">
+        <a href="#ref-55" class="reference__index reference__index--link">55</a>
+        <div class="reference__text"><p>See Soares on how we will be measured.</p></div>
+      </div>`)
+    const notes = extractFootnotes(el)
+    expect(notes).toEqual([{ marker: '55', html: 'See Soares on how we will be measured.' }])
+    // The number must not be repeated at the head of the note text.
+    expect(notes[0].html.startsWith('55')).toBe(false)
+    expect(el.querySelector('.reference__text')).toBeNull()
+  })
+
+  it('reads every note when the parse nests one inside another', () => {
+    // A grid-laid-out apparatus can parse with later notes nested inside
+    // earlier ones. Removing the outer note first disconnects the rest, which
+    // silently truncated a 58-note essay to its first 23.
+    const el = root(`
+      <div class="references-item" id="reference-item-1">
+        <a class="reference__index">1</a>
+        <div class="reference__text"><p>First note.</p></div>
+        <div class="references-item" id="reference-item-2">
+          <a class="reference__index">2</a>
+          <div class="reference__text"><p>Second note.</p></div>
+          <div class="references-item" id="reference-item-3">
+            <a class="reference__index">3</a>
+            <div class="reference__text"><p>Third note.</p></div>
+          </div>
+        </div>
+      </div>`)
+    const notes = extractFootnotes(el)
+    expect(notes.map((n) => n.marker)).toEqual(['1', '2', '3'])
+    // And an outer note prints only its own text, not everything under it.
+    expect(notes[0].html).toBe('First note.')
+    expect(notes[1].html).toBe('Second note.')
+  })
+
+  it('does not treat an ordinary "references" link list as notes', () => {
+    const el = root('<p>Body.</p><div class="reference"><a href="/x">A citation</a></div>')
+    expect(extractFootnotes(el)).toEqual([])
+  })
+
+  it('returns nothing for an article with no apparatus', () => {
+    expect(extractFootnotes(root('<p>Just prose.</p>'))).toEqual([])
+  })
+
+  it('drops a note that is empty once the furniture is removed', () => {
+    const notes = extractFootnotes(
+      root('<div class="footnotes"><ol><li id="fn1"><a href="#a">↩</a></li><li id="fn2">Real.</li></ol></div>'),
+    )
+    expect(notes).toEqual([{ marker: '2', html: 'Real.' }])
   })
 })

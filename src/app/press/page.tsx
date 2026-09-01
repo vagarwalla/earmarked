@@ -60,10 +60,7 @@ export default async function PressPage() {
     <main className="mx-auto max-w-4xl px-6 py-10">
       <header className="mb-10 flex items-baseline justify-between">
         <div>
-          <h1 className="font-serif text-3xl">press</h1>
-          <p className="text-muted-foreground mt-1 text-sm">
-            Saved reading, laid out for print.
-          </p>
+          <h1 className="font-serif text-3xl">Saved reading, laid out for print.</h1>
         </div>
         <ThemeToggle />
       </header>
@@ -90,10 +87,15 @@ export default async function PressPage() {
               </p>
             </div>
             <div className="flex gap-2 text-sm">
+              {/* Open in the browser's viewer rather than saving to disk: the
+                  route serves these inline unless `?download` asks otherwise,
+                  and looking at a proof should not litter ~/Downloads. */}
               {issue.hasInterior && (
                 <a
                   className="hover:bg-accent rounded-md border px-3 py-1.5"
-                  href={`/api/press/file/${issue.number}/interior.pdf?download`}
+                  href={`/api/press/file/${issue.number}/interior.pdf`}
+                  target="_blank"
+                  rel="noreferrer"
                 >
                   Interior PDF
                 </a>
@@ -101,7 +103,9 @@ export default async function PressPage() {
               {issue.hasCover && (
                 <a
                   className="hover:bg-accent rounded-md border px-3 py-1.5"
-                  href={`/api/press/file/${issue.number}/cover.pdf?download`}
+                  href={`/api/press/file/${issue.number}/cover.pdf`}
+                  target="_blank"
+                  rel="noreferrer"
                 >
                   Cover PDF
                 </a>
@@ -110,7 +114,11 @@ export default async function PressPage() {
           </div>
 
           {issue.hasInterior && (
-            <IssuePreview issueNumber={issue.number} version={issue.builtAt} />
+            <IssuePreview
+              issueNumber={issue.number}
+              version={issue.builtAt}
+              hasCover={issue.hasCover}
+            />
           )}
 
           {issue.printed ? (

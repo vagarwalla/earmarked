@@ -18,6 +18,8 @@ import {
   ITEM_TRANSITIONS,
   ISSUE_TRANSITIONS,
   spineWidthPt,
+  spineTakesText,
+  spineTextHeightPt,
   coverSizePt,
   MEDIA_WIDTH_PT,
   MEDIA_HEIGHT_PT,
@@ -155,7 +157,18 @@ describe('print spec', () => {
     const thin = spineWidthPt(32)
     const fat = spineWidthPt(200)
     expect(fat).toBeGreaterThan(thin)
-    expect(spineWidthPt(444)).toBeCloseTo(72, 5) // 444 pages = one inch on 80# coated
+    // Lulu: (pages / 444) + 0.06" for softcover perfect bound. The paper stack
+    // is one inch at 444 pages; the constant is the glue and the wrap's fold.
+    expect(spineWidthPt(444)).toBeCloseTo(72 + 0.06 * 72, 5)
+    expect(spineWidthPt(0)).toBeCloseTo(0.06 * 72, 5)
+  })
+
+  it('withholds spine text below Lulu`s 100-page floor', () => {
+    expect(spineTakesText(99)).toBe(false)
+    expect(spineTakesText(100)).toBe(true)
+    // Whatever is left after 1/16" of clearance at each edge of the spine.
+    expect(spineTextHeightPt(100)).toBeCloseTo(spineWidthPt(100) - 2 * 0.0625 * 72, 5)
+    expect(spineTextHeightPt(100)).toBeGreaterThan(0)
   })
 
   it('makes the cover two trims wide plus the spine and bleed', () => {

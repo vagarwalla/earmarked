@@ -7,10 +7,13 @@ import {
   computeToc,
   buildTocSection,
   buildCoverHtml,
+  contentsClass,
+  COVER_PALETTE,
+  issueDateline,
+  paletteFor,
   mergePdfs,
   padToEven,
   preflightInterior,
-  dateRangeOf,
   loadEntries,
   composeIssue,
   type ComposeEntry,
@@ -30,6 +33,9 @@ import {
   PRINT_SPEC,
   coverSizePt,
   spineWidthPt,
+  spineTextHeightPt,
+  TRIM_WIDTH_PT,
+  BLEED_PT,
   type Article,
   type PressIssue,
   type PressItem,
@@ -275,6 +281,120 @@ describe('buildCoverHtml', () => {
     expect(html).not.toMatch(/https?:\/\//)
     expect(html).not.toMatch(/@import|@font-face/)
   })
+
+  it('leaves no placeholder unfilled', () => {
+    // A stray {{TOKEN}} would print literally on a cover nobody proofreads.
+    expect(buildCoverHtml({ ...base, pageCount: 100 })).not.toMatch(/\{\{[A-Z_]+\}\}/)
+  })
+
+  it('sets the issue title at display size', () => {
+    const html = buildCoverHtml({ ...base, pageCount: 100 })
+    const size = Number(/\.theme-name \{\s*\n\s*font-size: ([\d.]+)pt/.exec(html)?.[1])
+    expect(size).toBeGreaterThanOrEqual(40)
+  })
+
+  it('carries no curator credit, piece count or page count on the front', () => {
+    const html = buildCoverHtml({ ...base, pageCount: 100 })
+    expect(html).not.toMatch(/Curated by/i)
+    expect(html).not.toMatch(/\bpieces\b/)
+    expect(html).not.toContain('pp.')
+  })
+
+  it('draws the art in CSS, with no image reference of any kind', () => {
+    // Lulu wants 300 PPI on a cover; extracted article art is web-sized. The
+    // art has to be resolution-free, which means gradients rather than <img>.
+    const html = buildCoverHtml({ ...base, pageCount: 100 })
+    expect(html).toContain('radial-gradient')
+    expect(html).not.toContain('<img')
+    expect(html).not.toMatch(/url\(/)
+  })
+
+  it('rotates the palette per issue so consecutive covers differ', () => {
+    expect(paletteFor(1)[0]).not.toBe(paletteFor(2)[0])
+    // Deterministic, and it wraps rather than running off the end.
+    expect(paletteFor(1)).toEqual(paletteFor(1))
+    expect(paletteFor(COVER_PALETTE.length + 1)).toEqual(paletteFor(1))
+    expect(new Set(paletteFor(3))).toEqual(new Set(COVER_PALETTE))
+    // A number below the first issue must not index off the front.
+    expect(paletteFor(0).every((c) => COVER_PALETTE.includes(c as never))).toBe(true)
+  })
+
+  it('prints spine text only once the spine can hold it', () => {
+    // Lulu refuses spine text under 100 pages; a thin issue gets a bare spine.
+    // The class names live in the stylesheet either way; what matters is
+    // whether the spine panel has any content in it.
+    const spinePanel = (html: string) =>
+      /<section class="spine">([\s\S]*?)<\/section>/.exec(html)?.[1] ?? null
+
+    expect(spinePanel(buildCoverHtml({ ...base, pageCount: 64 }))).toBe('')
+
+    const thick = buildCoverHtml({ ...base, pageCount: 104 })
+    expect(spinePanel(thick)).toContain('spine-text')
+    expect(thick).toContain(base.issueName)
+    // "No. 3", not a lone digit — one rotated numeral reads as a dash.
+    expect(thick).toContain('No. 3')
+  })
+
+  it('sizes spine type to the clearance Lulu leaves either side of it', () => {
+    const html = buildCoverHtml({ ...base, pageCount: 104 })
+    const rule = /\.spine-text,\s*\n\s*\.spine-num \{([\s\S]*?)\}/.exec(html)?.[1] ?? ''
+    const size = Number(/font-size: ([\d.]+)pt/.exec(rule)?.[1])
+    expect(size).toBeGreaterThan(0)
+    // Type has to fit between Lulu's clearances, not just inside the spine.
+    expect(size).toBeLessThanOrEqual(spineTextHeightPt(104))
+  })
+
+  it('splits the spread into two equal panels either side of the spine', () => {
+    // The fold has to land on the trim, or the front art walks off the face.
+    const html = buildCoverHtml({ ...base, pageCount: 104 })
+    const panel = Number(/grid-template-columns: ([\d.]+)pt/.exec(html)?.[1])
+    expect(panel).toBeCloseTo(TRIM_WIDTH_PT + BLEED_PT, 2)
+    expect(2 * panel + spineWidthPt(104)).toBeCloseTo(coverSizePt(104).width, 2)
+  })
+
+  it('dates the issue by when it was made up, not by its contents', () => {
+    // Issue 1 holds a piece from 2014; "February 2014 – August 2026" on a
+    // cover would describe the anthology, not the object.
+    // Mid-month, so the assertion does not depend on the runner's timezone.
+    expect(issueDateline('2026-08-15T12:00:00Z')).toBe('August 2026')
+    expect(issueDateline('not a date')).toBe('')
+  })
+
+  it('leaves the dateline blank rather than printing a placeholder', () => {
+    const html = buildCoverHtml({ ...base, pageCount: 100, dateRange: '' })
+    expect(html).not.toMatch(/\{\{[A-Z_]+\}\}/)
+  })
+
+  it('runs the back titles together without the bylines or page numbers', () => {
+    // The interior already carries a contents page; the back is a look at the
+    // issue, not a second index.
+    const toc: TocEntry[] = [
+      { itemId: 'a', title: 'The Salt Roads', byline: 'Ada M', sourceName: 'Quarry', startPage: 3, pageCount: 4 },
+      { itemId: 'b', title: 'Winter Light', byline: 'Bo N', sourceName: 'Hearth', startPage: 7, pageCount: 5 },
+    ]
+    const html = buildCoverHtml({ ...base, pageCount: 100, toc })
+    expect(html).toContain('The Salt Roads')
+    expect(html).toContain('Winter Light')
+    expect(html).toContain('c-sep')
+    expect(html).not.toContain('Ada M')
+    expect(html).not.toContain('Quarry')
+  })
+
+  it('sizes the back run by how much title text there is, not by piece count', () => {
+    const short = [{ itemId: 'a', title: 'Ash', byline: null, sourceName: null, startPage: 3, pageCount: 4 }]
+    // Four very long titles set more text than ten short ones.
+    const long = Array.from({ length: 4 }, (_, i) => ({
+      itemId: `x${i}`,
+      title: 'A'.repeat(180),
+      byline: null,
+      sourceName: null,
+      startPage: 3,
+      pageCount: 4,
+    }))
+    expect(contentsClass(short as TocEntry[])).toBe('contents--short')
+    expect(contentsClass(long as TocEntry[])).toBe('contents--verylong')
+    expect(contentsClass(base.toc)).toBe('contents--short')
+  })
 })
 
 // ── PDF assembly ─────────────────────────────────────────────────────────────
@@ -317,25 +437,6 @@ describe('preflightInterior', () => {
   it('catches a page that is not the ordered trim', async () => {
     const problems = await preflightInterior(await pdfOf(64, 595.28, 841.89))
     expect(problems.map((p) => p.code)).toContain('wrong-page-size')
-  })
-})
-
-describe('dateRangeOf', () => {
-  it('spans the oldest and newest piece', () => {
-    expect(
-      dateRangeOf([
-        item({ published_at: '2026-08-30T00:00:00Z' }),
-        item({ published_at: '2026-07-02T00:00:00Z' }),
-      ]),
-    ).toBe('2026-07-02 – 2026-08-30')
-  })
-
-  it('collapses a single date', () => {
-    expect(dateRangeOf([item({ published_at: '2026-08-30T00:00:00Z' })])).toBe('2026-08-30')
-  })
-
-  it('survives an issue with no dates at all', () => {
-    expect(dateRangeOf([])).toBe('')
   })
 })
 

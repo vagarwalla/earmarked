@@ -375,6 +375,60 @@ figcaption {
   max-width: 300pt;
 }
 
+/* ── Notes ───────────────────────────────────────────────────────────────────
+   Set smaller and tighter than the body, the way notes are, and allowed to
+   break across pages — a long apparatus is common and forcing it whole would
+   push a page of white space in front of it. The heading and the first note
+   stay together so a "Notes" head is never left stranded at a page foot. */
+
+.footnotes {
+  margin-top: 16pt;
+  padding-top: 8pt;
+  border-top: 0.5pt solid var(--rule);
+}
+
+.footnotes-head {
+  font-family: var(--sans);
+  font-size: 7pt;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin: 0 0 6pt;
+  break-after: avoid;
+}
+
+.footnote-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 8pt;
+  line-height: 11pt;
+}
+
+.footnote {
+  /* Hanging indent: the marker sits in the margin and the note aligns under
+     itself, which is what makes a run of notes scannable. */
+  padding-left: 14pt;
+  text-indent: -14pt;
+  margin-bottom: 4pt;
+  /* Splitting a note across a page is fine; splitting off one line is not. */
+  orphans: 2;
+  widows: 2;
+}
+
+.footnote-marker {
+  display: inline-block;
+  width: 14pt;
+  text-indent: 0;
+  font-family: var(--sans);
+  font-size: 6.5pt;
+  color: var(--accent);
+  vertical-align: baseline;
+}
+
+.footnote-text > p:first-child { display: inline; }
+
 /* ── Article end ──────────────────────────────────────────────────────────── */
 
 .article-source {

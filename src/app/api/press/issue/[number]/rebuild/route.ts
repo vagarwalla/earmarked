@@ -64,6 +64,11 @@ export async function POST(
               pageCount: e.pageCount,
             })),
             apiKey: settings.anthropicApiKey,
+            // A rebuild re-renders this issue; it does not re-title it. Only
+            // once it has been built though — `listIssues` synthesises
+            // "Issue N" for one that has not, and pinning that would stop a
+            // first build from ever being named.
+            name: issue.built ? issue.name : undefined,
             onProgress: (message) => send({ progress: message }),
           }),
         )

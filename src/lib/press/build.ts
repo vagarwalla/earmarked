@@ -24,6 +24,7 @@ import {
 } from './layout/render'
 import {
   buildCoverHtml,
+  issueDateline,
   buildTocSection,
   computeToc,
   mergePdfs,
@@ -68,6 +69,12 @@ export interface BuildOptions {
   items: BuildItem[]
   /** Names the issue with Claude when present; falls back to a date range. */
   apiKey?: string | null
+  /**
+   * Keep an existing name instead of naming the issue again. A rebuild is a
+   * re-render of the same issue, and `nameIssue` is a model call: without this
+   * the Rebuild button quietly retitles the magazine every time it is pressed.
+   */
+  name?: string
   root?: string
   onProgress?: (message: string) => void
 }
@@ -153,12 +160,17 @@ export async function buildIssue(opts: BuildOptions): Promise<BuildResult> {
 
   const pageCounts = items.map((i) => i.pageCount ?? 1)
 
-  progress('Naming the issue')
-  const name = await nameIssue({
-    issueNumber: number,
-    toc: computeToc(entries, pageCounts, 0),
-    apiKey,
-  })
+  let name = opts.name?.trim() ?? ''
+  if (name) {
+    progress(`Keeping the name "${name}"`)
+  } else {
+    progress('Naming the issue')
+    name = await nameIssue({
+      issueNumber: number,
+      toc: computeToc(entries, pageCounts, 0),
+      apiKey,
+    })
+  }
 
   // The contents page has to know its own length before it can state where
   // anything starts, so it is rendered once to measure and once for real.
@@ -199,7 +211,15 @@ export async function buildIssue(opts: BuildOptions): Promise<BuildResult> {
   // be drawn once the interior is final.
   progress('Rendering the cover')
   const cover = await render(
-    buildCoverHtml({ issueName: name, issueNumber: number, pageCount, dateRange: '', toc }),
+    buildCoverHtml({
+      issueName: name,
+      issueNumber: number,
+      pageCount,
+      // The month the issue was made up. Deliberately not the span its
+      // contents were published over — see `issueDateline`.
+      dateRange: issueDateline(),
+      toc,
+    }),
   )
 
   progress('Writing the PDFs')

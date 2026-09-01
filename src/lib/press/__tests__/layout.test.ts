@@ -483,3 +483,86 @@ describe('article fragments', () => {
     expect(section).not.toContain('<style')
   })
 })
+
+// ── Footnotes and the folio ──────────────────────────────────────────────────
+
+describe('footnotes in the layout', () => {
+  const withNotes = (footnotes: { marker: string; html: string }[]): Article => ({
+    title: 'On sincerity',
+    byline: 'Joe Carlsmith',
+    sourceName: 'Joe Carlsmith',
+    url: 'https://example.com/a',
+    publishedAt: '2026-08-01T00:00:00Z',
+    dek: null,
+    lead: null,
+    blocks: [{ type: 'para', html: 'Living amongst the Nazis.<sup>1</sup>' }],
+    footnotes,
+  })
+
+  it('sets the notes after the body, under a heading', () => {
+    const html = buildArticleHtml(withNotes([{ marker: '1', html: 'The note.' }]), {
+      issueNumber: 1,
+      startPage: 1,
+    })
+    expect(html).toContain('class="footnotes"')
+    expect(html).toContain('Notes')
+    expect(html).toContain('The note.')
+    // The apparatus belongs before the source line, not after it.
+    expect(html.indexOf('footnote-list')).toBeLessThan(html.indexOf('article-source'))
+  })
+
+  it('prints the source markers rather than renumbering from one', () => {
+    // The body's <sup> markers are left alone, so the notes have to match them.
+    const html = buildArticleHtml(
+      withNotes([
+        { marker: '4', html: 'Fourth.' },
+        { marker: '5', html: 'Fifth.' },
+      ]),
+      { issueNumber: 1, startPage: 1 },
+    )
+    expect(html).toContain('>4</span>')
+    expect(html).toContain('>5</span>')
+  })
+
+  it('emits no apparatus at all when there are none', () => {
+    const html = buildArticleHtml(withNotes([]), { issueNumber: 1, startPage: 1 })
+    expect(html).not.toContain('class="footnotes"')
+    // An extraction stored before footnote support has no field whatsoever.
+    const legacy = { ...withNotes([]) } as Article
+    delete (legacy as { footnotes?: unknown }).footnotes
+    expect(buildArticleHtml(legacy, { issueNumber: 1, startPage: 1 })).not.toContain('class="footnotes"')
+  })
+
+  it('sanitises a note the same way it sanitises the body', () => {
+    const html = buildArticleHtml(
+      withNotes([{ marker: '1', html: '<em>ok</em><script>x</script><a href="http://e.test">y</a>' }]),
+      { issueNumber: 1, startPage: 1 },
+    )
+    // Scoped to the note: the document shell legitimately links press.css.
+    const note = /<section class="footnotes">[\s\S]*?<\/section>/.exec(html)?.[0] ?? ''
+    expect(note).toContain('<em>ok</em>')
+    expect(note).not.toContain('<script>')
+    expect(note).not.toContain('href')
+    expect(note).toContain('y')
+  })
+})
+
+describe('the folio on opener pages', () => {
+  it('holds the page number inside the trim where the opener zeroes its margins', () => {
+    // A full-bleed opener has margin: 0 on the sides, which would otherwise put
+    // the folio in the 9pt bleed and let the guillotine cut it in half.
+    const css = documentStyle({ issueNumber: 1, startPage: 1 })
+    expect(css).toMatch(/@page opener:left \{ @bottom-left \{ padding-left: \d+(\.\d+)?pt/)
+    expect(css).toMatch(/@page opener:right \{ @bottom-right \{ padding-right: \d+(\.\d+)?pt/)
+
+    const pad = Number(/@page opener:right \{ @bottom-right \{ padding-right: ([\d.]+)pt/.exec(css)?.[1])
+    // Inset from the trim, so it lines up with the folio on an ordinary page.
+    expect(pad).toBe(TRIM_MARGIN_PT.outer + BLEED_PT)
+  })
+
+  it('leaves the folio off a measurement render entirely', () => {
+    const css = documentStyle({ issueNumber: 1, startPage: 1, measurement: true })
+    expect(css).not.toContain('@bottom-right')
+    expect(css).not.toContain('opener:right { @bottom-right')
+  })
+})

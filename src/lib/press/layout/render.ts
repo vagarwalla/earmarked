@@ -292,6 +292,13 @@ export function documentStyle(options: RenderOptions): string {
       '/* Running footer: issue no. · page no. */',
       `@page :left { @bottom-left { content: "Issue ${issueNumber}  ·  " counter(page); } }`,
       `@page :right { @bottom-right { content: "Issue ${issueNumber}  ·  " counter(page); } }`,
+      '',
+      '/* Openers zero their side margins so the plate can run full bleed, which',
+      '   also drops the folio into the bleed for the guillotine to take half of.',
+      '   Pad the margin boxes back to where the folio sits on an ordinary page —',
+      '   inset from the *trim*, not from the media edge. */',
+      `@page opener:left { @bottom-left { padding-left: ${outer}pt; padding-bottom: ${BLEED_PT}pt; } }`,
+      `@page opener:right { @bottom-right { padding-right: ${outer}pt; padding-bottom: ${BLEED_PT}pt; } }`,
     )
   }
 
@@ -381,6 +388,25 @@ function openerHtml(article: Article, anchorId: string): string {
   ].join('')
 }
 
+/**
+ * The article's notes, set after the body and before the source line. The
+ * markers are the ones extraction found, not a fresh 1..n count, so they still
+ * match the <sup> markers standing in the prose.
+ */
+function footnotesHtml(article: Article): string {
+  const notes = article.footnotes ?? []
+  if (!notes.length) return ''
+  const items = notes
+    .map(
+      (n) =>
+        `<li class="footnote"><span class="footnote-marker">${escapeHtml(
+          n.marker,
+        )}</span><span class="footnote-text">${sanitizeRichText(n.html)}</span></li>`,
+    )
+    .join('')
+  return `<section class="footnotes"><h2 class="footnotes-head">Notes</h2><ol class="footnote-list">${items}</ol></section>`
+}
+
 function sourceLineHtml(article: Article): string {
   const parts: string[] = []
   if (article.sourceName) parts.push(escapeHtml(article.sourceName))
@@ -405,6 +431,7 @@ export function buildArticleSection(entry: ArticleEntry, index = 0): string {
     openerHtml(article, anchorId),
     '<div class="article-body">',
     blocks,
+    footnotesHtml(article),
     sourceLineHtml(article),
     '</div>',
     '</article>',

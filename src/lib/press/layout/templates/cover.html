@@ -4,99 +4,264 @@
     <meta charset="utf-8" />
     <title>{{ISSUE_NAME}}</title>
     <!-- Self-contained: the cover is a single spread with its own page box,
-         and like every other press document it references nothing remote. -->
+         and like every other press document it references nothing remote.
+
+         Geometry comes in from compose.ts as points, already derived from the
+         Lulu spec in types.ts. Nothing here recomputes a dimension; the panels
+         are sized by the grid and everything else is positioned relative to
+         them, so a thicker issue only moves the fold.
+
+         The cover art is drawn in CSS — gradients and plain boxes — rather
+         than placed as an image. Lulu wants 300 PPI on the cover, which is
+         ~2100x3000px for one 7x10 panel; the article art extraction pulls down
+         is 424-1320px wide and would print visibly soft. CSS has no resolution
+         to be wrong: Chromium rasterises it at whatever the PDF is written at.
+         So the cover can be as colourful as it likes, just not photographic. -->
     <style>
       @page {
         size: {{COVER_WIDTH}}pt {{COVER_HEIGHT}}pt;
         margin: 0;
       }
+
       html, body { margin: 0; padding: 0; }
+
       body {
         width: {{COVER_WIDTH}}pt;
         height: {{COVER_HEIGHT}}pt;
         display: grid;
-        /* back | spine | front — bleed is absorbed by the outer edges. */
-        grid-template-columns: 1fr {{SPINE_WIDTH}}pt 1fr;
-        background: #f4f1ea;
-        color: #17171a;
-        font-family: Georgia, "Liberation Serif", "DejaVu Serif", serif;
+        /* back | spine | front. The bleed is absorbed by the outer edges:
+           each side panel is one trim width plus one bleed. */
+        grid-template-columns: {{PANEL_WIDTH}}pt {{SPINE_WIDTH}}pt {{PANEL_WIDTH}}pt;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: var(--serif);
+        -webkit-font-smoothing: antialiased;
       }
 
-      .panel { padding: 54pt 48pt; box-sizing: border-box; }
+      :root {
+        /* Deep warm ink rather than a flat black: on a gloss laminate a true
+           #000 shows every fingerprint and reads cheap. */
+        --ink: #14161a;
+        --paper: #f4f1ea;
 
-      /* ── Front ── */
-      .front {
+        --serif: Georgia, "Iowan Old Style", "Palatino Linotype", Palatino,
+          "Liberation Serif", "DejaVu Serif", serif;
+        --sans: "Helvetica Neue", Helvetica, Arial, "Liberation Sans",
+          "DejaVu Sans", sans-serif;
+      }
+
+      /* Ink on paper, so the colour in the art is the only colour on the
+         spread and does not have to fight a coloured ground. The soft/faint
+         steps are written out rather than derived, because colour-mix() is not
+         safe to assume in the render browser. The accent is this issue's first
+         palette colour, so the rules and the spine numeral belong to the same
+         set as the art. */
+      body {
+        --bg: var(--paper);
+        --fg: var(--ink);
+        --fg-soft: rgba(20, 22, 26, 0.56);
+        --fg-faint: rgba(20, 22, 26, 0.18);
+        --accent: {{ACCENT}};
+      }
+
+      /* Content is held inside Lulu's cover safety margin on every edge. The
+         outer edges additionally carry the bleed, which is why the outside
+         padding is safety + bleed and the padding at the fold is safety only. */
+      .panel {
+        box-sizing: border-box;
+        padding: {{SAFETY_TOP}}pt {{SAFETY_OUTER}}pt {{SAFETY_TOP}}pt {{SAFETY_INNER}}pt;
         display: flex;
         flex-direction: column;
-        justify-content: space-between;
-        border-left: 0.5pt solid rgba(23, 23, 26, 0.18);
+        position: relative;
+        overflow: hidden;
       }
-      .masthead {
+
+      .front { padding-left: {{SAFETY_INNER}}pt; padding-right: {{SAFETY_OUTER}}pt; }
+      .back  { padding-left: {{SAFETY_OUTER}}pt; padding-right: {{SAFETY_INNER}}pt; }
+
+      /* ── Shared type ── */
+
+      .eyebrow {
+        font-family: var(--sans);
+        font-size: 7.5pt;
+        letter-spacing: 0.28em;
+        text-transform: uppercase;
+        color: var(--fg-soft);
+        margin: 0;
+        display: flex;
+        justify-content: space-between;
+      }
+
+      .hair { border: 0; border-top: 0.5pt solid var(--fg-faint); margin: 0; }
+
+      .head { flex: 0 0 auto; }
+      .head .hair { margin-top: 9pt; }
+
+      /* ── Cover art ──
+         The art bleeds off the outer edge on purpose, so the panel's safety
+         padding does not apply to it: it is positioned against the trim.
+         Everything textual still sits inside the margin. */
+      .art {
+        flex: 1 1 auto;
+        position: relative;
+        margin: 22pt 0 24pt;
+        min-height: 150pt;
+        overflow: hidden;
+      }
+      /* Bleeds past the panel padding to the media edge on the outside. */
+      .art--bleed {
+        margin-right: -{{SAFETY_OUTER}}pt;
+        margin-left: -{{SAFETY_INNER}}pt;
+      }
+
+      /* Concentric bands struck from the outer bottom corner, in this issue's
+         rotation of the palette. */
+      .art-orbit { background: {{ART_ORBIT}}; }
+
+      /* ── Front type ── */
+
+      /* With the credit and the foot gone, the title is the only type below
+         the art and carries the whole lower third. Set at display size. */
+      .theme { flex: 0 0 auto; }
+      .theme-name {
         font-size: 46pt;
         line-height: 1.04;
-        letter-spacing: -0.015em;
-        margin: 0;
+        letter-spacing: -0.022em;
         font-weight: 400;
+        margin: 0;
       }
-      .front-foot {
-        font-family: Helvetica, Arial, "Liberation Sans", sans-serif;
-        font-size: 9.5pt;
-        letter-spacing: 0.16em;
-        text-transform: uppercase;
-        color: rgba(23, 23, 26, 0.62);
+      /* Long themes have to fit the panel rather than the panel the theme. */
+      .theme-name--long { font-size: 36pt; line-height: 1.07; }
+      .theme-name--verylong { font-size: 28pt; line-height: 1.12; }
+
+      /* Above the title rather than below it: it separates the art from the
+         type and gives the title something to hang from. */
+      .accent-rule {
+        border: 0;
+        border-top: 2pt solid var(--accent);
+        width: 54pt;
+        margin: 0 0 20pt;
       }
-      .front-foot p { margin: 0 0 4pt; }
 
       /* ── Spine ── */
+
+      /* No tint of its own: the fold lands where the binder puts it, ±1/16",
+         and a spine drawn in a different colour would print that error as a
+         stripe down the front face. The words are the only thing marking it. */
       .spine {
         display: flex;
+        flex-direction: column;
         align-items: center;
-        justify-content: center;
-        border-left: 0.5pt solid rgba(23, 23, 26, 0.18);
+        justify-content: space-between;
+        padding: {{SPINE_PAD}}pt 0;
+        box-sizing: border-box;
+        overflow: hidden;
       }
-      .spine span {
+      /* Rotated on the children, not the container — a vertical writing mode on
+         the flex container swaps its main axis and collapses the two ends
+         together. Bottom-to-top, so the words read upright when the book lies
+         face-up: the convention everywhere except British publishing. */
+      .spine-text,
+      .spine-num {
         writing-mode: vertical-rl;
-        font-family: Helvetica, Arial, "Liberation Sans", sans-serif;
-        font-size: 8.5pt;
+        transform: rotate(180deg);
+        font-family: var(--sans);
+        /* Sized to the clearance Lulu requires either side of the spine, so a
+           thin issue gets small type rather than type on the front panel. */
+        font-size: {{SPINE_FONT}}pt;
+        line-height: {{SPINE_TEXT_HEIGHT}}pt;
+        white-space: nowrap;
+        margin: 0;
+      }
+      /* The title reads up from the foot, the numeral sits at the head — so the
+         numeral is the part showing above a stack of other things. */
+      .spine-text {
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--fg);
+        order: 2;
+        max-height: 68%;
+        overflow: hidden;
+      }
+      /* "No. 1" rather than "1": a lone digit turned on its side is a dash. */
+      .spine-num {
         letter-spacing: 0.14em;
         text-transform: uppercase;
-        white-space: nowrap;
+        color: var(--accent);
+        order: 1;
       }
 
       /* ── Back ── */
-      .back { display: flex; flex-direction: column; justify-content: flex-end; }
-      .back h2 {
-        font-family: Helvetica, Arial, "Liberation Sans", sans-serif;
-        font-size: 9pt;
-        letter-spacing: 0.16em;
-        text-transform: uppercase;
-        color: rgba(23, 23, 26, 0.62);
-        margin: 0 0 12pt;
-        font-weight: 400;
+
+      /* A slim reprise of the cover palette, so the back is recognisably the
+         same object without repeating the art. */
+      .palette-band {
+        flex: 0 0 auto;
+        display: flex;
+        height: 5pt;
+        margin: 0;
       }
-      .back ul { list-style: none; margin: 0; padding: 0; }
-      .back li {
-        font-size: 11pt;
-        line-height: 1.42;
-        padding: 3pt 0;
-        border-bottom: 0.4pt solid rgba(23, 23, 26, 0.12);
+      .palette-band span { flex: 1 1 0; }
+
+      /* Not a table of contents — the interior already has one. The titles run
+         together as a single block of display type, separated by a mark in the
+         issue's accent: a glance at what is inside, set as an object rather
+         than an index. */
+      .contents {
+        flex: 0 0 auto;
+        margin: 0;
+        font-size: 21pt;
+        line-height: 1.44;
+        letter-spacing: -0.008em;
       }
-      .back li:last-child { border-bottom: none; }
+      /* Stepped down by total title length, so a long issue still fits the
+         panel and a short one is not marooned in white space. */
+      .contents--long { font-size: 17pt; line-height: 1.42; }
+      .contents--verylong { font-size: 13.5pt; line-height: 1.38; }
+      .contents--short { font-size: 27pt; line-height: 1.4; }
+
+      .c-sep {
+        color: var(--accent);
+        padding: 0 0.42em;
+        /* Held down a touch: a diamond sits optically high between capitals. */
+        position: relative;
+        top: -0.08em;
+      }
+
+      /* The run is placed on the optical centre of the panel, the same way the
+         front's title block is: a text block centred by measurement sits low.
+         Without this the titles hang off the head rule with the whole lower
+         half of the panel empty. */
+      .lead-space { flex: 1 0 0; min-height: 26pt; }
+      .trail-space { flex: 1.15 0 0; min-height: 26pt; }
+
     </style>
   </head>
   <body>
     <section class="panel back">
-      <h2>In this issue</h2>
-      <ul>
-{{BACK_LIST}}
-      </ul>
+      <div class="head">
+        <p class="eyebrow"><span>In this issue</span><span>{{DATE_RANGE}}</span></p>
+        <hr class="hair" />
+      </div>
+      <div class="lead-space"></div>
+      <p class="contents {{CONTENTS_CLASS}}">{{BACK_LIST}}</p>
+      <div class="trail-space"></div>
+      <div class="palette-band">{{PALETTE_BAND}}</div>
     </section>
-    <section class="spine"><span>{{ISSUE_NAME}} &middot; {{ISSUE_NUMBER}}</span></section>
+
+    <section class="spine">{{SPINE_CONTENT}}</section>
+
     <section class="panel front">
-      <h1 class="masthead">{{ISSUE_NAME}}</h1>
-      <div class="front-foot">
-        <p>Issue {{ISSUE_NUMBER}}</p>
-        <p>{{DATE_RANGE}}</p>
+      <div class="head">
+        <p class="eyebrow"><span>Issue {{ISSUE_NUMBER}}</span><span>{{DATE_RANGE}}</span></p>
+        <hr class="hair" />
+      </div>
+
+      <div class="art art--bleed art-orbit"></div>
+
+      <div class="theme">
+        <hr class="accent-rule" />
+        <h1 class="theme-name {{THEME_CLASS}}">{{ISSUE_NAME}}</h1>
       </div>
     </section>
   </body>

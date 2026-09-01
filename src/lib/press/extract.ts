@@ -22,7 +22,7 @@ import { Readability } from '@mozilla/readability'
 import Defuddle from 'defuddle'
 import { safeFetchText } from './fetch'
 import { fetchAndStoreImages, type CandidateImage, type StoredImage } from './images'
-import type { Article, ArticleBlock, ArticleImage } from './types'
+import type { Article, ArticleBlock, ArticleFootnote, ArticleImage } from './types'
 
 export type ExtractionRung = 'defuddle' | 'readability' | 'raindrop-cache' | 'newsletter'
 
@@ -239,6 +239,175 @@ function captionFor(figure: Element): string | null {
   return text || null
 }
 
+// ── Footnotes ────────────────────────────────────────────────────────────────
+// The body keeps its <sup> markers (SUP is in INLINE_KEEP), so an article whose
+// notes are thrown away prints orphan superscripts pointing at nothing. Every
+// publisher marks its apparatus up differently, so the notes are found here and
+// removed from the tree *before* toBlocks walks it — otherwise they also come
+// out the far end as unnumbered paragraphs, which is what used to happen.
+
+/**
+ * Containers that hold a whole apparatus, or one note of it. Publishers split
+ * roughly into two vocabularies — "footnote" (Substack, Pandoc, WordPress, the
+ * EA Forum) and "reference" (joecarlsmith.com and other bespoke essay themes) —
+ * so both are matched. The `reference` half is kept narrow, to `*-item` and
+ * `reference-item*`, because a bare "reference" class is used for all sorts of
+ * things that are not notes.
+ */
+const FOOTNOTE_CONTAINER =
+  '[class*="footnote" i], [id*="footnote" i], [data-component-name*="footnote" i], ' +
+  'ol.footnotes, section.footnotes, #footnotes, ' +
+  '[class*="references-item" i], [class*="reference-item" i], [id^="reference-item" i], ' +
+  '[class*="endnote" i]'
+
+/** Elements holding a note's own number, rather than its text. */
+const MARKER_ELEMENT =
+  '[class*="footnote-number" i], [class*="footnote_number" i], ' +
+  '[class*="reference__index" i], [class*="reference-index" i]'
+
+/** Elements holding a note's text, when the source separates the two. */
+const NOTE_BODY = '[class*="reference__text" i], [class*="footnote-content" i], [class*="footnote_content" i]'
+
+/** Headings that introduce one, for sources that mark the section no other way. */
+const NOTES_HEADING = /^(foot ?notes?|notes|references|endnotes)\s*:?$/i
+
+/** Trailing back-to-text link, which is navigation and meaningless on paper. */
+const BACKLINK = /\s*(?:↩︎?️?|↑|\^|back|return(?: to text)?)\s*$/i
+
+/** Digits at the end of an id like `fn3`, `fn:3`, `footnote-3`. */
+function markerFromId(el: Element): string | null {
+  const id = el.getAttribute('id') ?? ''
+  const m = /(\d+)\s*$/.exec(id)
+  return m ? m[1] : null
+}
+
+/**
+ * The number a note is labelled with. Publishers put it in a dedicated element
+ * (Substack), in the id (Pandoc, WordPress), or nowhere at all — in which case
+ * the position in the list is the only thing left.
+ */
+function footnoteMarker(el: Element, index: number): string {
+  const labelled = el.querySelector(MARKER_ELEMENT)
+  const label = labelled ? textOf(labelled).replace(/[^\w*†‡]/g, '') : ''
+  if (label) return label
+  // A bare leading link whose whole text is a number is the marker too.
+  const first = el.querySelector('a')
+  const asNumber = first ? textOf(first) : ''
+  if (/^\d{1,4}$/.test(asNumber)) return asNumber
+  return markerFromId(el) ?? String(index + 1)
+}
+
+/** The note's own text, with its back-link and repeated leading number removed. */
+function footnoteBody(el: Element, marker: string): string {
+  const clone = el.cloneNode(true) as Element
+  for (const strip of Array.from(
+    clone.querySelectorAll(`${MARKER_ELEMENT}, [class*="footnote-anchor" i]`),
+  )) {
+    strip.remove()
+  }
+  // Nested *notes* belong to themselves; without this an outer note prints its
+  // own text followed by every note nested under it. Note *parts* — the text
+  // wrapper especially — have to stay, or there is nothing left to print.
+  for (const nested of safeQueryAll(clone, FOOTNOTE_CONTAINER)) {
+    if (looksLikeOneNote(nested)) nested.remove()
+  }
+  // When the source separates number from text, take only the text — otherwise
+  // the whole item, which is the common case.
+  const body = clone.querySelector(NOTE_BODY) ?? clone
+  let html = inlineHtml(body).replace(BACKLINK, '')
+  // Some sources repeat the marker as the first characters of the note text.
+  html = html.replace(new RegExp(`^\\s*${marker}\\s*[.)\\]]?\\s*`), '')
+  return html.trim()
+}
+
+/**
+ * A structural *part* of a note — its number, its text wrapper, its back-link.
+ * These match the container selector too (they are all named after footnotes),
+ * but treating one as a note in its own right splits a note in half.
+ */
+function isNotePart(el: Element): boolean {
+  const cls = (el.getAttribute('class') ?? '').toLowerCase()
+  return /(footnote|reference|endnote)[-_]{0,2}(content|text|number|index|anchor|marker|label|backlink)/.test(
+    cls,
+  )
+}
+
+/** Is this element one note, rather than the container holding all of them? */
+function looksLikeOneNote(el: Element): boolean {
+  if (isNotePart(el)) return false
+  const id = (el.getAttribute('id') ?? '').toLowerCase()
+  const cls = (el.getAttribute('class') ?? '').toLowerCase()
+  if (el.tagName === 'LI') return true
+  if (/(^|[^a-z])(fn|footnote|reference)[-_:]?item?[-_:]?\d*/.test(id)) return true
+  return (
+    /footnote(?![-_]?(s|list|section))/.test(cls) ||
+    /references?[-_]item/.test(cls) ||
+    /endnote/.test(cls)
+  )
+}
+
+/**
+ * Pull the footnote apparatus out of `root`, removing it from the tree.
+ *
+ * Returns the notes in document order. Markers are kept as the source wrote
+ * them rather than renumbered, so they still match the `<sup>` markers left
+ * behind in the body.
+ */
+export function extractFootnotes(root: Element): ArticleFootnote[] {
+  const matches = safeQueryAll(root, FOOTNOTE_CONTAINER)
+
+  if (matches.length) {
+    // Some themes lay the apparatus out as a grid and the parse nests one note
+    // inside another. Every note therefore has to be read *before* anything is
+    // removed: taking the outermost out first disconnects the rest, which is
+    // how a 58-note essay came out with 23.
+    const outermost = matches.filter((m) => !matches.some((o) => o !== m && o.contains(m)))
+
+    const notes: ArticleFootnote[] = []
+    for (const container of outermost) {
+      const lis = safeQueryAll(container, 'li')
+      if (lis.length) {
+        pushNotes(notes, lis)
+        continue
+      }
+      // The container itself may be a note, and so may anything nested in it.
+      const candidates = [container, ...safeQueryAll(container, FOOTNOTE_CONTAINER)].filter(
+        looksLikeOneNote,
+      )
+      pushNotes(notes, candidates)
+    }
+    for (const container of outermost) container.remove()
+    if (notes.length) return notes
+  }
+
+  // A "Notes" heading followed by an ordered list, for sources that mark the
+  // apparatus no other way (the EA Forum does exactly this).
+  for (const heading of safeQueryAll(root, 'h1, h2, h3, h4, h5, h6')) {
+    if (!NOTES_HEADING.test(textOf(heading))) continue
+    const list = heading.nextElementSibling
+    if (!list || list.tagName !== 'OL') continue
+    const notes: ArticleFootnote[] = []
+    pushNotes(notes, safeQueryAll(list, ':scope > li'))
+    heading.remove()
+    list.remove()
+    return notes
+  }
+
+  return []
+}
+
+/** Read a run of note elements into `notes`, skipping any that come out empty. */
+function pushNotes(notes: ArticleFootnote[], items: Element[]): void {
+  // Captured before the loop: `notes.length` grows as notes are pushed, so
+  // reading it inside would skip a number on every positional fallback.
+  const base = notes.length
+  for (const [i, item] of items.entries()) {
+    const marker = footnoteMarker(item, base + i)
+    const html = footnoteBody(item, marker)
+    if (html) notes.push({ marker, html })
+  }
+}
+
 /**
  * Walk the extracted content into the small block vocabulary U4 renders.
  * Images are collected as candidates here and resolved to local paths later,
@@ -386,6 +555,7 @@ interface RungResult {
   dek: string | null
   blocks: ArticleBlock[]
   images: CandidateImage[]
+  footnotes: ArticleFootnote[]
 }
 
 function contentRoot(html: string, url: string): Element | null {
@@ -403,10 +573,22 @@ function buildRung(
     published?: string | null
     dek?: string | null
   },
+  /**
+   * Notes already lifted from the *original* document. The readability pass
+   * flattens a footnote apparatus into unlabelled paragraphs, so by the time
+   * its output reaches here there is usually nothing left to recognise — the
+   * caller has to look before it runs. Scanning here too is the fallback for a
+   * source that survived the pass with its markup intact.
+   */
+  footnotesFromSource: ArticleFootnote[] = [],
 ): RungResult | null {
   const root = contentRoot(html, url)
   if (!root) return null
   stripExternalReferences(root)
+  // Still run here: whatever this finds has to leave the tree either way, or
+  // toBlocks walks it into paragraphs at the end of the piece as well.
+  const alsoHere = extractFootnotes(root)
+  const footnotes = footnotesFromSource.length ? footnotesFromSource : alsoHere
   const { blocks, images } = toBlocks(root)
   if (articleLength(blocks) < MIN_ARTICLE_CHARS) return null
   return {
@@ -417,6 +599,7 @@ function buildRung(
     dek: meta.dek?.trim() || null,
     blocks,
     images,
+    footnotes,
   }
 }
 
@@ -424,15 +607,24 @@ export function extractWithDefuddle(html: string, url: string): RungResult | nul
   try {
     const dom = parseHtml(html, url)
     stripCommentSections(dom.window.document)
+    // Lifted from the source document, before Defuddle rewrites it: Defuddle
+    // keeps the note text but throws away the container, the ids and the
+    // numbers, which is everything that makes a note a note.
+    const footnotes = extractFootnotes(dom.window.document.body)
     const result = new Defuddle(dom.window.document, { url }).parse()
     if (!result?.content) return null
-    return buildRung(result.content, url, {
-      title: result.title,
-      byline: result.author,
-      site: result.site || new URL(url).hostname.replace(/^www\./, ''),
-      published: result.published,
-      dek: result.description,
-    })
+    return buildRung(
+      result.content,
+      url,
+      {
+        title: result.title,
+        byline: result.author,
+        site: result.site || new URL(url).hostname.replace(/^www\./, ''),
+        published: result.published,
+        dek: result.description,
+      },
+      footnotes,
+    )
   } catch (err) {
     console.warn(`press/extract: defuddle failed on ${url}: ${(err as Error).message}`)
     return null
@@ -443,15 +635,25 @@ export function extractWithReadability(html: string, url: string): RungResult | 
   try {
     const dom = parseHtml(html, url)
     stripCommentSections(dom.window.document)
-    const result = new Readability(dom.window.document).parse()
+    // As in the Defuddle rung: read the apparatus off the source document,
+    // because Readability strips it out of its own output entirely.
+    const footnotes = extractFootnotes(dom.window.document.body)
+    // Readability mutates the document it is given, so hand it a fresh parse
+    // rather than the one the notes were just removed from.
+    const result = new Readability(parseHtml(html, url).window.document).parse()
     if (!result?.content) return null
-    return buildRung(result.content, url, {
-      title: result.title,
-      byline: result.byline,
-      site: result.siteName || new URL(url).hostname.replace(/^www\./, ''),
-      published: result.publishedTime ?? null,
-      dek: result.excerpt ?? null,
-    })
+    return buildRung(
+      result.content,
+      url,
+      {
+        title: result.title,
+        byline: result.byline,
+        site: result.siteName || new URL(url).hostname.replace(/^www\./, ''),
+        published: result.publishedTime ?? null,
+        dek: result.excerpt ?? null,
+      },
+      footnotes,
+    )
   } catch (err) {
     console.warn(`press/extract: readability failed on ${url}: ${(err as Error).message}`)
     return null
@@ -570,6 +772,7 @@ export async function extractFromNewsletterHtml(
 
   const root = doc.body
   stripExternalReferences(root)
+  const footnotes = extractFootnotes(root)
   const { blocks, images } = toBlocks(root)
   const cleaned = stripNewsletterCruft(blocks)
 
@@ -593,6 +796,7 @@ export async function extractFromNewsletterHtml(
       dek: null,
       blocks: body,
       images,
+      footnotes,
     },
     storeImages,
   )
@@ -631,5 +835,6 @@ async function finish(
     dek: result.dek,
     lead,
     blocks,
+    footnotes: result.footnotes,
   }
 }

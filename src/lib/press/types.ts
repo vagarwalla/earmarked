@@ -27,6 +27,23 @@ export const PRINT_SPEC = {
   maxPages: 800,
   /** Pages per inch for 80# coated stock — drives spine width. */
   pagesPerInch: 444,
+  /**
+   * Constant Lulu adds to every softcover perfect-bound spine, on top of the
+   * paper stack itself: the glue and the fold of the wrap.
+   * `(pages / 444) + 0.06" = spine width` — help.api.lulu.com, "How is spine
+   * width calculated?". Leaving it out makes the spread 0.06" narrow, which
+   * walks the front panel half that distance off the fold.
+   */
+  spineWrapIn: 0.06,
+  /**
+   * Below this, Lulu says not to print spine text at all: the spine is too
+   * narrow for the binding tolerance to keep it off the faces.
+   */
+  minPagesForSpineText: 100,
+  /** Clearance Lulu requires between spine text and each edge of the spine. */
+  spineTextClearanceIn: 0.0625,
+  /** Keep cover content this far inside the trim; the guillotine wanders. */
+  coverSafetyIn: 0.5,
 } as const
 
 export const TRIM_WIDTH_PT = PRINT_SPEC.trimWidthIn * PT_PER_INCH        // 504
@@ -38,8 +55,25 @@ export const MEDIA_HEIGHT_PT = TRIM_HEIGHT_PT + 2 * BLEED_PT             // 738
 
 /** Spine width in points for a perfect-bound interior of `pages` pages. */
 export function spineWidthPt(pages: number): number {
-  return (pages / PRINT_SPEC.pagesPerInch) * PT_PER_INCH
+  return (pages / PRINT_SPEC.pagesPerInch + PRINT_SPEC.spineWrapIn) * PT_PER_INCH
 }
+
+/**
+ * Whether this issue is thick enough to carry spine text. Under Lulu's floor
+ * the answer is no and the spine prints bare — the binder's drift would land
+ * the words on the front or back panel.
+ */
+export function spineTakesText(pages: number): boolean {
+  return pages >= PRINT_SPEC.minPagesForSpineText
+}
+
+/** Type height available on the spine once Lulu's clearance is taken off both edges. */
+export function spineTextHeightPt(pages: number): number {
+  return spineWidthPt(pages) - 2 * PRINT_SPEC.spineTextClearanceIn * PT_PER_INCH
+}
+
+/** Cover safety margin in points — how far in from the trim edge content must stay. */
+export const COVER_SAFETY_PT = PRINT_SPEC.coverSafetyIn * PT_PER_INCH    // 36
 
 /**
  * Full cover media box: back + spine + front, plus bleed all round.
@@ -166,6 +200,17 @@ export type ArticleBlock =
   | { type: 'list'; ordered: boolean; items: string[] }
   | { type: 'rule' }
 
+/**
+ * One note from an article's footnote apparatus, lifted out of the body so it
+ * can be set as notes rather than as stray paragraphs at the end of the piece.
+ */
+export interface ArticleFootnote {
+  /** As printed in the body's marker, e.g. "1". Kept from the source, not renumbered. */
+  marker: string
+  /** Sanitised inline HTML of the note itself. */
+  html: string
+}
+
 export interface Article {
   title: string
   byline: string | null
@@ -178,6 +223,11 @@ export interface Article {
   dek: string | null
   lead: ArticleImage | null
   blocks: ArticleBlock[]
+  /**
+   * Optional: extractions stored before footnote support simply do not have
+   * the field, and must keep loading rather than fail preflight.
+   */
+  footnotes?: ArticleFootnote[]
 }
 
 // ── Layout (U4) ──────────────────────────────────────────────────────────────
