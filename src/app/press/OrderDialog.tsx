@@ -17,6 +17,7 @@
 
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { readJson } from './readJson'
 import type { PrintQuote } from '@/lib/press/types'
 import type { ShippingAddress } from '@/lib/press/lulu'
 
@@ -76,7 +77,7 @@ export function OrderDialog({
     onError(null)
     try {
       const res = await fetch(`/api/press/issue/${issueNumber}/order`, { method: 'POST' })
-      const body = (await res.json()) as { error?: string; sentTo?: string }
+      const body = await readJson<{ sentTo: string }>(res)
       if (!res.ok) {
         setFailure(body.error ?? 'Could not send the approval email.')
         return

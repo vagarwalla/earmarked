@@ -121,10 +121,18 @@ export async function loadEffectiveSettings(
   let row: PressSettingsRow | null = null
   try {
     row = await readSettingsRow(db)
-  } catch {
-    // A missing table (013 not applied yet) or an unreachable database must
-    // not take ordering down with it — the environment already answers every
-    // one of these questions, and did so exclusively until this table existed.
+  } catch (err) {
+    // Narrow on purpose. A missing table means 013 has not been applied yet,
+    // and falling back to the environment is exactly right — it answered every
+    // one of these questions exclusively until this table existed.
+    //
+    // Anything else is not. A transient failure here would silently ship an
+    // order to whatever PRESS_SHIP_* says instead of the address in the row,
+    // and snapshot that wrong address into press_orders.ship_to as though it
+    // had been chosen. Better to fail than to post a book to the wrong house.
+    if (!/relation .*press_settings.* does not exist|schema cache/i.test((err as Error).message)) {
+      throw err
+    }
     row = null
   }
 

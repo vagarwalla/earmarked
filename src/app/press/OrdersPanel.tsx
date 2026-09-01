@@ -17,6 +17,7 @@
 import { useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { readJson } from './readJson'
 import { formatMoney, isFinished, type OrderWithIssue } from '@/lib/press/orders'
 
 /** Lulu's own words, softened into the reader's without losing the meaning. */
@@ -53,7 +54,7 @@ export function OrdersPanel({
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'refresh' }),
       })
-      const body = (await res.json()) as { error?: string; errors?: string[] }
+      const body = await readJson<{ errors: string[] }>(res)
       if (!res.ok) onError(body.error ?? 'Could not refresh.')
       // Partial failure: one job Lulu has forgotten must not read as total
       // failure, so the ones that did refresh still land.

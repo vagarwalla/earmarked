@@ -48,7 +48,7 @@ What the original got wrong about its own starting point, and what has changed:
 | `/press` reads `.press/state.json` | Reads whichever `review.ts` picks — disk if `.press/state.json` exists, Supabase if not |
 | The edit routes are local-only | `/api/press/issue/[number]` already has a Supabase branch (`applyRemote`) |
 | `.press/` retires; `local.ts` / `issues.ts` go away | Both are alive and load-bearing. `review.ts` and `remote.ts` were added *beside* them |
-| Question 2: does `/press` need auth? | Answered before the plan was written — `c7869e9` put `PRESS_PASSWORD` and `src/middleware.ts` in front of it |
+| Question 2: does `/press` need auth? | **Still open.** `c7869e9` built the middleware, but `PRESS_PASSWORD` is not set anywhere — and unset means open, by that file's own design. The lock exists and is not engaged |
 | Question 1: is anything running on its own? | The Fly worker is deployed and polling. See "The thing to check first" |
 
 The migration this plan needs — `013_press_workbench.sql` — is **already
@@ -273,7 +273,12 @@ The settings tab is a plain form:
   Lulu account, and a link straight to Lulu's payment settings. No card number
   ever enters this app, which is the whole reason to link out.
 - **Print settings** — package id, copies, page threshold, and a **Sandbox /
-  Live** switch that is unmissable and defaults to sandbox.
+  Live** switch that defaults to sandbox — but which is explicitly *not* what
+  stops a charge, and says so. The Lulu credentials on file are production
+  credentials and Lulu's sandbox host 401s against them, so a "safe" sandbox
+  order fails rather than costing nothing (`08ff4e8`). The actual guard is
+  `PRESS_ORDER_ENABLED=1`, which lives in the environment precisely so it
+  cannot be flipped from the screen that presses the button.
 
 An incomplete address disables the Order button with the reason shown, rather
 than failing at Lulu after you have pressed it.
@@ -543,9 +548,13 @@ Answered since, and folded in above:
    polling — which is why 013 cannot be applied before it is redeployed. But
    Postgres was empty until the import ran, so verify this before trusting it:
    see "The thing to check first".
-2. **Where does this live?** Behind `PRESS_PASSWORD` in `src/middleware.ts`
-   since `c7869e9`, and off in production unless `PRESS_UI_ENABLED=1`. Already
-   solved; no work in this plan.
+2. **Where does this live?** *Half solved.* `src/middleware.ts` implements the
+   password and the matcher covers every workbench route — but `PRESS_PASSWORD`
+   is not set, and that file treats unset as "open" on purpose. So `/press` is
+   reachable by anyone who has the URL, which is why the money guard is
+   `PRESS_ORDER_ENABLED` in the environment rather than anything on the page.
+   `PRESS_UI_ENABLED` still gates production. **Set a password before this is
+   anywhere but localhost.**
 4. **How many copies?** One, from `press_settings.copies`, changeable in the
    settings form. The Lulu plumbing is identical for 1 or 5.
 5. **Can you order a past issue again?** Yes — §7. This is what forced

@@ -8,10 +8,12 @@
  * are arrangements of it, removing an article from one returns it here, and
  * the `×` on a row is the only permanent delete in the product.
  *
- * The three other tabs are the piles that are not waiting — a broken
- * extraction, a reference page set aside, and what has been discarded. Each
- * has the one action that gets it back, because un-skipping used to mean
- * hand-editing JSON.
+ * The chips filter to the piles that are *not* the pool — a broken extraction,
+ * a reference page set aside, what has been discarded — and each carries the
+ * one action that gets an article back, because un-skipping used to mean
+ * hand-editing JSON. No chip is the pool itself: the panel already is the
+ * pool, and naming it twice made two labels and two identical counts for one
+ * list.
  *
  * See docs/plans/2026-08-31-003-feat-press-workbench-plan.md §2, §4.
  */
@@ -21,10 +23,12 @@ import { useDroppable } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { RotateCcw, Undo2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { readJson } from './readJson'
 import { ArticleRow } from './ArticleRow'
 import type { PoolItem } from './Workbench'
 
-type Pile = 'waiting' | 'failed' | 'skipped' | 'dropped'
+/** The exceptions. `null` is the pool, which is the panel's default state. */
+type Pile = 'failed' | 'skipped' | 'dropped'
 
 export function PoolPanel({
   pool,
@@ -45,14 +49,14 @@ export function PoolPanel({
   onNote: (m: string | null) => void
   onRefresh: () => void
 }) {
-  const [pile, setPile] = useState<Pile>('waiting')
+  const [pile, setPile] = useState<Pile | null>(null)
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<PoolItem | null>(null)
   const { setNodeRef, isOver } = useDroppable({ id: 'pool' })
 
-  const piles: Record<Pile, PoolItem[]> = { waiting: pool, failed, skipped, dropped }
-  const items = piles[pile].filter((i) =>
+  const piles: Record<Pile, PoolItem[]> = { failed, skipped, dropped }
+  const items = (pile ? piles[pile] : pool).filter((i) =>
     query.trim() ? `${i.title} ${i.url ?? ''}`.toLowerCase().includes(query.trim().toLowerCase()) : true,
   )
 
@@ -65,7 +69,7 @@ export function PoolPanel({
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action }),
       })
-      const body = (await res.json()) as { error?: string }
+      const body = await readJson(res)
       if (!res.ok) onError(body.error ?? 'That did not work.')
       else {
         onNote(action === 'retry' ? 'Queued for another go.' : 'Back in the pool.')
@@ -87,7 +91,7 @@ export function PoolPanel({
     onError(null)
     try {
       const res = await fetch(`/api/press/item/${item.id}`, { method: 'DELETE' })
-      const body = (await res.json()) as { error?: string; warning?: string | null }
+      const body = await readJson<{ warning: string | null }>(res)
       if (!res.ok) onError(body.error ?? 'Could not delete it.')
       else {
         onNote(body.warning ?? 'Deleted. The raindrop is in “Not printing”.')
@@ -102,12 +106,16 @@ export function PoolPanel({
   return (
     <div ref={setNodeRef}>
       <div className="mb-2 flex flex-wrap gap-1">
-        {(['waiting', 'failed', 'skipped', 'dropped'] as const).map((p) => (
+        {(['failed', 'skipped', 'dropped'] as const).map((p) => (
           <button
             key={p}
             type="button"
-            onClick={() => setPile(p)}
-            className={`rounded px-1.5 py-0.5 text-xs capitalize ${
+            // Clicking the chip that is already on goes back to the pool, so
+            // there is always a way out that is not a second "pool" control.
+            onClick={() => setPile(pile === p ? null : p)}
+            aria-pressed={pile === p}
+            disabled={piles[p].length === 0 && pile !== p}
+            className={`rounded px-1.5 py-0.5 text-xs capitalize disabled:opacity-40 ${
               pile === p ? 'bg-accent' : 'text-muted-foreground hover:text-foreground'
             }`}
           >
@@ -129,13 +137,13 @@ export function PoolPanel({
           isOver ? 'border-foreground border-dashed' : ''
         }`}
       >
-        <SortableContext items={items.map((i) => i.id)} strategy={verticalListSortingStrategy}>
+        <SortableContext id="pool" items={items.map((i) => i.id)} strategy={verticalListSortingStrategy}>
           <ul className="divide-y">
             {items.map((item) => (
               <ArticleRow
                 key={item.id}
                 item={item}
-                draggable={pile === 'waiting' && editable}
+                draggable={pile === null && editable}
                 trailing={
                   <>
                     {pile === 'failed' && (
@@ -180,9 +188,7 @@ export function PoolPanel({
             ))}
             {items.length === 0 && (
               <li className="text-muted-foreground px-4 py-8 text-center text-xs">
-                {pile === 'waiting'
-                  ? 'Nothing waiting. Save something to hw.'
-                  : `Nothing ${pile}.`}
+                {pile === null ? 'The pool is empty. Save something to hw.' : `Nothing ${pile}.`}
               </li>
             )}
           </ul>

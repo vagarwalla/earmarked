@@ -99,6 +99,27 @@ export async function performApproval(
   const lulu = deps.lulu ?? createLuluClient({ settings })
   const items = await itemsForIssue(issue.id, db)
 
+  // Price it and keep the number. The whole design of this flow is "see what
+  // it costs before you spend it", and until now the one thing never persisted
+  // was the cost — the orders panel rendered an em dash forever and there was
+  // no record of what any issue had actually been charged at. A quote that
+  // fails is not a reason to refuse the order; it is a reason for the column
+  // to stay empty.
+  let quote = null
+  try {
+    quote = await lulu.quote(
+      {
+        title: issue.name ?? `Issue ${issue.number}`,
+        packageId: settings.luluPackageId || LULU_PACKAGE_ID,
+        pageCount: issue.page_total,
+        quantity: order.quantity,
+      },
+      settings.shipping,
+    )
+  } catch {
+    // Recorded as absent rather than as zero, which would read as free.
+  }
+
   // Signed for longer than Lulu's async fetch window; revoked once the job
   // passes validation (the worker re-signs if it ever needs to).
   const interiorUrl = await signedUrl(issue.interior_path, 24 * 60 * 60, db)
@@ -147,7 +168,14 @@ export async function performApproval(
 
     await updateOrder(
       order.id,
-      { lulu_job_id: job.id, status: job.status, line_item_status: job.lineItemStatus, message: job.message },
+      {
+        lulu_job_id: job.id,
+        status: job.status,
+        line_item_status: job.lineItemStatus,
+        message: job.message,
+        cost_cents: quote?.totalCents ?? null,
+        currency: quote?.currency ?? null,
+      },
       db,
     )
     if (!reorder) {

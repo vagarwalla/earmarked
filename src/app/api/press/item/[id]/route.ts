@@ -14,7 +14,7 @@
  */
 
 import { NextResponse } from 'next/server'
-import { getItem } from '@/lib/press/db'
+import { getItem, recordEvent } from '@/lib/press/db'
 import { dropItem, retryItem, unskipItem } from '@/lib/press/workbench'
 import { archiveRaindropElsewhere } from '@/lib/press/archive'
 import { NOT_FOUND, asResponse, pressUiEnabled } from '../../_lib/guard'
@@ -63,18 +63,49 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
     const item = await getItem(id)
     if (!item) return NextResponse.json({ error: 'No such article.' }, { status: 404 })
 
-    let collectionId: string | null = null
-    let archiveWarning: string | null = null
+    // Refuse BEFORE touching Raindrop. press_drop_item enforces this too, and
+    // that remains the real guard — but it enforces it in Postgres, after the
+    // bookmark has already been moved out of `hw`, and there is no rollback for
+    // an API call to a third party. Checking here first means a delete that is
+    // going to be refused refuses without side effects.
+    //
+    // This deliberately duplicates the database's check rather than trusting
+    // it: the two can only disagree by one being newer, and the cost of them
+    // disagreeing is a moved bookmark rather than a wrong answer.
+    if (item.issue_id !== null || item.state === 'in_issue') {
+      return NextResponse.json(
+        { error: 'That article belongs to an issue; remove it from the issue first.' },
+        { status: 409 },
+      )
+    }
+    if (item.state === 'printed') {
+      return NextResponse.json({ error: 'That article has been printed.' }, { status: 409 })
+    }
+    if (item.state === 'dropped') {
+      return NextResponse.json({ error: 'That article is already deleted.' }, { status: 409 })
+    }
+
+    // Order matters the other way round too: drop the row first, then move the
+    // bookmark. A dropped row whose raindrop is still in `hw` is a re-save away
+    // from being noticed and is reported below; a moved raindrop whose row was
+    // never dropped is an article that has silently left your reading with
+    // nothing recording why.
+    await dropItem(id, null)
+
+    let warning: string | null = null
     if (item.raindrop_id) {
       try {
-        collectionId = await archiveRaindropElsewhere(item.raindrop_id)
+        const collectionId = await archiveRaindropElsewhere(item.raindrop_id)
+        await recordEvent(
+          { item_id: id, kind: 'item_archived_elsewhere', detail: { collectionId } },
+          undefined,
+        )
       } catch (err) {
-        archiveWarning = `Deleted, but the raindrop stayed in hw: ${(err as Error).message}`
+        warning = `Deleted, but the raindrop stayed in hw: ${(err as Error).message}`
       }
     }
 
-    await dropItem(id, collectionId)
-    return NextResponse.json({ ok: true, warning: archiveWarning })
+    return NextResponse.json({ ok: true, warning })
   } catch (err) {
     return asResponse(err)
   }

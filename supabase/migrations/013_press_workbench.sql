@@ -164,8 +164,14 @@ $$;
 -- The constraint cannot carry 010's WHERE clause — table constraints have no
 -- partial form — but it does not need one. UNIQUE treats NULLs as distinct, so
 -- every pool row (NULL, NULL) still coexists with every other.
-DROP INDEX IF EXISTS press_items_issue_position_uniq;
+-- Constraint first, then the index. Order matters and is not obvious: after
+-- this migration has run once, the name belongs to a CONSTRAINT that owns its
+-- index, and DROP INDEX on it errors ("cannot drop index ... because
+-- constraint ... requires it") rather than being skipped. Dropping the
+-- constraint takes its index with it; the DROP INDEX that follows is only for
+-- 010's plain index, on a database seeing this for the first time.
 ALTER TABLE press_items DROP CONSTRAINT IF EXISTS press_items_issue_position_uniq;
+DROP INDEX IF EXISTS press_items_issue_position_uniq;
 ALTER TABLE press_items
   ADD CONSTRAINT press_items_issue_position_uniq
   UNIQUE (issue_id, position) DEFERRABLE INITIALLY IMMEDIATE;
@@ -251,10 +257,18 @@ AS $$
 DECLARE
   v_item press_items;
 BEGIN
-  SELECT * INTO v_item FROM press_items WHERE id = p_item_id;
+  -- FOR UPDATE, because the guard below and the UPDATE that acts on it must
+  -- see the same row. Without it, Auto-fill placing this article into an issue
+  -- between the two would leave a `dropped` row still carrying issue_id — and
+  -- itemsForIssue selects on issue_id alone, so a deleted article would stay in
+  -- the running order and get printed.
+  SELECT * INTO v_item FROM press_items WHERE id = p_item_id FOR UPDATE;
 
   IF v_item IS NULL THEN
     RAISE EXCEPTION 'press_drop_item: no such item %', p_item_id;
+  END IF;
+  IF v_item.state = 'dropped' THEN
+    RAISE EXCEPTION 'press_drop_item: % is already deleted', p_item_id;
   END IF;
   IF v_item.issue_id IS NOT NULL OR v_item.state = 'in_issue' THEN
     RAISE EXCEPTION 'press_drop_item: % belongs to an issue; remove it from the issue first', p_item_id;
@@ -263,10 +277,18 @@ BEGIN
     RAISE EXCEPTION 'press_drop_item: % has been printed', p_item_id;
   END IF;
 
+  -- The WHERE repeats the guard. Belt to the FOR UPDATE's braces: if this
+  -- ever runs without the lock, it declines rather than corrupting an issue.
   UPDATE press_items
      SET state = 'dropped', position = NULL, updated_at = now()
    WHERE id = p_item_id
+     AND issue_id IS NULL
+     AND state <> 'in_issue'
   RETURNING * INTO v_item;
+
+  IF v_item IS NULL THEN
+    RAISE EXCEPTION 'press_drop_item: % was placed in an issue while being deleted', p_item_id;
+  END IF;
 
   -- url_key stays on the row, so its unique index makes the deletion stick:
   -- re-saving the same link to `hw` dedupes against this tombstone rather than
@@ -400,6 +422,28 @@ BEGIN
   SELECT state INTO v_state FROM press_issues WHERE id = p_issue_id FOR UPDATE;
   IF v_state IS NULL THEN
     RAISE EXCEPTION 'press_place_order: no such issue %', p_issue_id;
+  END IF;
+
+  -- Read the key AGAIN, now that the issue is locked. The first lookup is
+  -- unlocked, so two callers carrying the same key — a client timeout and its
+  -- retry, or two taps on the approval link — can both miss it and both get
+  -- here. Whichever loses the lock would otherwise find the issue already
+  -- 'approved' and be refused as "not locked", which reports a *successful*
+  -- order as a configuration error and invites someone to place it by hand.
+  SELECT * INTO v_order FROM press_orders WHERE idempotency_key = p_idempotency_key;
+  IF FOUND THEN
+    RETURN v_order;
+  END IF;
+
+  -- 'approved' with no job id is a claim whose Lulu call never came back. It
+  -- is retryable — createPrintJob carries the same idempotency key, so Lulu
+  -- collapses it if the job did in fact land. Without this the issue is
+  -- wedged: reopen refuses (lulu_job_id is set), and ordering refuses (not
+  -- closed), so nothing can move it in either direction ever again.
+  IF v_state = 'approved' AND EXISTS (
+    SELECT 1 FROM press_issues WHERE id = p_issue_id AND lulu_job_id = 'pending'
+  ) THEN
+    v_state := 'closed';
   END IF;
 
   IF v_state IN ('closed', 'rejected') THEN

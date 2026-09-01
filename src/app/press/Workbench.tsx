@@ -35,6 +35,7 @@ import {
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { Lock, LockOpen, Plus, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { readJson } from './readJson'
 import { ArticleRow, articleLabel } from './ArticleRow'
 import { PoolPanel } from './PoolPanel'
 import { OrdersPanel } from './OrdersPanel'
@@ -103,8 +104,47 @@ export function Workbench(props: Props) {
   const router = useRouter()
   const [, startTransition] = useTransition()
 
+  /**
+   * What the server last agreed to for THIS issue, so a rejected drag can be
+   * put back.
+   *
+   * Was a `useRef` seeded from `props.issues[0]`, which is evaluated once and
+   * never re-based when the rail selection changes. Selecting a different
+   * issue and then having a commit fail wrote the *first* issue's article list
+   * into the selected issue's panel — a composition that had never existed,
+   * and which the next drag would then POST as though it were real.
+   *
+   * Keyed by issue number, and cleared whenever the server re-seeds.
+   */
+  const committedRef = useRef<{ number: number; contents: PoolItem[]; pool: PoolItem[] } | null>(null)
+
   const [issues, setIssues] = useState(props.issues)
   const [pool, setPool] = useState(props.pool)
+
+  /**
+   * Re-seed from the server whenever it hands us a new answer.
+   *
+   * `useState(props.x)` reads its initializer once. Every `router.refresh()` —
+   * after opening an issue, locking one, deleting from the pool, retrying a
+   * failed extraction — re-renders the server component and passes fresh
+   * props that this component was then ignoring. The visible effect was that
+   * those actions all appeared to do nothing: a new issue could not be
+   * selected because it was not in the list, and a locked issue kept offering
+   * Lock. Worse, `failed`/`skipped` were passed straight through and *did*
+   * update, so retrying an article made it leave one pile and never arrive in
+   * the other.
+   *
+   * Keyed on identity, not a deep compare: Next gives us new arrays only when
+   * the server actually re-rendered, which is precisely when we want to yield
+   * to it.
+   */
+  const seeded = useRef({ issues: props.issues, pool: props.pool })
+  if (seeded.current.issues !== props.issues || seeded.current.pool !== props.pool) {
+    seeded.current = { issues: props.issues, pool: props.pool }
+    setIssues(props.issues)
+    setPool(props.pool)
+    committedRef.current = null
+  }
   const [selected, setSelected] = useState<number | null>(props.issues[0]?.number ?? null)
   const [tab, setTab] = useState<'pool' | 'orders' | 'settings'>('pool')
   const [railFilter, setRailFilter] = useState<RailFilter>('all')
@@ -120,8 +160,16 @@ export function Workbench(props: Props) {
     [issues, selected],
   )
 
-  // What the server last agreed to, so a rejected drag can be put back.
-  const committed = useRef({ contents: issue?.contents ?? [], pool: props.pool })
+
+  /** This issue's last agreed state, or the server's latest word on it. */
+  const lastAgreed = (number: number) =>
+    committedRef.current?.number === number
+      ? committedRef.current
+      : { contents: issues.find((i) => i.number === number)?.contents ?? [], pool }
+
+  // `commit` is memoised and must not close over a stale `lastAgreed`.
+  const lastAgreedRef = useRef(lastAgreed)
+  lastAgreedRef.current = lastAgreed
 
   const editable = issue?.state === 'open'
 
@@ -131,51 +179,79 @@ export function Workbench(props: Props) {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
 
+  const commitSeq = useRef(0)
+
   const setIssueContents = useCallback(
-    (number: number, contents: PoolItem[]) =>
+    (number: number, contents: PoolItem[], opts: { dirty?: boolean } = {}) =>
       setIssues((all) =>
         all.map((i) =>
           i.number === number
-            ? { ...i, contents, pages: contents.reduce((n, e) => n + e.pageCount, 0), dirty: true }
+            ? {
+                ...i,
+                contents,
+                pages: contents.reduce((n, e) => n + e.pageCount, 0),
+                // A reverted edit must not leave the issue marked "edited since
+                // the last build" — nothing was edited; the server said no.
+                dirty: opts.dirty ?? true,
+              }
             : i,
         ),
       ),
     [],
   )
 
-  /** State the issue's complete contents. One call, one transaction. */
+  /**
+   * State the issue's complete contents. One call, one transaction.
+   *
+   * Requests carry a sequence number because drags are fire-and-forget: two
+   * quick ones overlap, and if the first response lands second it would write
+   * the older server state over the newer one, leaving the panel disagreeing
+   * with the database until a reload. Only the newest reply is allowed to
+   * write.
+   */
   const commit = useCallback(
     async (number: number, itemIds: string[]) => {
+      const seq = ++commitSeq.current
+      const previous = lastAgreedRef.current(number)
       setBusy(true)
       setError(null)
+
+      const revert = () => {
+        if (seq !== commitSeq.current) return
+        setIssueContents(number, previous.contents, { dirty: false })
+        setPool(previous.pool)
+      }
+
       try {
         const res = await fetch(`/api/press/issue/${number}/contents`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ itemIds }),
         })
-        const body = (await res.json()) as {
+        const body = (await res.json().catch(() => null)) as {
           contents?: PoolItem[]
           pool?: PoolItem[]
           error?: string
-        }
-        if (!res.ok || !body.contents || !body.pool) {
-          setError(body.error ?? 'The edit did not stick.')
-          setIssueContents(number, committed.current.contents)
-          setPool(committed.current.pool)
+        } | null
+
+        if (!res.ok || !body?.contents || !body?.pool) {
+          if (seq === commitSeq.current) setError(body?.error ?? 'The edit did not stick.')
+          revert()
           return false
         }
-        committed.current = { contents: body.contents, pool: body.pool }
+        // A superseded reply is correct but stale; dropping it is the point.
+        if (seq !== commitSeq.current) return true
+
+        committedRef.current = { number, contents: body.contents, pool: body.pool }
         setIssueContents(number, body.contents)
         setPool(body.pool)
         return true
       } catch (err) {
-        setError((err as Error).message)
-        setIssueContents(number, committed.current.contents)
-        setPool(committed.current.pool)
+        if (seq === commitSeq.current) setError((err as Error).message)
+        revert()
         return false
       } finally {
-        setBusy(false)
+        if (seq === commitSeq.current) setBusy(false)
       }
     },
     [setIssueContents],
@@ -186,6 +262,29 @@ export function Workbench(props: Props) {
     setDragging(pool.find((p) => p.id === id) ?? issue?.contents.find((c) => c.id === id) ?? null)
   }
 
+  /**
+   * Where did it land?
+   *
+   * Comparing `over.id` to the container ids directly is not enough: with
+   * `pointerWithin`, dropping onto a populated list resolves to the nearest
+   * *row*, not the container. So an article dragged out of an issue onto a
+   * non-empty pool reported `over.id` = some pool item, missed the `'pool'`
+   * branch, fell through to the reorder branch and silently did nothing — and
+   * a pool item dropped back onto the pool reported the same thing, missed
+   * nothing, and got appended to the issue. dnd-kit records the owning
+   * SortableContext on each sortable, which is the question actually being
+   * asked.
+   */
+  const containerOf = (over: DragEndEvent['over']): 'issue' | 'pool' | null => {
+    if (!over) return null
+    if (over.id === 'issue' || over.id === 'pool') return over.id
+    const owner = over.data.current?.sortable?.containerId
+    if (owner === 'issue' || owner === 'pool') return owner
+    // A sortable we do not recognise: treat it as "nowhere" rather than
+    // guessing, because every guess here moves an article.
+    return null
+  }
+
   const onDragEnd = (event: DragEndEvent) => {
     setDragging(null)
     const { active, over } = event
@@ -193,14 +292,17 @@ export function Workbench(props: Props) {
 
     const activeId = String(active.id)
     const overId = String(over.id)
+    const target = containerOf(over)
+    if (target === null) return
+
     const contents = issue.contents
     const fromIssue = contents.findIndex((e) => e.id === activeId)
     const fromPool = pool.find((p) => p.id === activeId)
 
-    // Out of the issue and back to the pool. Nothing is destroyed — the article
-    // returns to where it came from, and deleting it is a separate decision
-    // made there.
-    if (fromIssue !== -1 && overId === 'pool') {
+    // Out of the issue and back to the pool. Nothing is destroyed — the
+    // article returns to where it came from, and deleting it is a separate
+    // decision made there.
+    if (fromIssue !== -1 && target === 'pool') {
       const next = contents.filter((e) => e.id !== activeId)
       setIssueContents(issue.number, next)
       setPool((p) => [contents[fromIssue], ...p])
@@ -208,8 +310,12 @@ export function Workbench(props: Props) {
       return
     }
 
+    // Picked up in the pool and put down in the pool: the pool has no order,
+    // so this is a cancelled drag, not an edit.
+    if (fromPool && target === 'pool') return
+
     // Into the issue, at the row it was dropped on, or at the end.
-    if (fromPool) {
+    if (fromPool && target === 'issue') {
       const at = contents.findIndex((e) => e.id === overId)
       const next = [...contents]
       next.splice(at === -1 ? next.length : at, 0, fromPool)
@@ -220,7 +326,7 @@ export function Workbench(props: Props) {
     }
 
     // A reorder within the issue.
-    if (fromIssue !== -1) {
+    if (fromIssue !== -1 && target === 'issue') {
       const to = contents.findIndex((e) => e.id === overId)
       if (to === -1 || to === fromIssue) return
       const next = arrayMove(contents, fromIssue, to)
@@ -236,7 +342,7 @@ export function Workbench(props: Props) {
     setError(null)
     try {
       const res = await fetch('/api/press/issue', { method: 'POST' })
-      const body = (await res.json()) as { number?: number; error?: string }
+      const body = await readJson<{ number: number }>(res)
       if (!res.ok || body.number === undefined) {
         setError(body.error ?? 'Could not open an issue.')
         return
@@ -383,6 +489,7 @@ export function Workbench(props: Props) {
               >
                 {t}
                 {t === 'pool' && ` · ${pool.length}`}
+
               </button>
             ))}
           </div>
@@ -515,7 +622,7 @@ function IssuePanel({
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'unlock' }),
       })
-      const body = (await res.json()) as { error?: string }
+      const body = await readJson(res)
       if (!res.ok) onError(body.error ?? 'Could not unlock.')
       else onRefresh()
     } finally {
@@ -613,7 +720,7 @@ function IssuePanel({
         ref={setNodeRef}
         className={`rounded-lg border ${isOver ? 'border-foreground border-dashed' : ''}`}
       >
-        <SortableContext items={issue.contents.map((e) => e.id)} strategy={verticalListSortingStrategy}>
+        <SortableContext id="issue" items={issue.contents.map((e) => e.id)} strategy={verticalListSortingStrategy}>
           <ol className="divide-y">
             {issue.contents.map((entry, i) => (
               <ArticleRow key={entry.id} item={entry} index={i + 1} draggable={editable} />

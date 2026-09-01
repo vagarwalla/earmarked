@@ -19,6 +19,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { pressDb, recordEvent } from './db'
+import { loadEffectiveSettings } from './settings-db'
 import { createLuluClient, isRejected, isShipped, type LuluClient, type ShippingAddress } from './lulu'
 import type { PressIssue } from './types'
 
@@ -141,6 +142,20 @@ export async function listOrders(db: SupabaseClient = pressDb()): Promise<OrderW
  * Lulu has forgotten, or a sandbox job after a switch to live, would otherwise
  * freeze the whole panel.
  */
+/**
+ * Is this order the issue's print run, or an extra copy?
+ *
+ * The print run is the one whose key the issue recorded when it was claimed.
+ * idempotencyKeyFor gives a reorder a distinct, time-stamped key precisely so
+ * this question has an answer.
+ */
+export function isPrintRun(order: Pick<PressOrder, 'idempotency_key' | 'issue_id'> & {
+  issue_idempotency_key?: string | null
+}): boolean {
+  // A reorder's key carries a `-copy-` segment; the print run's never does.
+  return !order.idempotency_key.includes('-copy-')
+}
+
 export async function refreshOrders(
   db: SupabaseClient = pressDb(),
   lulu?: LuluClient,
@@ -148,7 +163,12 @@ export async function refreshOrders(
   const open = (await listOrders(db)).filter((o) => !isFinished(o) && o.lulu_job_id && o.lulu_job_id !== 'pending')
   if (open.length === 0) return { refreshed: 0, errors: [] }
 
-  const client = lulu ?? createLuluClient()
+  // The same settings the order was PLACED with. createLuluClient() alone
+  // falls back to the environment, and press_settings.lulu_sandbox is
+  // authoritative over it — so an env that says live and a row that says
+  // sandbox would place jobs on one host and look for them on the other,
+  // 404ing on every poll while the order sat at CREATED forever.
+  const client = lulu ?? createLuluClient({ settings: await loadEffectiveSettings(db) })
   const errors: string[] = []
   let refreshed = 0
 
@@ -166,21 +186,27 @@ export async function refreshOrders(
         },
         db,
       )
-      // The issue follows its first order to shipped; extra copies do not
-      // move it, because it was already there.
-      if (isShipped(job)) {
-        await db
-          .from('press_issues')
-          .update({ state: 'shipped', shipped_at: new Date().toISOString(), lulu_status: job.status })
-          .eq('id', order.issue_id)
-          .eq('state', 'ordered')
-      }
-      if (isRejected(job)) {
-        await db
-          .from('press_issues')
-          .update({ state: 'rejected', rejection_reason: job.message, lulu_status: job.status })
-          .eq('id', order.issue_id)
-          .in('state', ['approved', 'ordered'])
+      // Only the issue's OWN order moves the issue. An extra copy is a
+      // separate purchase of something already printed: if Lulu refuses its
+      // files, that says nothing about the issue, and letting it flip the
+      // issue to `rejected` would both lie in the UI and — because the shipped
+      // transition below is gated on state 'ordered' — strand the real print
+      // run short of `shipped`, so archiveIssue would never file the raindrops.
+      if (isPrintRun(order)) {
+        if (isShipped(job)) {
+          await db
+            .from('press_issues')
+            .update({ state: 'shipped', shipped_at: new Date().toISOString(), lulu_status: job.status })
+            .eq('id', order.issue_id)
+            .eq('state', 'ordered')
+        }
+        if (isRejected(job)) {
+          await db
+            .from('press_issues')
+            .update({ state: 'rejected', rejection_reason: job.message, lulu_status: job.status })
+            .eq('id', order.issue_id)
+            .in('state', ['approved', 'ordered'])
+        }
       }
       refreshed += 1
     } catch (err) {

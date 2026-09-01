@@ -22,6 +22,7 @@
 
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { readJson } from './readJson'
 import type { PressSettingsRow } from '@/lib/press/settings-db'
 
 export interface SettingsProps {
@@ -80,7 +81,7 @@ export function SettingsPanel({
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(draft),
       })
-      const body = (await res.json()) as { error?: string; hasShipping?: boolean }
+      const body = await readJson<{ hasShipping: boolean }>(res)
       if (!res.ok) {
         onError(body.error ?? 'Could not save.')
         return
@@ -188,9 +189,13 @@ export function SettingsPanel({
           />
         </label>
 
-        {/* The one control in this app that decides whether money moves, so it
-            is a labelled pair of choices rather than a checkbox you can leave
-            ambiguous, and it says what it means in words. */}
+        {/* This is NOT the control that decides whether money moves, and it
+            must not be dressed as one. The Lulu credentials in the environment
+            are production credentials, and Lulu's sandbox host 401s against
+            them — so a "safe" sandbox order does not spend nothing, it fails.
+            The guard is PRESS_ORDER_ENABLED, which is an environment variable
+            precisely so it cannot be flipped from the screen that presses the
+            button. See 08ff4e8. */}
         <fieldset className="mt-3">
           <legend className="text-muted-foreground text-xs">Environment</legend>
           <div className="mt-1 flex gap-2">
@@ -214,8 +219,14 @@ export function SettingsPanel({
           </div>
           <p className="text-muted-foreground mt-1.5 text-xs">
             {draft.lulu_sandbox
-              ? 'Sandbox — orders are placed against Lulu’s test API and nothing is charged.'
-              : 'Live — approving an order will charge the card on your Lulu account.'}
+              ? 'Sandbox — orders go to Lulu’s test host. Note the credentials on file are production ones, which the sandbox host rejects, so this is likely to fail rather than to be free.'
+              : 'Live — orders go to Lulu proper.'}
+          </p>
+          <p className="text-muted-foreground mt-2 text-xs">
+            Neither setting is what stops a charge.{' '}
+            <code className="bg-muted rounded px-1 py-0.5">PRESS_ORDER_ENABLED=1</code> is required
+            before any order is placed at all, and it lives in the environment so it cannot be
+            turned on from this form.
           </p>
         </fieldset>
       </section>
