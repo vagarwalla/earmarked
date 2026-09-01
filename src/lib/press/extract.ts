@@ -355,6 +355,7 @@ function looksLikeOneNote(el: Element): boolean {
  */
 export function extractFootnotes(root: Element): ArticleFootnote[] {
   const matches = safeQueryAll(root, FOOTNOTE_CONTAINER)
+  let fromContainers: ArticleFootnote[] = []
 
   if (matches.length) {
     // Some themes lay the apparatus out as a grid and the parse nests one note
@@ -377,23 +378,31 @@ export function extractFootnotes(root: Element): ArticleFootnote[] {
       pushNotes(notes, candidates)
     }
     for (const container of outermost) container.remove()
-    if (notes.length) return notes
+    fromContainers = notes
   }
 
   // A "Notes" heading followed by an ordered list, for sources that mark the
   // apparatus no other way (the EA Forum does exactly this).
+  //
+  // This runs even when the containers already yielded notes, and that is the
+  // point: the readability pass can leave a *second*, flattened copy of the
+  // same apparatus in its output. Returning early here printed the EA Forum's
+  // note twice — once as notes, once as a "Notes" list at the end of the body.
+  const fromHeading: ArticleFootnote[] = []
   for (const heading of safeQueryAll(root, 'h1, h2, h3, h4, h5, h6')) {
     if (!NOTES_HEADING.test(textOf(heading))) continue
     const list = heading.nextElementSibling
     if (!list || list.tagName !== 'OL') continue
-    const notes: ArticleFootnote[] = []
-    pushNotes(notes, safeQueryAll(list, ':scope > li'))
+    pushNotes(fromHeading, safeQueryAll(list, ':scope > li'))
     heading.remove()
     list.remove()
-    return notes
+    break
   }
 
-  return []
+  // The container pass reads the source markup, so its numbering is the real
+  // one; the heading pass is a fallback and, when both fire, a duplicate that
+  // has now been removed from the tree either way.
+  return fromContainers.length ? fromContainers : fromHeading
 }
 
 /** Read a run of note elements into `notes`, skipping any that come out empty. */

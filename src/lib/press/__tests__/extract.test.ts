@@ -810,6 +810,22 @@ describe('extractFootnotes', () => {
     expect(extractFootnotes(el)).toEqual([])
   })
 
+  it('removes a second, flattened copy of the same apparatus', () => {
+    // The readability pass can leave both the real markup and a "Notes"
+    // heading plus list of the same notes. Keeping the marked-up ones is
+    // right; leaving the flattened copy in the body printed them twice.
+    const el = root(`
+      <p>Body.<sup>1</sup></p>
+      <div class="footnotes"><ol><li id="fn1">The real note.</li></ol></div>
+      <h2>Notes</h2>
+      <ol><li>The real note.</li></ol>`)
+    const notes = extractFootnotes(el)
+    expect(notes).toEqual([{ marker: '1', html: 'The real note.' }])
+    expect(el.querySelector('h2')).toBeNull()
+    expect(el.querySelector('ol')).toBeNull()
+    expect(toBlocks(el).blocks).toHaveLength(1)
+  })
+
   it('returns nothing for an article with no apparatus', () => {
     expect(extractFootnotes(root('<p>Just prose.</p>'))).toEqual([])
   })
