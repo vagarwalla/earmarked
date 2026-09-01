@@ -704,7 +704,9 @@ function IssuePanel({
         </div>
       </div>
 
-      <PrintSpec packageId={packageId} pageCount={issue.pageTotal} />
+      {/* The built count is the true one; before a build, the draft's measured
+          pages are the best estimate of how thick it will be. */}
+      <PrintSpec packageId={packageId} pageCount={issue.pageTotal || issue.pages} />
 
       {issue.state === 'rejected' && (
         <p className="border-destructive/50 text-destructive mb-3 border-l-2 py-1 pl-3 text-xs">
