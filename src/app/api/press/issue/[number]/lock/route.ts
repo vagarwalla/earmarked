@@ -21,6 +21,7 @@
 import { NextResponse } from 'next/server'
 import { reviewSource } from '@/lib/press/review'
 import { itemsForIssue } from '@/lib/press/db'
+import { localItems, mirrorOrder, publishBuild } from '@/lib/press/handoff'
 import { issueByNumber, lockIssue, unlockIssue } from '@/lib/press/workbench'
 import { loadEffectiveSettings } from '@/lib/press/settings-db'
 import { NOT_FOUND, asResponse, issueNumber, pressUiEnabled } from '../../../_lib/guard'
@@ -68,6 +69,22 @@ export async function POST(request: Request, context: { params: Promise<{ number
       )
     }
 
+    // The renderer reads `.press/items/<id>/`, where the id is the raindrop id
+    // and not the UUID Postgres uses. `localItems` is that translation, and it
+    // says up front which articles this machine has no text for rather than
+    // failing on the first one, four minutes in.
+    const { build, missing } = localItems(items)
+    if (missing.length) {
+      return NextResponse.json(
+        {
+          error:
+            `No extracted text on this machine for ${missing.map((t) => `“${t}”`).join(', ')}. ` +
+            'Run npm run press:sync and try again.',
+        },
+        { status: 409 },
+      )
+    }
+
     const settings = await loadEffectiveSettings()
     const { BuildBusyError, BuildError, buildIssue, withBuildLock } = await import('@/lib/press/build')
 
@@ -84,15 +101,14 @@ export async function POST(request: Request, context: { params: Promise<{ number
         }
 
         try {
+          // The disk follows the website, as in `press-sync`'s pull, so that
+          // what is frozen here and what a later sync sees are one issue.
+          await mirrorOrder(number, build.map((i) => i.id))
+
           const result = await withBuildLock(() =>
             buildIssue({
               number,
-              items: items.map((i) => ({
-                id: i.id,
-                title: i.title ?? i.url ?? i.id,
-                url: i.url ?? '',
-                pageCount: i.page_count ?? 0,
-              })),
+              items: build,
               apiKey: settings.anthropicApiKey,
               // The name is frozen at lock (plan question 3): a draft may be
               // renamed freely, by Haiku or by hand, and stops moving here.
@@ -103,6 +119,11 @@ export async function POST(request: Request, context: { params: Promise<{ number
 
           // Only now: a lock whose render failed would freeze contents against
           // PDFs that do not match them, which is the trap this avoids.
+          await publishBuild(issue, {
+            name: result.name,
+            pageCount: result.pageCount,
+            itemIds: items.map((i) => i.id),
+          })
           await lockIssue(issue.id, result.pageCount)
           send({
             done: {
