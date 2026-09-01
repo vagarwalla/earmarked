@@ -49,7 +49,7 @@ What the original got wrong about its own starting point, and what has changed:
 | The edit routes are local-only | `/api/press/issue/[number]` already has a Supabase branch (`applyRemote`) |
 | `.press/` retires; `local.ts` / `issues.ts` go away | Both are alive and load-bearing. `review.ts` and `remote.ts` were added *beside* them |
 | Question 2: does `/press` need auth? | **Still open.** `c7869e9` built the middleware, but `PRESS_PASSWORD` is not set anywhere — and unset means open, by that file's own design. The lock exists and is not engaged |
-| Question 1: is anything running on its own? | The Fly worker is deployed and polling. See "The thing to check first" |
+| Question 1: is anything running on its own? | **No.** `press-worker` has never existed on Fly — `flyctl apps list` shows one unrelated app. Nothing has ever run on its own |
 
 The migration this plan needs — `013_press_workbench.sql` — is **already
 committed**, having been swept into `d1d7d6c` by accident. It has not been
@@ -76,30 +76,35 @@ Item states in Postgres right now: 17 `laid_out` and unplaced (the pool), 12
 `in_issue` on issue 1, 3 `failed`, 1 `skipped`. Issue 1 is `open`, named "Moral
 Seriousness and Doubt", 106 pages, built, with a `built_order` recorded.
 
-### The thing to check first
+### Nothing has ever run on its own — checked
 
-**Postgres held zero press rows until the import ran.** The worker has been
-deployed and polling the whole time. Those two facts do not fit together: a
-worker that was successfully polling Raindrop and extracting would have filled
-`press_items` weeks ago.
+Postgres held zero press rows until the import ran, which did not fit "the
+worker is deployed and polling". It does not fit because it was not true:
+`flyctl apps list` shows one app on the account, `vagarwalla-games`. **The
+`press-worker` app has never been created.** `worker/`, its Dockerfile and its
+fly.toml are all written, and none of it has ever been deployed.
 
-So before any of the below, find out what the worker is actually doing —
-`fly logs -a press-worker`. There are three possibilities and they lead
-different places:
+Three consequences, and they simplify the plan rather than complicating it:
 
-- **It is erroring on every tick.** Then it has never worked, "deployed and
-  polling" is deployed and failing, and the sequencing problem below is not
-  real — nothing is running to break.
-- **It is running and finding nothing**, because `RAINDROP_COLLECTION_ID` on
-  Fly points somewhere else, or the cursor in `press_cursors` is ahead of the
-  saves. Then it works and has simply had nothing to do, and every word of the
-  sequencing problem applies.
-- **It is not running at all.** Then the honest phase 1 ends with a
-  **Sync from Raindrop** button rather than a deploy, and the worker section
-  below is much smaller than it looks.
+- **The sequencing problem was imaginary.** Migration 013 removes
+  `press_bootstrap_issue`, and the worry was that a running worker would break
+  on it, or worse keep running and sweep the pool into an open issue. There is
+  no running worker. 013 was safe to apply the moment it was written, and has
+  been applied.
+- **The pool was never at risk.** `assignToOpenIssue` has never executed
+  against this database.
+- **Phase 1 does not end with a deploy.** It ends with a command you type. That
+  was the third possibility this section originally offered, and it is the one
+  that turned out to be true.
 
-This plan assumes the second. If it turns out to be the first or third, the
-work shrinks; nothing in it becomes wrong.
+Which leaves a question the original plan never had to ask: **is the worker
+worth deploying at all?** `press-sync` already does the round trip — pull the
+running order, poll Raindrop, build, push back — from the machine that can
+render, which the worker fundamentally cannot do without carrying Chromium.
+What the worker would add is that it happens while you are asleep. What it
+costs is a Fly app, its secrets, and ~$2–3/month for a machine that must never
+auto-stop. Not obviously worth it for a magazine you assemble by hand every few
+weeks; worth revisiting if the pool starts going stale between sessions.
 
 ---
 
@@ -544,10 +549,11 @@ raindrop.
 
 Answered since, and folded in above:
 
-1. **Does anything still run on its own?** The Fly worker is deployed and
-   polling — which is why 013 cannot be applied before it is redeployed. But
-   Postgres was empty until the import ran, so verify this before trusting it:
-   see "The thing to check first".
+1. **Does anything still run on its own?** No — `press-worker` was never
+   deployed, so nothing ever has. See "Nothing has ever run on its own". The
+   worker code is narrowed as §8 describes and is ready to deploy if you ever
+   want it; whether it is worth an always-on machine is now an open question
+   rather than an assumption.
 2. **Where does this live?** *Half solved.* `src/middleware.ts` implements the
    password and the matcher covers every workbench route — but `PRESS_PASSWORD`
    is not set, and that file treats unset as "open" on purpose. So `/press` is
