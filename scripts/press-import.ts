@@ -194,6 +194,16 @@ async function main(): Promise<void> {
     }
     issueIdByNumber.set(number, issueId)
 
+    // Clear the running order before the item pass writes the new one.
+    // `press_items_issue_position_uniq` is per (issue_id, position), and the
+    // item pass sets positions one row at a time — so any issue whose order
+    // changed since the last import passes through a state where two rows hold
+    // the same slot, and the import dies partway with a constraint error. The
+    // app's own `press_set_issue_order` defers the constraint to COMMIT for
+    // exactly this reason; a script making one statement at a time cannot, so
+    // it empties the slots first. NULL positions do not collide.
+    if (!DRY) await db.from('press_items').update({ position: null }).eq('issue_id', issueId)
+
     // Storage paths key off the issue's UUID, so they can only be written once
     // the row exists.
     const paths: Record<string, string | null> = {}
@@ -214,10 +224,16 @@ async function main(): Promise<void> {
     if (meta?.articles?.length) {
       const { data: rows } = await db
         .from('press_items')
-        .select('id,raindrop_id')
+        .select('id,raindrop_id,content_path')
         .eq('issue_id', issueId)
+      // Keyed on `content_path`, which is `items/<local id>/…`, and not on
+      // `raindrop_id`: a piece fetched from a linkpost has no drop id, so an
+      // issue containing one matched nothing here, `built_order` was left
+      // empty, and the website called a current issue stale for ever.
       const idByLocal = new Map(
-        ((rows ?? []) as { id: string; raindrop_id: string | null }[]).map((r) => [r.raindrop_id, r.id]),
+        ((rows ?? []) as { id: string; raindrop_id: string | null; content_path: string | null }[]).map(
+          (r) => [r.content_path?.match(/^items\/([^/]+)\//)?.[1] ?? r.raindrop_id, r.id],
+        ),
       )
       const builtOrder = meta.articles
         .map((a) => idByLocal.get(a.id))
@@ -279,13 +295,19 @@ async function main(): Promise<void> {
 
     const { data: existing } = await db
       .from('press_items')
-      .select('id')
+      .select('id,state')
       .eq(match.column, match.value)
       .maybeSingle()
 
     if (existing) {
       const id = (existing as { id: string }).id
-      const { error } = await db.from('press_items').update(row).eq('id', id)
+      // `dropped` is the website's word and the disk has none for it, so this
+      // row's `laid_out` would put an article deleted for good back in the pool
+      // — the one delete in the product, quietly undone by a sync. The rest of
+      // the row still lands; only the state is left alone.
+      const was = (existing as { state: string }).state
+      const patch = was === 'dropped' ? { ...row, state: 'dropped' as const } : row
+      const { error } = await db.from('press_items').update(patch).eq('id', id)
       if (error) throw new Error(`item ${item.id}: ${error.message}`)
       remoteId.set(item.id, id)
     } else {
