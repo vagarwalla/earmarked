@@ -60,6 +60,17 @@ If that returns rows with `wordcount` and `reaction_count`, it works. Watch for
 publications that verify but do not qualify: short-form dailies, link digests,
 and abandoned Substack stubs that redirect elsewhere.
 
+A custom domain says nothing either way — plenty of Substacks sit behind one,
+and the `www.` prefix decides it: `broadstreet.blog` answers the archive call
+with a 301, `www.broadstreet.blog` answers with JSON. Always `curl -L`.
+
+Checked and **not** on Substack, so out of reach until something grows a second
+fetcher — they were named repeatedly by the topic sweeps, so the answer is worth
+recording rather than rediscovering: `asteriskmag.com`, `worksinprogress.co`
+(distinct from the `www.worksinprogress.news` newsletter, which is configured),
+`mattlakeman.org`, `pseudoerasmus.com`, `danwang.co`, `aeon.co`. Most expose a
+sitemap, which is how they have been enumerated by hand so far.
+
 ## How a post is scored
 
 ```
