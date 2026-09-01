@@ -96,7 +96,25 @@ BEGIN
 END;
 $$;
 
-DROP FUNCTION IF EXISTS press_bootstrap_issue();
+-- press_bootstrap_issue is not dropped, it is made to refuse.
+--
+-- Dropping it would break the deployed worker with "function does not exist",
+-- which is an obscure way to learn that you forgot to redeploy. Leaving it
+-- working would be worse: assignToOpenIssue would go on sweeping every
+-- laid_out item into whichever issue is open, which is precisely the behaviour
+-- the pool exists to stop, and it would do it silently.
+--
+-- So it raises. A worker running the old code fails on its first call — at
+-- boot, before it can touch anything — and says why. A crashed worker moves
+-- no articles.
+CREATE OR REPLACE FUNCTION press_bootstrap_issue()
+RETURNS press_issues
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RAISE EXCEPTION 'press_bootstrap_issue was removed by migration 013: this worker is running pre-workbench code and would sweep the pool into an open issue. Deploy worker/ from the workbench branch.';
+END;
+$$;
 
 -- press_skip_issue reassigned a declined issue's items to "the open issue".
 -- There may now be none, or several. They go to the pool, which is where an

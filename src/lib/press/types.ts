@@ -99,6 +99,13 @@ export type ItemState =
   | 'failed'
   /** Deliberately excluded — a reference page, not reading. Reason recorded. */
   | 'skipped'
+  /**
+   * Deleted from the pool on purpose (013). The row survives as a tombstone so
+   * `url_key`'s unique index makes the deletion stick: re-saving the same link
+   * dedupes against it rather than resurrecting it. The raindrop itself lives
+   * on in a "Not printing" collection, which is the undo.
+   */
+  | 'dropped'
 
 export interface PressItem {
   id: string
@@ -168,14 +175,16 @@ export interface PressIssue {
 export const ITEM_TRANSITIONS: Record<ItemState, readonly ItemState[]> = {
   queued: ['extracted', 'failed'],
   extracted: ['laid_out', 'failed'],
-  laid_out: ['in_issue', 'failed', 'skipped'],
+  laid_out: ['in_issue', 'failed', 'skipped', 'dropped'],
   // An issue that is skipped puts its items back to laid_out (see press_skip_issue).
   in_issue: ['printed', 'laid_out', 'failed'],
   printed: [],
   // A failure can be retried from the top.
   failed: ['queued'],
   // Un-skipping returns a reference page to the pool; the call was always V's.
-  skipped: ['laid_out'],
+  skipped: ['laid_out', 'dropped'],
+  // Permanent. Recovery is the raindrop in "Not printing", not this row.
+  dropped: [],
 }
 
 export const ISSUE_TRANSITIONS: Record<IssueState, readonly IssueState[]> = {
