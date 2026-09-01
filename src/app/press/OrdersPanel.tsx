@@ -10,6 +10,14 @@
  * snapshotted at order time — editing Settings must not rewrite the history of
  * what was already sent.
  *
+ * Rows that went to Lulu in one job are shown as one entry. The charge is per
+ * job — that is the whole reason for bundling — so a flat list would report a
+ * parcel as two orders of about half the price each and leave the reader to
+ * work out that one delivery is coming. The rows themselves are untouched:
+ * everything downstream of an order is still per issue, and each issue keeps
+ * its own status line inside the group, because Lulu validates each interior
+ * separately and one refused line does not make the job a failure.
+ *
  * Refresh is here as well as on the worker's poll, because most of this
  * pipeline has only ever run by hand.
  */
@@ -18,7 +26,7 @@ import { useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { readJson } from './readJson'
-import { formatMoney, isFinished, type OrderWithIssue } from '@/lib/press/orders'
+import { formatMoney, groupByBundle, isFinished, type OrderWithIssue } from '@/lib/press/orders'
 
 /** Lulu's own words, softened into the reader's without losing the meaning. */
 const STATUS_LABEL: Record<string, string> = {
@@ -77,11 +85,14 @@ export function OrdersPanel({
     )
   }
 
+  const groups = groupByBundle(orders)
+
   return (
     <div>
       <div className="mb-2 flex items-center justify-between">
         <span className="text-muted-foreground text-xs">
           {orders.length} order{orders.length === 1 ? '' : 's'}
+          {groups.length !== orders.length && ` in ${groups.length} job${groups.length === 1 ? '' : 's'}`}
         </span>
         <Button size="xs" variant="ghost" disabled={busy} onClick={() => void refresh()}>
           <RefreshCw data-icon="inline-start" />
@@ -90,36 +101,67 @@ export function OrdersPanel({
       </div>
 
       <ul className="divide-y rounded-lg border">
-        {orders.map((order) => (
-          <li key={order.id} className="px-3 py-2.5">
-            <div className="flex items-baseline gap-2">
-              <span className="min-w-0 flex-1 truncate font-serif text-sm">
-                {order.issue_name ?? `Issue ${order.issue_number}`}
-              </span>
-              <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
-                {formatMoney(order.cost_cents, order.currency)}
-              </span>
-            </div>
-            <div className="text-muted-foreground mt-0.5 flex flex-wrap items-baseline gap-x-2 text-xs">
-              <span>#{order.issue_number}</span>
-              <span className={isFinished(order) ? '' : 'text-foreground'}>
-                {STATUS_LABEL[order.status] ?? order.status}
-              </span>
-              {order.quantity > 1 && <span>{order.quantity} copies</span>}
-              <span>{order.placed_at.slice(0, 10)}</span>
-            </div>
-            {order.message && <p className="text-muted-foreground mt-1 text-xs">{order.message}</p>}
-            {order.tracking_urls.length > 0 && (
-              <p className="mt-1 flex flex-wrap gap-2 text-xs">
-                {order.tracking_urls.map((url, i) => (
-                  <a key={url} href={url} target="_blank" rel="noreferrer" className="underline">
-                    Track{order.tracking_urls.length > 1 ? ` ${i + 1}` : ''}
-                  </a>
+        {groups.map((group) => {
+          const bundled = group.orders.length > 1
+          // One parcel, so one set of tracking links however many issues are
+          // in it; a line that carries its own is preferred where it does.
+          const tracking = [...new Set(group.orders.flatMap((o) => o.tracking_urls))]
+          return (
+            <li key={group.key} className="px-3 py-2.5">
+              {bundled && (
+                <div className="mb-1.5 flex items-baseline gap-2">
+                  <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
+                    One job · {group.orders.length} issues · one parcel
+                  </span>
+                  <span className="shrink-0 text-xs tabular-nums">
+                    {formatMoney(group.totalCents, group.currency)}
+                  </span>
+                </div>
+              )}
+              <ul className={bundled ? 'space-y-1.5 border-l pl-2.5' : ''}>
+                {group.orders.map((order) => (
+                  <li key={order.id}>
+                    <div className="flex items-baseline gap-2">
+                      <span className="min-w-0 flex-1 truncate font-serif text-sm">
+                        {order.issue_name ?? `Issue ${order.issue_number}`}
+                      </span>
+                      <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
+                        {formatMoney(order.cost_cents, order.currency)}
+                      </span>
+                    </div>
+                    <div className="text-muted-foreground mt-0.5 flex flex-wrap items-baseline gap-x-2 text-xs">
+                      <span>#{order.issue_number}</span>
+                      {/* The job's status, except where this issue's own line
+                          was refused: a bundle's job status covers the parcel
+                          and says nothing about which interior Lulu rejected,
+                          and a refused issue must not read as "Printing"
+                          because the issue beside it is. */}
+                      <span className={isFinished(order) ? '' : 'text-foreground'}>
+                        {order.line_item_status === 'REJECTED'
+                          ? STATUS_LABEL.REJECTED
+                          : (STATUS_LABEL[order.status] ?? order.status)}
+                      </span>
+                      {order.quantity > 1 && <span>{order.quantity} copies</span>}
+                      <span>{order.placed_at.slice(0, 10)}</span>
+                    </div>
+                    {order.message && (
+                      <p className="text-muted-foreground mt-1 text-xs">{order.message}</p>
+                    )}
+                  </li>
                 ))}
-              </p>
-            )}
-          </li>
-        ))}
+              </ul>
+              {tracking.length > 0 && (
+                <p className="mt-1 flex flex-wrap gap-2 text-xs">
+                  {tracking.map((url, i) => (
+                    <a key={url} href={url} target="_blank" rel="noreferrer" className="underline">
+                      Track{tracking.length > 1 ? ` ${i + 1}` : ''}
+                    </a>
+                  ))}
+                </p>
+              )}
+            </li>
+          )
+        })}
         {orders.length === 0 && (
           <li className="text-muted-foreground px-4 py-8 text-center text-xs">
             Nothing ordered yet.

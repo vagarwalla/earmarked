@@ -20,6 +20,15 @@ const COPY: Record<string, { title: string; body: string; cta: string }> = {
     body: 'This places a single-copy order with Lulu and mails it to you. It cannot be undone once the printer picks it up.',
     cta: 'Print it',
   },
+  /**
+   * A bundle is one job and one decision. There is no half of it to confirm,
+   * so the page says what the whole parcel is before the button is pressed.
+   */
+  'approve-bundle': {
+    title: 'Print these issues?',
+    body: 'This places ONE order with Lulu carrying all of them in a single parcel — which is what makes it cheaper than ordering them one at a time. It cannot be undone once the printer picks it up.',
+    cta: 'Print them',
+  },
   skip: {
     title: 'Skip this issue?',
     body: 'Every article goes back into the issue that is currently filling. Nothing is lost and nothing is printed.',
@@ -55,17 +64,26 @@ export default async function ConfirmPage({ params }: { params: Promise<{ token:
     )
   }
 
-  const issue = await getIssue(lookup.token.issue_id)
-  const copy = COPY[lookup.token.action] ?? COPY.approve
+  // Every issue the link acts on, which for everything but a bundle is the
+  // one it has always been. Read here rather than in the button because this
+  // page is the last description of what is about to be bought.
+  const issueIds = lookup.token.issue_ids?.length ? lookup.token.issue_ids : [lookup.token.issue_id]
+  const issues = (await Promise.all(issueIds.map((id) => getIssue(id)))).filter((i) => i !== null)
+  const bundled = lookup.token.action === 'approve' && issues.length > 1
+  const copy = (bundled ? COPY['approve-bundle'] : COPY[lookup.token.action]) ?? COPY.approve
 
   return (
     <Shell title={copy.title}>
-      {issue && (
-        <p className="text-muted-foreground mb-4 text-sm">
-          Issue {issue.number}
-          {issue.name ? ` — ${issue.name}` : ''}
-          {issue.page_total ? ` · ${issue.page_total} pages` : ''}
-        </p>
+      {issues.length > 0 && (
+        <ul className="text-muted-foreground mb-4 space-y-0.5 text-sm">
+          {issues.map((issue) => (
+            <li key={issue.id}>
+              Issue {issue.number}
+              {issue.name ? ` — ${issue.name}` : ''}
+              {issue.page_total ? ` · ${issue.page_total} pages` : ''}
+            </li>
+          ))}
+        </ul>
       )}
       <p className="mb-6 text-sm">{copy.body}</p>
       <ConfirmButton token={token} label={copy.cta} />

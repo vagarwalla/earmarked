@@ -16,6 +16,7 @@ import {
   generateToken,
   tokensEqual,
   issueActionTokens,
+  issueBundleTokens,
   inspectToken,
   claimToken,
   approvalHtml,
@@ -23,7 +24,13 @@ import {
   sendMail,
   TOKEN_TTL_DAYS,
 } from '../approval'
-import { bundleKeyFor, performApproval, performBundledApproval, rowKeyFor } from '../order'
+import {
+  approveBundleByIds,
+  bundleKeyFor,
+  performApproval,
+  performBundledApproval,
+  rowKeyFor,
+} from '../order'
 import type { PressSettings } from '../settings'
 import { allocateQuote } from '../types'
 import type { PressIssue, PrintQuote, TocEntry } from '../types'
@@ -284,8 +291,18 @@ function tokenDb() {
       b.select = () => b
       b.eq = (col: string, val: string) => {
         if (col === 'token_hash') hash = val
-        if (patch && col === 'issue_id') {
-          for (const row of rows.values()) if (row.issue_id === val && !row.used_at) row.used_at = patch.used_at
+        return b
+      }
+      // Expiry matches the array, like the real query: a bundle's token is
+      // stored against its first issue and has to be invalidated by any
+      // member of it.
+      b.contains = (col: string, vals: string[]) => {
+        if (patch && col === 'issue_ids') {
+          for (const row of rows.values()) {
+            if (!row.used_at && (row.issue_ids as string[]).some((id) => vals.includes(id))) {
+              row.used_at = patch.used_at
+            }
+          }
         }
         return b
       }
@@ -343,6 +360,80 @@ describe('issueActionTokens', () => {
     const row = db.rows.get(hashToken(tok.token))!
     const days = (new Date(String(row.expires_at)).getTime() - now.getTime()) / 86_400_000
     expect(days).toBeCloseTo(TOKEN_TTL_DAYS, 5)
+  })
+})
+
+describe('issueBundleTokens', () => {
+  it('mints ONE approve link for the whole bundle, naming every issue in it', async () => {
+    const db = tokenDb()
+    const [tok] = await issueBundleTokens(['iss3', 'iss4'], ['approve'], {
+      db: db.client,
+      settings: settings(),
+    })
+    const row = db.rows.get(hashToken(tok.token))!
+    expect(row.issue_ids).toEqual(['iss3', 'iss4'])
+    // The lead issue, for the foreign key and the confirmation page.
+    expect(row.issue_id).toBe('iss3')
+    expect(row.action).toBe('approve')
+  })
+
+  /**
+   * A link that would order issue 4 on its own, left alive alongside one that
+   * orders 3 and 4 together, is a double purchase of issue 4: the two carry
+   * different idempotency keys, so nothing downstream collapses them.
+   */
+  it('expires an outstanding single-issue link for any issue it swallows', async () => {
+    const db = tokenDb()
+    const [single] = await issueActionTokens('iss4', [{ action: 'approve' }], {
+      db: db.client,
+      settings: settings(),
+    })
+    await issueBundleTokens(['iss3', 'iss4'], ['approve'], { db: db.client, settings: settings() })
+    expect(await inspectToken(single.token, { db: db.client })).toMatchObject({ ok: false, reason: 'used' })
+  })
+
+  /** And the reverse: re-composing a member must kill the bundle's link too. */
+  it('is expired by a fresh approval for any issue it covers, not just the first', async () => {
+    const db = tokenDb()
+    const [bundle] = await issueBundleTokens(['iss3', 'iss4'], ['approve'], {
+      db: db.client,
+      settings: settings(),
+    })
+    await issueActionTokens('iss4', [{ action: 'approve' }], { db: db.client, settings: settings() })
+    expect(await inspectToken(bundle.token, { db: db.client })).toMatchObject({ ok: false, reason: 'used' })
+  })
+
+  it('spends once, however many issues it carries', async () => {
+    const db = tokenDb()
+    const [tok] = await issueBundleTokens(['iss3', 'iss4'], ['approve'], {
+      db: db.client,
+      settings: settings(),
+    })
+    expect(await claimToken(tok.token, { db: db.client })).toMatchObject({ ok: true })
+    expect(await claimToken(tok.token, { db: db.client })).toMatchObject({ ok: false, reason: 'used' })
+  })
+
+  it('refuses to mint a link for no issues at all', async () => {
+    await expect(
+      issueBundleTokens([], ['approve'], { db: tokenDb().client, settings: settings() }),
+    ).rejects.toThrow(/at least one issue/)
+  })
+
+  /**
+   * A bundle of one is one issue, and keeps the link it has always had. Every
+   * token in the email has to survive the mint: expiring per action would have
+   * the second kill the first.
+   */
+  it('keeps the skip link for a bundle of one, without spending the approve link', async () => {
+    const db = tokenDb()
+    const tokens = await issueBundleTokens(['iss3'], ['approve', 'skip'], {
+      db: db.client,
+      settings: settings(),
+    })
+    expect(tokens.map((t) => t.action)).toEqual(['approve', 'skip'])
+    for (const token of tokens) {
+      expect(await inspectToken(token.token, { db: db.client })).toMatchObject({ ok: true })
+    }
   })
 })
 
@@ -469,7 +560,8 @@ describe('sendMail', () => {
  * row, which is what makes a second copy of a shipped issue expressible at
  * all. These fakes therefore have to answer for three tables rather than one.
  */
-function orderDb(opts: { issueState?: string; address?: boolean } = {}) {
+function orderDb(opts: { issueState?: string; address?: boolean; missing?: string[] } = {}) {
+  const missing = new Set(opts.missing ?? [])
   const orders = new Map<string, Record<string, unknown>>()
   const updates: Record<string, unknown>[] = []
   const events: string[] = []
@@ -502,8 +594,13 @@ function orderDb(opts: { issueState?: string; address?: boolean } = {}) {
     from(table: string) {
       const b: Record<string, unknown> = {}
       let patch: Record<string, unknown> | null = null
+      // Which row was asked for. A bundle reads several issues by id, and a
+      // fake that answered with the same one every time would agree with any
+      // bug that confused them.
+      let asked: string | null = null
       b.select = () => b
       b.eq = (column?: string, value?: unknown) => {
+        if (column === 'id' && !patch) asked = String(value)
         if (patch) {
           updates.push({ ...patch, ...(column ? { [`eq_${column}`]: value } : {}) })
           if (table === 'press_issues' && patch.state) states.set(String(value), String(patch.state))
@@ -535,7 +632,12 @@ function orderDb(opts: { issueState?: string; address?: boolean } = {}) {
       b.single = async () => ({ data: null, error: null })
       b.maybeSingle = async () => {
         if (table === 'press_settings') return { data: settingsRow, error: null }
-        return { data: { ...issue(), state: stateOf('iss1') }, error: null }
+        const id = asked ?? 'iss1'
+        if (missing.has(id)) return { data: null, error: null }
+        return {
+          data: { ...issue({ id, number: id === 'iss1' ? 3 : 4 }), state: stateOf(id) },
+          error: null,
+        }
       }
       b.then = (r: (v: unknown) => unknown) =>
         Promise.resolve({ data: table === 'press_orders' ? [...orders.values()] : [], error: null }).then(r)
@@ -952,5 +1054,42 @@ describe('lineFor', () => {
   it('falls back to position where Lulu echoed no id back', () => {
     const job = printJob('CREATED', ['CREATED', 'REJECTED'])
     expect(lineFor(job, 'row-b', 1)?.status).toBe('REJECTED')
+  })
+})
+
+describe('approveBundleByIds', () => {
+  /**
+   * The flag that the confirmation link derives, and the one that decides
+   * whether an issue's state machine advances or is left alone. A bundle
+   * holding one fresh issue is not a reorder however many printed ones it is
+   * sent alongside: the fresh issue has to advance, and a `-copy-` key would
+   * make a re-drive order it a second time rather than collapse onto the first.
+   */
+  it('treats a bundle holding one unprinted issue as the print run', async () => {
+    const db = orderDb()
+    const lulu = fakeLulu()
+    await approveBundleByIds(['iss1', 'iss2'], { db: db.client, lulu: lulu.client })
+    const keys = [...db.orders.values()].map((r) => String(r.idempotency_key))
+    expect(keys.every((k) => !k.includes('-copy-'))).toBe(true)
+    expect(db.stateOf('iss1')).toBe('ordered')
+  })
+
+  it('treats a bundle of already-printed issues as extra copies', async () => {
+    const db = orderDb({ issueState: 'shipped' })
+    const lulu = fakeLulu()
+    await approveBundleByIds(['iss1', 'iss2'], { db: db.client, lulu: lulu.client })
+    const keys = [...db.orders.values()].map((r) => String(r.idempotency_key))
+    expect(keys.every((k) => k.includes('-copy-'))).toBe(true)
+    // A second copy says nothing about the issue, which stays shipped.
+    expect(db.stateOf('iss1')).toBe('shipped')
+  })
+
+  it('refuses the parcel rather than ordering what is left of it', async () => {
+    const db = orderDb({ missing: ['iss2'] })
+    const lulu = fakeLulu()
+    const result = await approveBundleByIds(['iss1', 'iss2'], { db: db.client, lulu: lulu.client })
+    expect(result.ok).toBe(false)
+    expect(lulu.created).toHaveLength(0)
+    expect(db.orders.size).toBe(0)
   })
 })

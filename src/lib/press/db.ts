@@ -417,12 +417,21 @@ export async function recordEvent(event: NewEvent, db: SupabaseClient = pressDb(
 // ── Action tokens (U6) ───────────────────────────────────────────────────────
 
 export async function storeActionToken(
-  token: { token_hash: string; issue_id: string; action: ActionKind; item_id?: string | null; expires_at: string },
+  token: {
+    token_hash: string
+    issue_id: string
+    /** Every issue the link acts on. Defaults to the one in `issue_id`. */
+    issue_ids?: string[]
+    action: ActionKind
+    item_id?: string | null
+    expires_at: string
+  },
   db: SupabaseClient = pressDb(),
 ): Promise<void> {
   const { error } = await db.from('press_action_tokens').insert({
     token_hash: token.token_hash,
     issue_id: token.issue_id,
+    issue_ids: token.issue_ids ?? [token.issue_id],
     action: token.action,
     item_id: token.item_id ?? null,
     expires_at: token.expires_at,
@@ -454,12 +463,20 @@ export async function consumeActionToken(
   return (res.data as ActionToken) ?? null
 }
 
-/** Invalidate every outstanding token for an issue (after a recompose). */
+/**
+ * Invalidate every outstanding token for an issue (after a recompose).
+ *
+ * Matched on `issue_ids`, not `issue_id`: a bundle's link is stored against
+ * the first issue in it, and matching the scalar column would leave a link
+ * that orders issues 3 and 4 alive after issue 4 was re-composed — or, worse,
+ * alongside a fresh link that orders issue 4 on its own. The two carry
+ * different idempotency keys, so following both buys issue 4 twice.
+ */
 export async function expireIssueTokens(issueId: string, db: SupabaseClient = pressDb()): Promise<void> {
   const { error } = await db
     .from('press_action_tokens')
     .update({ used_at: new Date().toISOString() })
-    .eq('issue_id', issueId)
+    .contains('issue_ids', [issueId])
     .is('used_at', null)
   if (error) throw new Error(`press/db: expireIssueTokens: ${error.message}`)
 }
