@@ -199,11 +199,22 @@ export function Workbench(props: Props) {
   )
 
 
-  /** This issue's last agreed state, or the server's latest word on it. */
+  /**
+   * This issue's last agreed state, or the server's latest word on it.
+   *
+   * The fallback reads `seeded`, not the live lists. `committedRef` is cleared
+   * on every re-seed, so between a refresh and the first successful commit the
+   * live lists are whatever the last optimistic edit made them — and a second
+   * edit that failed would then "revert" to a composition the server had
+   * already rejected, which the next drag would POST as though it were real.
+   */
   const lastAgreed = (number: number) =>
     committedRef.current?.number === number
       ? committedRef.current
-      : { contents: issues.find((i) => i.number === number)?.contents ?? [], pool }
+      : {
+          contents: seeded.current.issues.find((i) => i.number === number)?.contents ?? [],
+          pool: seeded.current.pool,
+        }
 
   // `commit` is memoised and must not close over a stale `lastAgreed`.
   const lastAgreedRef = useRef(lastAgreed)
@@ -348,6 +359,12 @@ export function Workbench(props: Props) {
     setDragging(null)
     const { active, over } = event
     if (!over || !issue || !editable) return
+    // Every button is disabled while a build runs; a drag must be too. Moving
+    // an article out mid-lock would freeze the issue against PDFs rendered from
+    // the contents it had a minute ago — the exact trap the lock route composes
+    // first to avoid. Not `locked`: that includes a commit in flight, and two
+    // quick drags in a row are meant to work.
+    if (working !== null) return
 
     const activeId = String(active.id)
     const overId = String(over.id)
@@ -701,11 +718,13 @@ export function Workbench(props: Props) {
 
           {tab === 'issue' && (
             <div>
+              {/* `busy`, not `locked`: opening an issue is not an edit to the
+                  one being built, and a four-minute rebuild should not stop it. */}
               <Button
                 variant="outline"
                 className="w-full justify-start"
                 onClick={() => void newIssue()}
-                disabled={locked}
+                disabled={busy}
               >
                 <Plus data-icon="inline-start" />
                 New issue

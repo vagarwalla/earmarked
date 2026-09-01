@@ -30,7 +30,6 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { pressDb, putObject, storagePath, updateIssue } from './db'
 import { withStateLock } from './issues'
-import { recordBuiltOrder } from './remote'
 import type { PressItem } from './types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -59,12 +58,28 @@ export interface LocalItems {
  * build. Better to know before Chromium starts: they are returned separately
  * so the caller can refuse the whole build and say which ones to sync.
  */
+/**
+ * The id this disk knows an article by.
+ *
+ * `content_path` is `items/<local id>/article.json`, and `press-import` writes
+ * it from the id the local pipeline used — which is the raindrop id only when
+ * the article came from Raindrop. A piece fetched from a linkpost is minted as
+ * `lp-…` with no raindrop id at all (scripts/press-run.ts), and an article that
+ * arrived by email has none either. Keying on `raindrop_id` alone would refuse
+ * to build any issue containing one, permanently, with a message telling you to
+ * run a sync that cannot fix it.
+ */
+function localIdOf(item: PressItem): string | null {
+  const fromPath = item.content_path?.match(/^items\/([^/]+)\/article\.json$/)
+  return fromPath ? fromPath[1] : item.raindrop_id || null
+}
+
 export function localItems(items: PressItem[]): LocalItems {
   const build: BuildItem[] = []
   const missing: string[] = []
 
   for (const item of items) {
-    const localId = item.raindrop_id
+    const localId = localIdOf(item)
     const name = item.title ?? item.url ?? item.id
     if (!localId || !existsSync(path.join(PRESS_ROOT, 'items', localId, 'article.json'))) {
       missing.push(name)
@@ -118,7 +133,16 @@ export async function publishBuild(
   db: SupabaseClient = pressDb(),
 ): Promise<void> {
   const dir = path.join(PRESS_ROOT, `issue-${issue.number}`)
-  const patch: Record<string, unknown> = { name: result.name, page_total: result.pageCount }
+  // `built_order` travels in the same statement as the paths it describes, and
+  // not in a second call: an update that set `interior_path` and then failed
+  // before recording the order would leave the issue reading "out of date"
+  // about PDFs that are exactly current, with another full render as the only
+  // way out.
+  const patch: Record<string, unknown> = {
+    name: result.name,
+    page_total: result.pageCount,
+    built_order: result.itemIds,
+  }
 
   for (const [file, key, at] of [
     ['interior.pdf', 'interior_path', storagePath.interior(issue.id)],
@@ -131,5 +155,4 @@ export async function publishBuild(
   }
 
   await updateIssue(issue.id, patch, db)
-  await recordBuiltOrder(issue.id, result.itemIds, db)
 }

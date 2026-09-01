@@ -51,6 +51,18 @@ export async function POST(request: Request, context: { params: Promise<{ number
       return NextResponse.json({ error: 'bad request' }, { status: 400 })
     }
 
+    // Before anything is rendered: `press_close_issue` refuses a non-draft, but
+    // it is the *last* thing this route calls, so without this the render runs,
+    // the PDFs are published over a locked issue's, and only then does the lock
+    // fail. Two tabs on /press is all it takes — the second still shows the
+    // issue as a draft, because nothing polls.
+    if (issue.state !== 'open') {
+      return NextResponse.json(
+        { error: `Issue ${number} is already ${issue.state === 'closed' ? 'locked' : issue.state}.` },
+        { status: 409 },
+      )
+    }
+
     const items = await itemsForIssue(issue.id)
     if (items.length === 0) {
       return NextResponse.json({ error: 'An empty issue cannot be locked.' }, { status: 409 })
@@ -117,13 +129,23 @@ export async function POST(request: Request, context: { params: Promise<{ number
             }),
           )
 
+          // A Storage failure is named as itself: the PDFs are on disk either
+          // way, and "Lock failed" about a compose that succeeded sends you
+          // looking at the renderer instead of at Storage.
+          try {
+            await publishBuild(issue, {
+              name: result.name,
+              pageCount: result.pageCount,
+              itemIds: items.map((i) => i.id),
+            })
+          } catch (err) {
+            throw new BuildError(
+              `Composed here, but the website was not updated: ${(err as Error).message}`,
+            )
+          }
+
           // Only now: a lock whose render failed would freeze contents against
           // PDFs that do not match them, which is the trap this avoids.
-          await publishBuild(issue, {
-            name: result.name,
-            pageCount: result.pageCount,
-            itemIds: items.map((i) => i.id),
-          })
           await lockIssue(issue.id, result.pageCount)
           send({
             done: {
