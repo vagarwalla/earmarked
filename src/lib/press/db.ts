@@ -57,6 +57,16 @@ const TRACKING_PARAMS = [
   /^igshid$/i,
   /^s$/i, // twitter share token
   /^t$/i,
+  // Substack's email-share tail. Without these the same essay saved by hand
+  // and named by a linkpost normalises to two different keys, and the dedup
+  // that is supposed to make it one article prints it twice. The canonical
+  // Substack URL is /p/<slug>; everything here is redundant with the slug.
+  /^publication_id$/i,
+  /^post_id$/i,
+  /^isFreemail$/i,
+  /^triedRedirect$/i,
+  /^showWelcomeOnShare$/i,
+  /^r$/i,
 ]
 
 /**

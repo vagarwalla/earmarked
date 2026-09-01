@@ -65,6 +65,20 @@ describe('what counts as chrome', () => {
     expect(isChrome('https://thezvi.substack.com/p/other', 'an older post', 'thezvi.substack.com')).toBe(true)
   })
 
+  it('keeps a pointer at another publication on the same platform', () => {
+    // The bug this covers: matching substack.com by suffix made every
+    // cross-Substack pointer chrome, which is most of what a roundup of
+    // Substack writers points at.
+    expect(isChrome('https://scottsumner.substack.com/p/virginia-woolf-on-writing', 'Virginia Woolf on writing', 'thezvi.substack.com')).toBe(false)
+    expect(isChrome('https://nabeelqu.substack.com/p/what-makes-art-great', 'What makes text into great art', 'thezvi.substack.com')).toBe(false)
+  })
+
+  it('still drops the platform itself, and plumbing on a publication', () => {
+    expect(isChrome('https://substack.com/home', 'Substack', 'thezvi.substack.com')).toBe(true)
+    expect(isChrome('https://other.substack.com/subscribe', 'Subscribe', 'thezvi.substack.com')).toBe(true)
+    expect(isChrome('https://other.substack.com/archive', 'Archive', 'thezvi.substack.com')).toBe(true)
+  })
+
   it('keeps a pointer at somebody else with real anchor text', () => {
     expect(isChrome('https://joecarlsmith.com/on-sincerity', 'On sincerity', 'thezvi.substack.com')).toBe(false)
   })
@@ -150,6 +164,22 @@ describe('deciding what is worth asking about', () => {
   it('asks about a dense list of pointers at many sites', () => {
     const signals = linkpostSignals(article({ blocks: [filler(200)] }), manyLinks)
     expect(signals.distinctHosts).toBe(8)
+    expect(worthClassifying(signals)).toBe(true)
+  })
+
+  it('asks about a long piece that still points at many different places', () => {
+    // Zvi's "On Writing" posts: thousands of words of commentary threaded
+    // through a dozen pointers. Density, bare pointers and linked headings all
+    // miss it, and the title announces nothing — but eight destinations is
+    // roundup-shaped, and the model should get to say so.
+    const signals = linkpostSignals(
+      article({ title: 'On Writing #3', blocks: [filler(5000)] }),
+      manyLinks.map((l) => link({ ...l, standalone: false, inHeading: false })),
+    )
+    expect(signals.titleSuggests).toBe(false)
+    expect(signals.density).toBeLessThan(0.6)
+    expect(signals.standalone).toBe(0)
+    expect(signals.distinctHosts).toBeGreaterThanOrEqual(6)
     expect(worthClassifying(signals)).toBe(true)
   })
 

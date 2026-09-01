@@ -57,6 +57,17 @@ function fakeDb(opts: {
 // ── normalizeUrl ─────────────────────────────────────────────────────────────
 
 describe('normalizeUrl', () => {
+  it('strips the tail Substack puts on a link shared from an email', () => {
+    // Without this the same essay saved by hand and named by a linkpost
+    // normalises to two keys, and the dedup meant to make it one article
+    // prints it twice.
+    expect(
+      normalizeUrl(
+        'https://www.astralcodexten.com/p/half-a-month-of-consolation-writing?utm_source=post-email-title&publication_id=89120&post_id=1234&isFreemail=true&r=abc',
+      ),
+    ).toBe(normalizeUrl('https://www.astralcodexten.com/p/half-a-month-of-consolation-writing'))
+  })
+
   it('collapses the ways the same article gets saved', () => {
     const key = normalizeUrl('https://www.example.com/a-piece/')
     expect(normalizeUrl('http://example.com/a-piece')).toBe(key)

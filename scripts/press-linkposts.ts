@@ -35,6 +35,11 @@ import type { Article, LinkpostTarget } from '../src/lib/press/types'
 
 const articlePath = (id: string) => path.join(PRESS_ROOT, 'items', id, 'article.json')
 
+/** Space between re-fetches, so a long backlog scan does not trip a rate limiter. */
+const FETCH_SPACING_MS = 1500
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
 /** States worth asking about: something that is, or could still be, printed. */
 const SCANNABLE = new Set<StateItem['state']>(['laid_out', 'printed', 'skipped'])
 
@@ -55,6 +60,13 @@ function linkpostChildId(url: string): string {
 }
 
 /**
+ * A re-fetch that failed for a reason that may not fail next time — a rate
+ * limit, a 5xx, a dropped connection. Distinguished from a dead page because
+ * the two deserve opposite treatment: a 404 is an answer, a 429 is "later".
+ */
+class RetryableFetchError extends Error {}
+
+/**
  * The outbound links of a page as it stands today.
  *
  * Deliberately not `extractFromUrl`: that would re-download every image and
@@ -63,7 +75,16 @@ function linkpostChildId(url: string): string {
  * defuddle cannot read is often one Readability can.
  */
 async function linksFor(url: string): Promise<OutboundLink[]> {
-  const response = await safeFetchText(url)
+  let response
+  try {
+    response = await safeFetchText(url)
+  } catch (err) {
+    // A transport failure never reached the page; it says nothing about it.
+    throw new RetryableFetchError((err as Error).message)
+  }
+  if (response.status === 429 || response.status >= 500) {
+    throw new RetryableFetchError(`HTTP ${response.status}`)
+  }
   if (response.status >= 400) throw new Error(`HTTP ${response.status}`)
   const rung = extractWithDefuddle(response.text, url) ?? extractWithReadability(response.text, url)
   if (!rung) throw new Error('no rung could read the page')
@@ -113,10 +134,15 @@ async function main(): Promise<void> {
   const known = new Set(all.map((i) => normalizeUrl(i.url)).filter((k): k is string => Boolean(k)))
 
   let found = 0
+  let pending = 0
 
   for (const [n, item] of candidates.entries()) {
     const label = `[${String(n + 1).padStart(2)}/${candidates.length}]`
     const name = item.title ?? item.url
+
+    // Substack rate-limits a burst of reads from one address, and a 429 here
+    // costs a whole article's classification. A backlog scan is not in a hurry.
+    if (n > 0) await delay(FETCH_SPACING_MS)
 
     const article = await loadArticle(item.id)
     if (!article) {
@@ -128,10 +154,17 @@ async function main(): Promise<void> {
     try {
       links = await linksFor(item.url)
     } catch (err) {
-      // Answered "no" for now rather than left pending: a dead link would
-      // otherwise be re-fetched on every run forever. `--force` re-asks.
-      decided.set(item.id, { isLinkpost: false })
-      console.log(`${label} ✗  ${name}\n           could not re-fetch: ${(err as Error).message}`)
+      // A dead page is answered "no" rather than left pending, or it would be
+      // re-fetched on every run forever. A rate limit is left pending on
+      // purpose: recording it as "not a linkpost" would bury a roundup behind
+      // a transient 429 until someone thought to run --force.
+      if (err instanceof RetryableFetchError) {
+        pending++
+        console.log(`${label} ~  ${name}\n           ${err.message} — leaving unscanned, will retry next run`)
+      } else {
+        decided.set(item.id, { isLinkpost: false })
+        console.log(`${label} ✗  ${name}\n           could not re-fetch: ${(err as Error).message}`)
+      }
       continue
     }
 
@@ -192,6 +225,7 @@ async function main(): Promise<void> {
 
   if (dry) {
     console.log(`\n[dry] ${found} linkpost${found === 1 ? '' : 's'}, ${discovered.length} pieces would be queued`)
+    if (pending > 0) console.log(`[dry] ${pending} left unscanned after a retryable failure`)
     console.log('[dry] nothing was written — drop --dry-run to apply')
     return
   }
@@ -210,6 +244,9 @@ async function main(): Promise<void> {
   })
 
   console.log(`\n${found} linkpost${found === 1 ? '' : 's'} found, ${discovered.length} pieces queued`)
+  if (pending > 0) {
+    console.log(`${pending} left unscanned after a retryable failure — run again to pick them up`)
+  }
   if (discovered.length > 0) {
     console.log('run `npx tsx scripts/press-run.ts` to extract them')
   }

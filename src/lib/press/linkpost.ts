@@ -47,9 +47,22 @@ const MIN_ANCHOR_WORDS = 2
 // different purpose. One definition, because "what counts as chrome" is a
 // judgement that should not drift between two callers.
 
+/**
+ * Hosts that are chrome at the apex but not on a subdomain.
+ *
+ * `substack.com` is navigation — the app, the reader, the subscribe flow. But
+ * `<publication>.substack.com` is a publication, and a roundup of Substack
+ * writers points almost entirely at those. Matching this by suffix threw away
+ * the pointers and kept the furniture, which is backwards for a magazine built
+ * out of Substack reading. Plumbing on those subdomains is caught by
+ * CHROME_PATHS (/subscribe, /account, /archive), and a link back into the
+ * publication you are already reading is caught by the `host === sourceHost`
+ * check.
+ */
+export const CHROME_HOSTS_APEX = ['substack.com']
+
 /** Hosts that are navigation, subscription plumbing, or sharing — never the point. */
 export const CHROME_HOSTS = [
-  'substack.com',
   'substackcdn.com',
   'twitter.com',
   'x.com',
@@ -96,6 +109,7 @@ export function isChrome(url: string, text: string, sourceHost: string): boolean
   }
   const host = parsed.hostname.replace(/^www\./, '')
   if (host === sourceHost) return true
+  if (CHROME_HOSTS_APEX.includes(host)) return true
   if (CHROME_HOSTS.some((h) => host === h || host.endsWith(`.${h}`))) return true
   if (CHROME_PATHS.some((re) => re.test(parsed.pathname))) return true
   if (CHROME_TEXT.some((re) => re.test(text))) return true
@@ -262,6 +276,13 @@ export function worthClassifying(signals: LinkpostSignals): boolean {
   if (signals.density >= 0.6) return true
   if (signals.standalone >= 4) return true
   if (signals.inHeadings >= 3) return true
+  // Many different destinations is roundup-shaped however much prose surrounds
+  // them. Zvi's "On Writing" posts are the case this exists for: thousands of
+  // words of commentary threaded through a dozen pointers, so the density and
+  // bare-pointer routes both miss, and the title announces nothing. An essay
+  // with a citation habit cites a handful of places repeatedly; it does not
+  // send you to twelve.
+  if (signals.distinctHosts >= 6) return true
   if (signals.titleSuggests && signals.outbound >= MIN_OUTBOUND) return true
   return false
 }
