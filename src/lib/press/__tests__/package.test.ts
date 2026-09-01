@@ -9,7 +9,7 @@ describe('describePackage', () => {
       colour: 'Full colour',
       quality: 'Standard',
       binding: 'Perfect bound',
-      paper: '80# coated white (444 ppi)',
+      paper: '60# uncoated white (444 ppi)',
       coverFinish: 'Gloss laminate',
       raw: LULU_PACKAGE_ID,
     })

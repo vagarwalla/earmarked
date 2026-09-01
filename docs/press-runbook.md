@@ -58,7 +58,7 @@ these in Vercel, in `fly secrets`, and in a local `.env.local`.
 |---|---|
 | `LULU_CLIENT_KEY` / `LULU_CLIENT_SECRET` | Lulu OAuth client credentials |
 | `LULU_SANDBOX` | Defaults to sandbox. **Only `false` reaches production** — a misconfigured environment cannot spend money by accident. |
-| `LULU_PACKAGE_ID` | Defaults to `0700X1000.FC.STD.PB.080CW444.GXX` (7×10, perfect bound, 80# coated, standard colour, glossy cover) |
+| `LULU_PACKAGE_ID` | Defaults to `0700X1000.FC.STD.PB.060UW444.GXX` (7×10, perfect bound, 60# uncoated white, standard colour, glossy cover) |
 | `PRESS_SHIP_NAME`, `PRESS_SHIP_STREET1`, `PRESS_SHIP_STREET2`, `PRESS_SHIP_CITY`, `PRESS_SHIP_STATE`, `PRESS_SHIP_POSTCODE`, `PRESS_SHIP_COUNTRY`, `PRESS_SHIP_PHONE` | Shipping address. A *partial* address is treated as no address — approval refuses with `not-configured` rather than failing later at Lulu. |
 
 ### Approval links (Vercel + worker)
