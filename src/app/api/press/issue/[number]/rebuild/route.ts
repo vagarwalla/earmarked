@@ -36,9 +36,6 @@ export const dynamic = 'force-dynamic'
  * the one route. Deployed, this route answers 501 in a few milliseconds.
  */
 
-/** The states whose PDFs are what somebody is about to print, or has printed. */
-const FIXED = ['approved', 'ordered', 'shipped']
-
 export async function POST(
   _request: Request,
   context: { params: Promise<{ number: string }> },
@@ -49,27 +46,35 @@ export async function POST(
   const number = issueNumber(raw)
   if (number === null) return NextResponse.json({ error: 'bad issue' }, { status: 400 })
 
+  // Rendering an issue is minutes of headless Chromium. It does not fit a
+  // serverless function, and the 93MB of browser it would drag along puts the
+  // whole route over the deploy size limit — so deployed, this is honestly a
+  // 501, before the two queries below and in the few milliseconds the comment
+  // above promises.
+  if (reviewSource() === 'supabase') {
+    return NextResponse.json(
+      { error: 'Rebuilding needs a machine with a browser. Run press-run locally, then re-import.' },
+      { status: 501 },
+    )
+  }
+
   try {
     const issue = await issueByNumber(number)
     if (!issue) return NextResponse.json({ error: 'no such issue' }, { status: 404 })
-    if (FIXED.includes(issue.state)) {
-      return NextResponse.json({ error: 'That issue has been printed.' }, { status: 409 })
+    // Only a draft. A locked issue's PDFs are what its contents were frozen
+    // against and what an order hands Lulu; re-rendering over them from a
+    // second tab that still thinks the issue is open would replace the exact
+    // objects a signed URL is pointing at.
+    if (issue.state !== 'open') {
+      return NextResponse.json(
+        { error: `Issue ${number} is ${issue.state === 'closed' ? 'locked' : issue.state}; unlock it first.` },
+        { status: 409 },
+      )
     }
 
     const items = await itemsForIssue(issue.id)
     if (items.length === 0) {
       return NextResponse.json({ error: 'An empty issue has nothing to render.' }, { status: 409 })
-    }
-
-    // Rendering an issue is minutes of headless Chromium. It does not fit a
-    // serverless function, and the 93MB of browser it would drag along puts the
-    // whole route over the deploy size limit — so deployed, this is honestly a
-    // 501 and the rebuild happens where press-run runs.
-    if (reviewSource() === 'supabase') {
-      return NextResponse.json(
-        { error: 'Rebuilding needs a machine with a browser. Run press-run locally, then re-import.' },
-        { status: 501 },
-      )
     }
 
     // An article that was never extracted on this machine cannot be rendered,
@@ -124,11 +129,20 @@ export async function POST(
 
           // The workbench reads Postgres, so until this lands the page count is
           // the old one and the issue still reads "edited since the last build".
-          await publishBuild(issue, {
-            name: result.name,
-            pageCount: result.pageCount,
-            itemIds: items.map((i) => i.id),
-          })
+          // Its own failure, and named as one: the PDFs are on disk either
+          // way, and "Build failed" about a build that succeeded sends you
+          // looking at the renderer instead of at Storage.
+          try {
+            await publishBuild(issue, {
+              name: result.name,
+              pageCount: result.pageCount,
+              itemIds: items.map((i) => i.id),
+            })
+          } catch (err) {
+            throw new BuildError(
+              `Rebuilt here, but the website was not updated: ${(err as Error).message}`,
+            )
+          }
 
           send({
             done: {

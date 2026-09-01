@@ -169,11 +169,23 @@ async function main(): Promise<void> {
       continue
     }
 
-    const { data: existing } = await db.from('press_issues').select('id').eq('number', number).maybeSingle()
+    const { data: existing } = await db
+      .from('press_issues')
+      .select('id,state')
+      .eq('number', number)
+      .maybeSingle()
     let issueId: string
     if (existing) {
+      const was = (existing as { state: string }).state
       issueId = (existing as { id: string }).id
-      const { error } = await db.from('press_issues').update(row).eq('id', issueId)
+      // Never *demote* a state the website set. An issue locked in the
+      // workbench is `closed` there and still a plain draft on disk — the
+      // local pipeline has no word for locked — so pushing this row's `open`
+      // over it would quietly unlock it, and for an issue already approved or
+      // ordered it would undo a purchase's own record. Only a local `ordered`,
+      // which means a copy was actually bought here, still moves it forward.
+      const patch = was === 'open' || row.state === 'ordered' ? row : { ...row, state: was }
+      const { error } = await db.from('press_issues').update(patch).eq('id', issueId)
       if (error) throw new Error(`issue ${number}: ${error.message}`)
     } else {
       const { data, error } = await db.from('press_issues').insert(row).select('id').single()
