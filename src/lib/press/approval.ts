@@ -111,36 +111,48 @@ export async function issueActionTokens(
  * which is what the action route drives and what expiry matches on. So a
  * recompose of *any* member invalidates the bundle's link, and not just the
  * one that happens to lead it.
+ *
+ * `actions` is how a single-issue email keeps its skip link. Skipping is a
+ * per-issue decision with a per-issue consequence — the articles return to the
+ * issue that is currently filling — so the caller only asks for it where the
+ * bundle is one issue; see the note on `bundleApprovalSubject`.
  */
-export async function issueBundleToken(
+export async function issueBundleTokens(
   issueIds: string[],
+  actions: ActionKind[] = ['approve'],
   deps: { db?: SupabaseClient; settings?: PressSettings; now?: Date } = {},
-): Promise<IssuedToken> {
+): Promise<IssuedToken[]> {
   if (issueIds.length === 0) throw new Error('press/approval: a bundle token needs at least one issue')
 
   const settings = deps.settings ?? loadSettings()
   const now = deps.now ?? new Date()
   const expiresAt = new Date(now.getTime() + TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString()
 
-  // Every member, not just the lead. An outstanding link that would order
-  // issue 4 on its own must not survive alongside one that orders 3 and 4
-  // together: the two carry different idempotency keys, so both being followed
-  // buys issue 4 twice.
+  // Every member, not just the lead: an outstanding link that would order issue
+  // 4 on its own must not survive alongside one that orders 3 and 4 together,
+  // because the two carry different idempotency keys and following both buys
+  // issue 4 twice. And once, before any token is minted — expiring per action
+  // would have each new token kill the one before it, and the email would ship
+  // with a dead button.
   for (const issueId of issueIds) await expireIssueTokens(issueId, deps.db)
 
-  const token = generateToken()
-  await storeActionToken(
-    {
-      token_hash: hashToken(token),
-      issue_id: issueIds[0],
-      issue_ids: issueIds,
-      action: 'approve',
-      item_id: null,
-      expires_at: expiresAt,
-    },
-    deps.db,
-  )
-  return { action: 'approve', itemId: null, token, url: actionUrl(settings.appUrl, token) }
+  const issued: IssuedToken[] = []
+  for (const action of actions) {
+    const token = generateToken()
+    await storeActionToken(
+      {
+        token_hash: hashToken(token),
+        issue_id: issueIds[0],
+        issue_ids: issueIds,
+        action,
+        item_id: null,
+        expires_at: expiresAt,
+      },
+      deps.db,
+    )
+    issued.push({ action, itemId: null, token, url: actionUrl(settings.appUrl, token) })
+  }
+  return issued
 }
 
 export type TokenLookup =
@@ -271,16 +283,20 @@ export interface BundleApprovalEmailInput {
   savingCents: number | null
   quantity: number
   approveUrl: string
+  /** Present only for a bundle of one; see the note below. */
+  skipUrl?: string
 }
 
 /**
- * The email for a bundle carries no skip link, and the omission is deliberate.
+ * An email covering several issues carries no skip link, and the omission is
+ * deliberate.
  *
  * Skipping returns an issue's articles to the next one — a per-issue decision
  * with a per-issue consequence — and a single button that declined three
  * issues at once would be the most destructive thing in the message sitting
  * next to the least. Not ordering a bundle is simply not clicking, and any one
- * issue can still be skipped from its own approval email or the workbench.
+ * issue can still be skipped from its own approval email or the workbench. A
+ * bundle of one is one issue, and keeps the link it has always had.
  */
 export function bundleApprovalSubject(input: BundleApprovalEmailInput): string {
   if (input.issues.length === 1) {
@@ -369,7 +385,11 @@ export function bundleApprovalHtml(input: BundleApprovalEmailInput): string {
   <p style="margin:0 0 8px">
     <a href="${escape(input.approveUrl)}" style="display:inline-block;padding:10px 18px;background:#17171a;color:#fff;text-decoration:none;border-radius:4px">${
       input.issues.length === 1 ? 'Print it' : 'Print them'
-    }</a>
+    }</a>${
+      input.skipUrl
+        ? `\n    <a href="${escape(input.skipUrl)}" style="display:inline-block;padding:10px 18px;color:#777;text-decoration:none">Not this one</a>`
+        : ''
+    }
   </p>
   <p style="margin:16px 0 0;color:#999;font-size:12px">
     Nothing is ordered until you confirm on the page this link opens. It works once, and it

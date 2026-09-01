@@ -16,7 +16,7 @@ import {
   generateToken,
   tokensEqual,
   issueActionTokens,
-  issueBundleToken,
+  issueBundleTokens,
   inspectToken,
   claimToken,
   approvalHtml,
@@ -363,10 +363,13 @@ describe('issueActionTokens', () => {
   })
 })
 
-describe('issueBundleToken', () => {
-  it('mints ONE link for the whole bundle, naming every issue in it', async () => {
+describe('issueBundleTokens', () => {
+  it('mints ONE approve link for the whole bundle, naming every issue in it', async () => {
     const db = tokenDb()
-    const tok = await issueBundleToken(['iss3', 'iss4'], { db: db.client, settings: settings() })
+    const [tok] = await issueBundleTokens(['iss3', 'iss4'], ['approve'], {
+      db: db.client,
+      settings: settings(),
+    })
     const row = db.rows.get(hashToken(tok.token))!
     expect(row.issue_ids).toEqual(['iss3', 'iss4'])
     // The lead issue, for the foreign key and the confirmation page.
@@ -385,29 +388,52 @@ describe('issueBundleToken', () => {
       db: db.client,
       settings: settings(),
     })
-    await issueBundleToken(['iss3', 'iss4'], { db: db.client, settings: settings() })
+    await issueBundleTokens(['iss3', 'iss4'], ['approve'], { db: db.client, settings: settings() })
     expect(await inspectToken(single.token, { db: db.client })).toMatchObject({ ok: false, reason: 'used' })
   })
 
   /** And the reverse: re-composing a member must kill the bundle's link too. */
   it('is expired by a fresh approval for any issue it covers, not just the first', async () => {
     const db = tokenDb()
-    const bundle = await issueBundleToken(['iss3', 'iss4'], { db: db.client, settings: settings() })
+    const [bundle] = await issueBundleTokens(['iss3', 'iss4'], ['approve'], {
+      db: db.client,
+      settings: settings(),
+    })
     await issueActionTokens('iss4', [{ action: 'approve' }], { db: db.client, settings: settings() })
     expect(await inspectToken(bundle.token, { db: db.client })).toMatchObject({ ok: false, reason: 'used' })
   })
 
   it('spends once, however many issues it carries', async () => {
     const db = tokenDb()
-    const tok = await issueBundleToken(['iss3', 'iss4'], { db: db.client, settings: settings() })
+    const [tok] = await issueBundleTokens(['iss3', 'iss4'], ['approve'], {
+      db: db.client,
+      settings: settings(),
+    })
     expect(await claimToken(tok.token, { db: db.client })).toMatchObject({ ok: true })
     expect(await claimToken(tok.token, { db: db.client })).toMatchObject({ ok: false, reason: 'used' })
   })
 
   it('refuses to mint a link for no issues at all', async () => {
-    await expect(issueBundleToken([], { db: tokenDb().client, settings: settings() })).rejects.toThrow(
-      /at least one issue/,
-    )
+    await expect(
+      issueBundleTokens([], ['approve'], { db: tokenDb().client, settings: settings() }),
+    ).rejects.toThrow(/at least one issue/)
+  })
+
+  /**
+   * A bundle of one is one issue, and keeps the link it has always had. Every
+   * token in the email has to survive the mint: expiring per action would have
+   * the second kill the first.
+   */
+  it('keeps the skip link for a bundle of one, without spending the approve link', async () => {
+    const db = tokenDb()
+    const tokens = await issueBundleTokens(['iss3'], ['approve', 'skip'], {
+      db: db.client,
+      settings: settings(),
+    })
+    expect(tokens.map((t) => t.action)).toEqual(['approve', 'skip'])
+    for (const token of tokens) {
+      expect(await inspectToken(token.token, { db: db.client })).toMatchObject({ ok: true })
+    }
   })
 })
 

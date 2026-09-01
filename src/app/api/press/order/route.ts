@@ -35,7 +35,7 @@ import { loadEffectiveSettings } from '@/lib/press/settings-db'
 import { createLuluClient } from '@/lib/press/lulu'
 import { quoteBundle } from '@/lib/press/bundle'
 import { isFinished, ordersForIssue } from '@/lib/press/orders'
-import { issueBundleToken, sendBundleApprovalEmail } from '@/lib/press/approval'
+import { issueBundleTokens, sendBundleApprovalEmail } from '@/lib/press/approval'
 import { LULU_PACKAGE_ID, PRINT_SPEC, type PressIssue, type PressItem } from '@/lib/press/types'
 import { NOT_FOUND, asResponse, pressUiEnabled } from '../_lib/guard'
 
@@ -267,7 +267,18 @@ export async function POST(request: Request) {
 
     // Minted before the email is built, so a failure to issue the token never
     // produces a message with a dead button in it.
-    const approve = await issueBundleToken(issues.map((r) => r.issue.id))
+    //
+    // Skip is offered only where the bundle is one issue. It returns that
+    // issue's articles to the one currently filling — a per-issue act with a
+    // per-issue consequence — and a single button that declined three issues at
+    // once would be the most destructive thing in the message sitting next to
+    // the least. Declining a parcel is simply not clicking.
+    const tokens = await issueBundleTokens(
+      issues.map((r) => r.issue.id),
+      issues.length === 1 ? ['approve', 'skip'] : ['approve'],
+    )
+    const approve = tokens.find((t) => t.action === 'approve')
+    if (!approve) throw new Error('could not issue an approval token')
 
     await sendBundleApprovalEmail(
       issues.map((r) => r.issue.id),
@@ -289,6 +300,7 @@ export async function POST(request: Request) {
         savingCents: priced?.savingCents ?? null,
         quantity: settings.copies,
         approveUrl: approve.url,
+        skipUrl: tokens.find((t) => t.action === 'skip')?.url,
       },
     )
 
