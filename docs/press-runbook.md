@@ -277,3 +277,11 @@ re-asks about everything, `--limit N` takes a bite.
 **Cost control.** `MAX_TARGETS` (12) is a backstop rather than a policy: the
 model is asked for what is actually reading and usually returns a handful, and
 this exists so a pathological roundup cannot turn one save into forty items.
+
+## Filling the pool
+
+The issue is only as good as what it is drawn from, and the reading pool has its
+own harvest: `npm run press:substack -- --collection <id>`, which pages the
+Substack archive API across a configured source list, ranks on engagement, and
+caps each publication so no one voice dominates an issue. Method, endpoints and
+the reasoning behind every threshold: [press-substack.md](./press-substack.md).

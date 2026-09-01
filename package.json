@@ -14,6 +14,7 @@
     "press:import": "node --env-file=.env.local ./node_modules/.bin/tsx scripts/press-import.ts",
     "press:linkposts": "node --env-file=.env.local ./node_modules/.bin/tsx scripts/press-linkposts.ts",
     "press:sync": "node --env-file=.env.local ./node_modules/.bin/tsx scripts/press-sync.ts",
+    "press:substack": "node --env-file=.env.local ./node_modules/.bin/tsx scripts/press-substack.ts",
     "press:order": "node --env-file=.env.local ./node_modules/.bin/tsx scripts/press-order.ts"
   },
   "dependencies": {
