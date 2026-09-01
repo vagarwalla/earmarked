@@ -292,6 +292,27 @@ export function orderBlockers(
 }
 
 /**
+ * A reorder is a copy of something already printed. It is the one case where
+ * an existing order is not a blocker — that is the whole point of it.
+ */
+export function isReorder(state: string): boolean {
+  return state === 'ordered' || state === 'shipped'
+}
+
+/**
+ * The blockers that still stand for another copy of an already-printed issue.
+ *
+ * A shipped issue is not "unlocked" or "already ordered" — it is done, and
+ * ordering another copy of it is a supported thing to want. Everything else
+ * (no address, not built, ordering switched off) applies exactly as before.
+ */
+export function reorderBlockers(blockers: string[]): string[] {
+  return blockers.filter(
+    (b) => !b.startsWith('Lock the issue') && !b.startsWith('An order for this issue'),
+  )
+}
+
+/**
  * Why the bundle cannot be ordered — every issue's reasons, as one list.
  *
  * The all-or-nothing rule is stated here rather than left to the caller: a

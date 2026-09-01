@@ -17,7 +17,7 @@
 
 import { NextResponse } from 'next/server'
 import { itemsForIssue, signedUrl } from '@/lib/press/db'
-import { issueByNumber, orderBlockers } from '@/lib/press/workbench'
+import { isReorder, issueByNumber, orderBlockers, reorderBlockers } from '@/lib/press/workbench'
 import { loadEffectiveSettings } from '@/lib/press/settings-db'
 import { createLuluClient } from '@/lib/press/lulu'
 import { isFinished, ordersForIssue } from '@/lib/press/orders'
@@ -27,14 +27,6 @@ import { NOT_FOUND, asResponse, issueNumber, pressUiEnabled } from '../../../_li
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-
-/**
- * A reorder is a copy of something already printed. It is the one case where
- * an existing order is not a blocker — that is the whole point of it.
- */
-function isReorder(state: string): boolean {
-  return state === 'ordered' || state === 'shipped'
-}
 
 /**
  * The switch that actually stands between this app and a charge.
@@ -71,11 +63,7 @@ export async function GET(_request: Request, context: { params: Promise<{ number
       orderingEnabled: ORDERING_ENABLED,
     })
 
-    // A shipped issue is not "unlocked" or "already ordered" — it is done, and
-    // ordering another copy of it is a supported thing to want.
-    const effectiveBlockers = reorder
-      ? blockers.filter((b) => !b.startsWith('Lock the issue') && !b.startsWith('An order for this issue'))
-      : blockers
+    const effectiveBlockers = reorder ? reorderBlockers(blockers) : blockers
 
     // Only quote when it could actually be bought. A quote needs a real
     // address, and asking Lulu to price an issue you cannot order is a round
@@ -160,9 +148,7 @@ export async function POST(_request: Request, context: { params: Promise<{ numbe
       openOrder: orders.some((o) => !isFinished(o)),
       orderingEnabled: ORDERING_ENABLED,
     })
-    const effectiveBlockers = reorder
-      ? blockers.filter((b) => !b.startsWith('Lock the issue') && !b.startsWith('An order for this issue'))
-      : blockers
+    const effectiveBlockers = reorder ? reorderBlockers(blockers) : blockers
 
     // Re-checked here rather than trusted from the dialog: the page may have
     // been open since before the address was cleared or the issue unlocked.
