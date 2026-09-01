@@ -19,7 +19,16 @@ import {
 
 const inches = (pt: number) => `${(pt / PT_PER_INCH).toFixed(2)} in`
 
-export function PrintSpec({ packageId, pageCount }: { packageId: string; pageCount: number }) {
+export function PrintSpec({
+  packageId,
+  pageCount,
+  estimated = false,
+}: {
+  packageId: string
+  pageCount: number
+  /** The count is the draft's articles, not a rendered PDF — say so. */
+  estimated?: boolean
+}) {
   const spec = describePackage(packageId)
   const spine = pageCount > 0 ? spineWidthPt(pageCount) : null
 
@@ -33,7 +42,7 @@ export function PrintSpec({ packageId, pageCount }: { packageId: string; pageCou
       'Spine',
       spine === null
         ? '—'
-        : `${inches(spine)} at ${pageCount} pages` +
+        : `${inches(spine)} at ${estimated ? 'about ' : ''}${pageCount} pages` +
           (spineTakesText(pageCount)
             ? ' · wide enough for spine text'
             : ` · too narrow for text under ${PRINT_SPEC.minPagesForSpineText} pages`),

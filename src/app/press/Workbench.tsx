@@ -3,13 +3,18 @@
 /**
  * press — the workbench shell.
  *
- * Three panels and one drag context spanning two of them. An article dragged
- * from the pool into the issue, or out of the issue back to the pool, is the
- * same gesture in both directions; the button on an issue row is that second
- * direction without the dragging. All of them end in one call that states the
- * issue's complete contents — because one drag can add, reorder and displace
- * all at once, and sending that as three requests would leave the issue in a
- * shape nobody asked for if the second one failed.
+ * Three columns, and the middle one is the issue. On the left, the issues and
+ * the pool they are made from — one column and one scroll, because an issue is
+ * an arrangement of the pool and dragging between them should not mean crossing
+ * the page. On the right, everything you can *do*: open an issue, fill it,
+ * build it, lock it, order it, and the two panels that are not the issue at all.
+ *
+ * An article dragged from the pool into the issue, or out of the issue back to
+ * the pool, is the same gesture in both directions; the button on an issue row
+ * is that second direction without the dragging. All of them end in one call
+ * that states the issue's complete contents — because one drag can add, reorder
+ * and displace all at once, and sending that as three requests would leave the
+ * issue in a shape nobody asked for if the second one failed.
  *
  * The optimistic update is deliberate: a drag that snaps back on every round
  * trip is unusable. The server owns the truth and the panel reverts to the
@@ -34,7 +39,7 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core'
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { ArrowRight, Lock, LockOpen, Package, Plus, Sparkles } from 'lucide-react'
+import { ArrowLeft, FileText, Lock, LockOpen, Package, Plus, RefreshCw, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { readJson } from './readJson'
 import { ArticleRow, articleLabel } from './ArticleRow'
@@ -163,7 +168,7 @@ export function Workbench(props: Props) {
     committedRef.current = null
   }
   const [selected, setSelected] = useState<number | null>(props.issues[0]?.number ?? null)
-  const [tab, setTab] = useState<'pool' | 'orders' | 'settings'>('pool')
+  const [tab, setTab] = useState<'issue' | 'orders' | 'settings'>('issue')
   const [railFilter, setRailFilter] = useState<RailFilter>('all')
   const [railQuery, setRailQuery] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -434,6 +439,89 @@ export function Workbench(props: Props) {
   const selection = bundle.filter((n) =>
     issues.some((i) => i.number === n && orderable(i.state)),
   )
+  /**
+   * What the issue's buttons are doing, and the line they are streaming.
+   *
+   * Lifted out of the issue panel because the buttons and the progress they
+   * report now live in different columns — the actions on the right, the issue
+   * itself in the middle. `what` is carried alongside the message so only the
+   * button that was pressed says it is working; a single boolean made Lock
+   * announce a rebuild.
+   */
+  const [working, setWorking] = useState<{ what: 'rebuild' | 'lock' | 'unlock'; message: string } | null>(
+    null,
+  )
+
+  /** Lock and rebuild both stream NDJSON, because both are minutes of Chromium. */
+  const stream = async (what: 'rebuild' | 'lock', url: string, body?: object) => {
+    setWorking({ what, message: 'Starting' })
+    setError(null)
+    setNote(null)
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined,
+      })
+      // A refusal — an empty issue, an article this machine cannot render,
+      // nothing to render it with — arrives as JSON, not as a stream.
+      if (!res.ok && res.headers.get('content-type')?.includes('application/json')) {
+        const err = (await res.json()) as { error?: string }
+        setError(err.error ?? 'That did not work.')
+        return
+      }
+      if (!res.body) throw new Error('No response from the builder.')
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+        for (const line of lines) {
+          if (!line.trim()) continue
+          const event = JSON.parse(line) as {
+            progress?: string
+            error?: string
+            done?: { name: string; pageCount: number; preflight: { code: string }[] }
+          }
+          if (event.progress) setWorking({ what, message: event.progress })
+          if (event.error) setError(event.error)
+          if (event.done) {
+            setNote(
+              `“${event.done.name}” — ${event.done.pageCount} pages, preflight ` +
+                `${event.done.preflight.length ? event.done.preflight.map((p) => p.code).join(', ') : 'clean'}`,
+            )
+            refresh()
+          }
+        }
+      }
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setWorking(null)
+    }
+  }
+
+  const unlock = async (number: number) => {
+    setWorking({ what: 'unlock', message: 'Unlocking' })
+    setError(null)
+    try {
+      const res = await fetch(`/api/press/issue/${number}/lock`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'unlock' }),
+      })
+      const body = await readJson(res)
+      if (!res.ok) setError(body.error ?? 'Could not unlock.')
+      else refresh()
+    } finally {
+      setWorking(null)
+    }
+  }
 
   const railIssues = issues
     .filter((i) => inFilter(i.state, railFilter))
@@ -443,6 +531,8 @@ export function Workbench(props: Props) {
         : true,
     )
 
+  const locked = busy || working !== null
+
   return (
     <DndContext
       sensors={sensors}
@@ -450,21 +540,18 @@ export function Workbench(props: Props) {
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
     >
-      <div className="grid gap-4 lg:grid-cols-[15rem_minmax(0,1fr)_24rem]">
-        {/* ── Issues ───────────────────────────────────────────────── */}
-        <aside className="lg:sticky lg:top-6 lg:self-start">
-          <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-muted-foreground text-xs font-medium tracking-wide uppercase">Issues</h2>
-            <Button size="icon-xs" variant="ghost" onClick={() => void newIssue()} disabled={busy} aria-label="New issue">
-              <Plus />
-            </Button>
-          </div>
+      <div className="grid gap-5 lg:grid-cols-[21rem_minmax(0,1fr)_19rem]">
+        {/* ── Issues, and the pool they are made from ──────────────── */}
+        {/* One column, one scroll: an issue is an arrangement of the pool, and
+            dragging between them should not mean crossing the page. */}
+        <aside className="lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto lg:pr-1">
+          <h2 className="text-muted-foreground mb-2 text-xs font-medium tracking-wide uppercase">Issues</h2>
           <input
             value={railQuery}
             onChange={(e) => setRailQuery(e.target.value)}
             placeholder="search…"
             aria-label="Search issues"
-            className="bg-background focus-visible:ring-ring/50 mb-2 w-full rounded-md border px-2 py-1 text-xs focus-visible:ring-3 focus-visible:outline-none"
+            className="bg-background focus-visible:ring-ring/50 mb-2 w-full rounded-md border px-2.5 py-1.5 text-xs focus-visible:ring-3 focus-visible:outline-none"
           />
           <div className="mb-2 flex flex-wrap gap-1">
             {RAIL_FILTERS.map((f) => (
@@ -472,8 +559,10 @@ export function Workbench(props: Props) {
                 key={f}
                 type="button"
                 onClick={() => setRailFilter(f)}
-                className={`rounded px-1.5 py-0.5 text-xs capitalize ${
-                  railFilter === f ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'
+                className={`rounded-md border px-2 py-1 text-xs capitalize ${
+                  railFilter === f
+                    ? 'bg-foreground text-background border-foreground'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 }`}
               >
                 {f}
@@ -489,7 +578,7 @@ export function Workbench(props: Props) {
                 {orderable(i.state) ? (
                   <input
                     type="checkbox"
-                    className="shrink-0"
+                    className="size-3.5 shrink-0"
                     checked={bundle.includes(i.number)}
                     onChange={(e) =>
                       setBundle((b) =>
@@ -505,8 +594,10 @@ export function Workbench(props: Props) {
                   type="button"
                   onClick={() => setSelected(i.number)}
                   aria-current={i.number === selected}
-                  className={`flex min-w-0 flex-1 items-baseline gap-1.5 rounded-md px-2 py-1.5 text-left text-xs ${
-                    i.number === selected ? 'bg-accent' : 'hover:bg-accent/50'
+                  className={`flex min-w-0 flex-1 items-baseline gap-1.5 rounded-md border px-2 py-2 text-left text-xs ${
+                    i.number === selected
+                      ? 'bg-accent border-foreground/20'
+                      : 'hover:bg-accent/50 border-transparent'
                   }`}
                 >
                   <span className="shrink-0 tabular-nums">#{i.number}</span>
@@ -527,45 +618,53 @@ export function Workbench(props: Props) {
               issues in one Lulu job pay for one parcel instead of two, and
               the dialog says how much that is before anything is sent. */}
           {selection.length > 0 && (
-            <div className="mt-2 rounded-md border p-2">
+            <div className="mt-2 rounded-lg border p-2.5">
               <p className="text-muted-foreground text-xs">
                 {selection.length === 1
                   ? `Issue ${selection[0]} selected. Tick another to share one parcel.`
                   : `${selection.map((n) => `#${n}`).join(', ')} — one job, one shipping charge.`}
               </p>
-              <div className="mt-1.5 flex gap-2">
-                <Button size="xs" onClick={() => setOrdering(selection)}>
+              <div className="mt-2 flex gap-2">
+                <Button size="sm" onClick={() => setOrdering(selection)}>
                   <Package data-icon="inline-start" />
                   Order {selection.length === 1 ? 'it' : `these ${selection.length}`}
                 </Button>
-                <Button size="xs" variant="ghost" onClick={() => setBundle([])}>
+                <Button size="sm" variant="outline" onClick={() => setBundle([])}>
                   Clear
                 </Button>
               </div>
             </div>
           )}
+
+          <h2 className="text-muted-foreground mt-6 mb-2 text-xs font-medium tracking-wide uppercase">
+            Pool · {pool.length}
+          </h2>
+          <PoolPanel
+            pool={pool}
+            failed={props.failed}
+            skipped={props.skipped}
+            dropped={props.dropped}
+            editable={editable}
+            onError={setError}
+            onNote={setNote}
+            onRefresh={refresh}
+          />
         </aside>
 
         {/* ── The issue ────────────────────────────────────────────── */}
         <section className="min-w-0">
           {issue ? (
             <IssuePanel
-              packageId={props.packageId}
               issue={issue}
               threshold={props.threshold}
-              busy={busy}
               editable={editable}
-              onError={setError}
-              onNote={setNote}
-              onRefresh={refresh}
-              onAutoFill={autoFill}
+              locked={locked}
+              working={working?.message ?? null}
               onRemove={(itemId) => returnToPool(issue, itemId)}
-              onOrder={() => setOrdering([issue.number])}
-              poolCount={pool.length}
             />
           ) : (
             <p className="text-muted-foreground rounded-lg border border-dashed p-10 text-center text-sm">
-              No issue selected. Open one with <span className="font-medium">+</span> above.
+              No issue selected. Open one with <span className="font-medium">New issue</span> on the right.
             </p>
           )}
 
@@ -581,40 +680,70 @@ export function Workbench(props: Props) {
           )}
         </section>
 
-        {/* ── Pool · Orders · Settings ─────────────────────────────── */}
-        <aside className="min-w-0">
+        {/* ── Making an issue · orders · settings ──────────────────── */}
+        <aside className="min-w-0 lg:sticky lg:top-6 lg:self-start">
           <div className="mb-3 flex gap-1">
-            {(['pool', 'orders', 'settings'] as const).map((t) => (
+            {(['issue', 'orders', 'settings'] as const).map((t) => (
               <button
                 key={t}
                 type="button"
                 onClick={() => setTab(t)}
-                className={`rounded-md px-2 py-1 text-xs font-medium capitalize ${
-                  tab === t ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'
+                className={`rounded-md border px-2.5 py-1.5 text-xs font-medium capitalize ${
+                  tab === t
+                    ? 'bg-foreground text-background border-foreground'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 }`}
               >
                 {t}
-                {t === 'pool' && ` · ${pool.length}`}
-
               </button>
             ))}
           </div>
 
-          {/* Kept mounted rather than swapped: the pool is the drop target for
-              a drag that may start while another tab is showing, and an
-              unmounted droppable is not a droppable. */}
-          <div hidden={tab !== 'pool'}>
-            <PoolPanel
-              pool={pool}
-              failed={props.failed}
-              skipped={props.skipped}
-              dropped={props.dropped}
-              editable={editable}
-              onError={setError}
-              onNote={setNote}
-              onRefresh={refresh}
-            />
-          </div>
+          {tab === 'issue' && (
+            <div>
+              <Button
+                variant="outline"
+                className="w-full justify-start"
+                onClick={() => void newIssue()}
+                disabled={locked}
+              >
+                <Plus data-icon="inline-start" />
+                New issue
+              </Button>
+
+              {issue ? (
+                <>
+                  <IssueActions
+                    issue={issue}
+                    editable={editable}
+                    locked={locked}
+                    working={working}
+                    poolCount={pool.length}
+                    threshold={props.threshold}
+                    onAutoFill={autoFill}
+                    onRebuild={() => void stream('rebuild', `/api/press/issue/${issue.number}/rebuild`)}
+                    onLock={() =>
+                      void stream('lock', `/api/press/issue/${issue.number}/lock`, { action: 'lock' })
+                    }
+                    onUnlock={() => void unlock(issue.number)}
+                    onOrder={() => setOrdering([issue.number])}
+                  />
+                  {/* The built count is the true one; while the draft has moved
+                      since, its measured pages are the better guess at how
+                      thick this will come out. */}
+                  <PrintSpec
+                    packageId={props.packageId}
+                    pageCount={issue.dirty || !issue.built ? issue.pages : issue.pageTotal}
+                    estimated={issue.dirty || !issue.built}
+                  />
+                </>
+              ) : (
+                <p className="text-muted-foreground mt-3 rounded-lg border border-dashed p-4 text-center text-xs">
+                  Select an issue to build one.
+                </p>
+              )}
+            </div>
+          )}
           {tab === 'orders' && <OrdersPanel orders={props.orders} onError={setError} onRefresh={refresh} />}
           {tab === 'settings' && <SettingsPanel {...props.settings} onError={setError} onNote={setNote} onRefresh={refresh} />}
         </aside>
@@ -640,178 +769,43 @@ export function Workbench(props: Props) {
   )
 }
 
-// ── The middle panel ─────────────────────────────────────────────────────────
+// ── The middle panel: the issue as it stands ─────────────────────────────────
 
 function IssuePanel({
   issue,
   threshold,
-  busy,
   editable,
-  onError,
-  onNote,
-  onRefresh,
-  onAutoFill,
+  locked,
+  working,
   onRemove,
-  onOrder,
-  poolCount,
-  packageId,
 }: {
   issue: WorkbenchIssue
   threshold: number
-  busy: boolean
   editable: boolean
-  onError: (m: string | null) => void
-  onNote: (m: string | null) => void
-  onRefresh: () => void
-  onAutoFill: () => void
+  /** An edit or a build is in flight; a second one would race it. */
+  locked: boolean
+  /** What the buttons on the right are doing, if anything. */
+  working: string | null
   /** Send one article back to the pool, by id. */
   onRemove: (itemId: string) => void
-  onOrder: () => void
-  poolCount: number
-  packageId: string
 }) {
-  const [working, setWorking] = useState<string | null>(null)
   const { setNodeRef, isOver } = useDroppable({ id: 'issue', disabled: !editable })
-
-  /** Lock and rebuild both stream NDJSON, because both are minutes of Chromium. */
-  const stream = async (url: string, body?: object) => {
-    setWorking('Starting')
-    onError(null)
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: body ? JSON.stringify(body) : undefined,
-      })
-      if (!res.ok && res.headers.get('content-type')?.includes('application/json')) {
-        const err = (await res.json()) as { error?: string }
-        onError(err.error ?? 'That did not work.')
-        return
-      }
-      if (!res.body) throw new Error('No response from the builder.')
-
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
-        for (const line of lines) {
-          if (!line.trim()) continue
-          const event = JSON.parse(line) as {
-            progress?: string
-            error?: string
-            done?: { name: string; pageCount: number; preflight: { code: string }[] }
-          }
-          if (event.progress) setWorking(event.progress)
-          if (event.error) onError(event.error)
-          if (event.done) {
-            onNote(
-              `“${event.done.name}” — ${event.done.pageCount} pages, preflight ` +
-                `${event.done.preflight.length ? event.done.preflight.map((p) => p.code).join(', ') : 'clean'}`,
-            )
-            onRefresh()
-          }
-        }
-      }
-    } catch (err) {
-      onError((err as Error).message)
-    } finally {
-      setWorking(null)
-    }
-  }
-
-  const unlock = async () => {
-    setWorking('Unlocking')
-    onError(null)
-    try {
-      const res = await fetch(`/api/press/issue/${issue.number}/lock`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ action: 'unlock' }),
-      })
-      const body = await readJson(res)
-      if (!res.ok) onError(body.error ?? 'Could not unlock.')
-      else onRefresh()
-    } finally {
-      setWorking(null)
-    }
-  }
-
-  const locked = busy || working !== null
   const printed = ['approved', 'ordered', 'shipped'].includes(issue.state)
 
   return (
     <div>
-      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-        <div className="min-w-0">
-          <h2 className="font-serif text-xl">{issue.name}</h2>
-          <p className="text-muted-foreground mt-0.5 text-xs">
-            Issue {issue.number} · {STATE_LABEL[issue.state] ?? issue.state} ·{' '}
-            {issue.built ? `${issue.pageTotal}pp built` : 'not built'}
-            {issue.dirty && issue.built && ' · edited since'}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {issue.built && (
-            <a
-              className="hover:bg-accent rounded-md border px-2.5 py-1 text-xs"
-              href={`/api/press/file/${issue.number}/interior.pdf`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Interior
-            </a>
-          )}
-          {editable && (
-            <>
-              <Button size="xs" variant="outline" disabled={locked || poolCount === 0} onClick={onAutoFill}>
-                <Sparkles data-icon="inline-start" />
-                Auto-fill
-              </Button>
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={locked || issue.contents.length === 0}
-                onClick={() => void stream(`/api/press/issue/${issue.number}/rebuild`)}
-              >
-                Rebuild
-              </Button>
-              <Button
-                size="xs"
-                disabled={locked || issue.contents.length === 0}
-                onClick={() => void stream(`/api/press/issue/${issue.number}/lock`, { action: 'lock' })}
-              >
-                <Lock data-icon="inline-start" />
-                Lock
-              </Button>
-            </>
-          )}
-          {issue.state === 'closed' && (
-            <>
-              <Button size="xs" variant="outline" disabled={locked} onClick={() => void unlock()}>
-                <LockOpen data-icon="inline-start" />
-                Unlock
-              </Button>
-              <Button size="xs" disabled={locked} onClick={onOrder}>
-                Order
-              </Button>
-            </>
-          )}
-          {issue.state === 'shipped' && (
-            <Button size="xs" variant="outline" disabled={locked} onClick={onOrder}>
-              Order another copy
-            </Button>
-          )}
-        </div>
+      <div className="mb-3">
+        <h2 className="font-serif text-2xl">{issue.name}</h2>
+        {/* Two page counts, and they mean different things: the articles as
+            they stand right now, which every add and remove changes, and the
+            PDF on file, which only a build changes. Showing one number for
+            both is what made editing look like it did nothing. */}
+        <p className="text-muted-foreground mt-1 text-xs">
+          Issue {issue.number} · {STATE_LABEL[issue.state] ?? issue.state} ·{' '}
+          <span className="text-foreground tabular-nums">{issue.pages}pp</span> of articles ·{' '}
+          {issue.built ? `${issue.pageTotal}pp built${issue.dirty ? ', out of date' : ''}` : 'never built'}
+        </p>
       </div>
-
-      {/* The built count is the true one; before a build, the draft's measured
-          pages are the best estimate of how thick it will be. */}
-      <PrintSpec packageId={packageId} pageCount={issue.pageTotal || issue.pages} />
 
       {issue.state === 'rejected' && (
         <p className="border-destructive/50 text-destructive mb-3 border-l-2 py-1 pl-3 text-xs">
@@ -821,7 +815,7 @@ function IssuePanel({
 
       {issue.dirty && issue.built && editable && (
         <p className="border-muted-foreground/30 text-muted-foreground mb-3 border-l-2 py-1 pl-3 text-xs">
-          The PDF on file is the previous build. Lock — or rebuild — to see these changes in print.
+          The PDF on file is the previous build. Rebuild — or lock — to put these changes in print.
         </p>
       )}
 
@@ -850,15 +844,15 @@ function IssuePanel({
                   // both where the article goes and where the panel sits.
                   editable ? (
                     <Button
-                      size="icon-xs"
+                      size="icon-sm"
                       variant="ghost"
                       disabled={locked}
                       onClick={() => onRemove(entry.id)}
                       aria-label={`Remove ${entry.title} from issue ${issue.number}`}
                       title="Back to the pool"
-                      className="text-muted-foreground hover:text-foreground self-center"
+                      className="text-muted-foreground hover:bg-muted hover:text-foreground self-center"
                     >
-                      <ArrowRight />
+                      <ArrowLeft />
                     </Button>
                   ) : undefined
                 }
@@ -885,6 +879,116 @@ function IssuePanel({
           {printed && ' · printed'}
         </p>
       </div>
+    </div>
+  )
+}
+
+// ── The right panel: what you can do to it ───────────────────────────────────
+
+/**
+ * Every action an issue has, stacked and full width.
+ *
+ * They used to sit as a row of extra-small ghost buttons beside the issue's
+ * title, where the one that mattered — Rebuild, on an issue whose PDF no longer
+ * matched its contents — looked exactly like the ones that did not. Here the
+ * order is the order they are used in: fill it, build it, freeze it, print it.
+ */
+function IssueActions({
+  issue,
+  editable,
+  locked,
+  working,
+  poolCount,
+  threshold,
+  onAutoFill,
+  onRebuild,
+  onLock,
+  onUnlock,
+  onOrder,
+}: {
+  issue: WorkbenchIssue
+  editable: boolean
+  locked: boolean
+  working: { what: 'rebuild' | 'lock' | 'unlock'; message: string } | null
+  poolCount: number
+  threshold: number
+  onAutoFill: () => void
+  onRebuild: () => void
+  onLock: () => void
+  onUnlock: () => void
+  onOrder: () => void
+}) {
+  const empty = issue.contents.length === 0
+
+  return (
+    <div className="mt-3 grid gap-2 rounded-lg border p-3">
+      {editable && (
+        <>
+          <Button
+            variant="outline"
+            className="w-full justify-start"
+            disabled={locked || poolCount === 0}
+            onClick={onAutoFill}
+            title={`Add from the pool, oldest first, up to ${threshold} pages`}
+          >
+            <Sparkles data-icon="inline-start" />
+            Auto-fill
+          </Button>
+          {/* The one button whose weight should change: a draft that has moved
+              since its last build is the whole reason to press it. */}
+          <Button
+            variant={issue.dirty ? 'default' : 'outline'}
+            className="w-full justify-start"
+            disabled={locked || empty}
+            onClick={onRebuild}
+            title={empty ? 'Nothing to render yet' : undefined}
+          >
+            <RefreshCw data-icon="inline-start" />
+            {working?.what === 'rebuild' ? 'Rebuilding…' : issue.dirty ? 'Rebuild' : 'Rebuild anyway'}
+          </Button>
+          <Button
+            variant={issue.dirty ? 'outline' : 'default'}
+            className="w-full justify-start"
+            disabled={locked || empty}
+            onClick={onLock}
+          >
+            <Lock data-icon="inline-start" />
+            {working?.what === 'lock' ? 'Locking…' : 'Lock for printing'}
+          </Button>
+        </>
+      )}
+
+      {issue.state === 'closed' && (
+        <>
+          <Button className="w-full justify-start" disabled={locked} onClick={onOrder}>
+            <Package data-icon="inline-start" />
+            Order a copy
+          </Button>
+          <Button variant="outline" className="w-full justify-start" disabled={locked} onClick={onUnlock}>
+            <LockOpen data-icon="inline-start" />
+            {working?.what === 'unlock' ? 'Unlocking…' : 'Unlock to edit'}
+          </Button>
+        </>
+      )}
+
+      {issue.state === 'shipped' && (
+        <Button variant="outline" className="w-full justify-start" disabled={locked} onClick={onOrder}>
+          <Package data-icon="inline-start" />
+          Order another copy
+        </Button>
+      )}
+
+      {issue.built && (
+        <a
+          className="hover:bg-muted flex h-8 w-full items-center gap-1.5 rounded-lg border px-2 text-sm font-medium"
+          href={`/api/press/file/${issue.number}/interior.pdf`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          <FileText className="size-4" />
+          Interior PDF
+        </a>
+      )}
     </div>
   )
 }
