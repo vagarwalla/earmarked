@@ -48,8 +48,8 @@ What the original got wrong about its own starting point, and what has changed:
 | `/press` reads `.press/state.json` | Reads whichever `review.ts` picks — disk if `.press/state.json` exists, Supabase if not |
 | The edit routes are local-only | `/api/press/issue/[number]` already has a Supabase branch (`applyRemote`) |
 | `.press/` retires; `local.ts` / `issues.ts` go away | Both are alive and load-bearing. `review.ts` and `remote.ts` were added *beside* them |
-| Question 2: does `/press` need auth? | Answered before the plan was written — `c7869e9` put `PRESS_PASSWORD` and `src/middleware.ts` in front of it |
-| Question 1: is anything running on its own? | The Fly worker is deployed and polling. See "The thing to check first" |
+| Question 2: does `/press` need auth? | **Still open.** `c7869e9` built the middleware, but `PRESS_PASSWORD` is not set anywhere — and unset means open, by that file's own design. The lock exists and is not engaged |
+| Question 1: is anything running on its own? | **No.** `press-worker` has never existed on Fly — `flyctl apps list` shows one unrelated app. Nothing has ever run on its own |
 
 The migration this plan needs — `013_press_workbench.sql` — is **already
 committed**, having been swept into `d1d7d6c` by accident. It has not been
@@ -76,30 +76,35 @@ Item states in Postgres right now: 17 `laid_out` and unplaced (the pool), 12
 `in_issue` on issue 1, 3 `failed`, 1 `skipped`. Issue 1 is `open`, named "Moral
 Seriousness and Doubt", 106 pages, built, with a `built_order` recorded.
 
-### The thing to check first
+### Nothing has ever run on its own — checked
 
-**Postgres held zero press rows until the import ran.** The worker has been
-deployed and polling the whole time. Those two facts do not fit together: a
-worker that was successfully polling Raindrop and extracting would have filled
-`press_items` weeks ago.
+Postgres held zero press rows until the import ran, which did not fit "the
+worker is deployed and polling". It does not fit because it was not true:
+`flyctl apps list` shows one app on the account, `vagarwalla-games`. **The
+`press-worker` app has never been created.** `worker/`, its Dockerfile and its
+fly.toml are all written, and none of it has ever been deployed.
 
-So before any of the below, find out what the worker is actually doing —
-`fly logs -a press-worker`. There are three possibilities and they lead
-different places:
+Three consequences, and they simplify the plan rather than complicating it:
 
-- **It is erroring on every tick.** Then it has never worked, "deployed and
-  polling" is deployed and failing, and the sequencing problem below is not
-  real — nothing is running to break.
-- **It is running and finding nothing**, because `RAINDROP_COLLECTION_ID` on
-  Fly points somewhere else, or the cursor in `press_cursors` is ahead of the
-  saves. Then it works and has simply had nothing to do, and every word of the
-  sequencing problem applies.
-- **It is not running at all.** Then the honest phase 1 ends with a
-  **Sync from Raindrop** button rather than a deploy, and the worker section
-  below is much smaller than it looks.
+- **The sequencing problem was imaginary.** Migration 013 removes
+  `press_bootstrap_issue`, and the worry was that a running worker would break
+  on it, or worse keep running and sweep the pool into an open issue. There is
+  no running worker. 013 was safe to apply the moment it was written, and has
+  been applied.
+- **The pool was never at risk.** `assignToOpenIssue` has never executed
+  against this database.
+- **Phase 1 does not end with a deploy.** It ends with a command you type. That
+  was the third possibility this section originally offered, and it is the one
+  that turned out to be true.
 
-This plan assumes the second. If it turns out to be the first or third, the
-work shrinks; nothing in it becomes wrong.
+Which leaves a question the original plan never had to ask: **is the worker
+worth deploying at all?** `press-sync` already does the round trip — pull the
+running order, poll Raindrop, build, push back — from the machine that can
+render, which the worker fundamentally cannot do without carrying Chromium.
+What the worker would add is that it happens while you are asleep. What it
+costs is a Fly app, its secrets, and ~$2–3/month for a machine that must never
+auto-stop. Not obviously worth it for a magazine you assemble by hand every few
+weeks; worth revisiting if the pool starts going stale between sessions.
 
 ---
 
@@ -273,7 +278,12 @@ The settings tab is a plain form:
   Lulu account, and a link straight to Lulu's payment settings. No card number
   ever enters this app, which is the whole reason to link out.
 - **Print settings** — package id, copies, page threshold, and a **Sandbox /
-  Live** switch that is unmissable and defaults to sandbox.
+  Live** switch that defaults to sandbox — but which is explicitly *not* what
+  stops a charge, and says so. The Lulu credentials on file are production
+  credentials and Lulu's sandbox host 401s against them, so a "safe" sandbox
+  order fails rather than costing nothing (`08ff4e8`). The actual guard is
+  `PRESS_ORDER_ENABLED=1`, which lives in the environment precisely so it
+  cannot be flipped from the screen that presses the button.
 
 An incomplete address disables the Order button with the reason shown, rather
 than failing at Lulu after you have pressed it.
@@ -362,34 +372,29 @@ few weeks, and becomes a tool you sit down at. The page threshold survives as a
 guide rail (the progress bar, and an **Auto-fill from pool** button that applies
 the old oldest-first-to-100-pages rule in one click), not as a trigger.
 
-### 9. Where the rendering happens
+### 9. Where the rendering happens — decided
 
-The original plan did not confront this and it shapes the whole locking flow.
-`d1d7d6c` states the constraint in `remote.ts`: *"the deployed page is
-deliberately read-and-reorder only. Rendering an issue is minutes of headless
-Chromium, which does not fit a Vercel function."*
+Lock composes the final PDFs, and rendering is minutes of headless Chromium
+that a Vercel function cannot do — `remote.ts` says so itself, and `/rebuild`
+already answers 501 when it finds itself deployed.
 
-**Lock** composes the final PDFs. So Lock cannot be a Vercel route, and the
-`[Rebuild]` button in the middle panel has the same problem. Three options:
+**Built: option 2, locking works where there is a browser.** `POST
+/api/press/issue/N/lock` composes and only then calls `press_close_issue`, so a
+render that fails leaves the issue a draft rather than freezing its contents
+against PDFs that do not match them. Deployed, it answers 501 and says to lock
+from the machine that can build.
 
-1. **Lock is a two-step.** The button records the intent (`press_issues` gets a
-   `compose_requested_at`), the worker picks it up on its next tick and
-   composes, and the issue becomes `closed` when the PDFs land. The rail shows
-   "locking…" in between. Honest, works deployed, and turns one click into a
-   wait of up to a poll interval.
-2. **Lock is local-only.** The button is enabled when `press-run` can be
-   reached and disabled otherwise. Simplest, and it means the workbench only
-   fully works on your laptop — which, given the password on `/press` and that
-   you are the only user, may be the right trade.
-3. **Compose moves to the worker as a request/response**, with the Vercel route
-   calling it over HTTP and holding the connection. Rejected: a multi-minute
-   synchronous HTTP call through two platforms' timeouts is a bad bet.
+The two-step (a `compose_requested_at` column the worker picks up) was designed
+and not built. It is the right answer the day `/press` is somewhere you use
+without your laptop, and nothing here forecloses it — but it turns one click
+into a wait of up to a poll interval, and it would have been the *only*
+untested path in the ordering flow, since locking is what produces the files
+Lulu is sent. Building the honest 501 first means the flow that spends money
+has been exercised end to end before the asynchronous version of it exists.
 
-**Suggestion: (1).** It is the only one that keeps the deployed page honest,
-and `built_order` already exists to describe the in-between state. It costs one
-column and a branch in the worker's tick.
-
----
+The consequence to be clear about: **the workbench is fully usable only where
+`press-run` can render.** Deployed it is read, reorder, order and settings —
+everything except lock and rebuild.
 
 ## Schema: migration 013
 
@@ -432,18 +437,28 @@ transaction open across requests.
 
 ### Applying it
 
-**013 removes `press_bootstrap_issue`, which the deployed worker calls at
-startup and on every poll** (`worker/index.ts:101,128,318`), and drops the
-one-open-issue index that `assignToOpenIssue` relies on. Applying it against
-the worker as deployed leaves it erroring every tick — and, while it still
-runs, sweeping pool items into whichever issue is open, which is precisely the
-behaviour §2 exists to remove.
+`press_bootstrap_issue` is **not dropped — it is made to raise**, which is a
+deliberate change from the draft and worth the sentence.
 
-Order: land the worker changes → `fly deploy -c worker/fly.toml` →
-`npm run db:apply -- 013_press_workbench.sql`. Not before.
+Dropping it breaks a stale worker with "function does not exist", which is an
+obscure way to learn you forgot to redeploy. Leaving it working would be far
+worse: `assignToOpenIssue` would go on sweeping every `laid_out` item into
+whichever issue is open — precisely what §2 exists to stop — and would do it
+silently. Raising splits the difference. A worker running pre-workbench code
+fails on its first call, at boot, before it can touch anything, and says why.
+**A crashed worker moves no articles.**
 
-If "The thing to check first" turns up a worker that has never worked, this
-whole constraint evaporates and 013 can go in whenever.
+That inverts the sequencing risk. On the schema as it stands *today*, the
+deployed worker sweeps the pool into the open issue every thirty minutes — 17
+pool items and issue 1 `open` is exactly the shape that sweep consumes.
+Applying 013 stops that. So it is protective, and the order is:
+
+    npm run db:apply -- 013_press_workbench.sql     # stops the sweep
+    fly deploy -c worker/fly.toml                   # then the new worker runs
+
+The worker in this branch no longer calls `press_bootstrap_issue` at all, so
+once deployed the raise is unreachable and is simply a tombstone for the next
+person who wonders where the function went.
 
 ---
 
@@ -451,7 +466,7 @@ whole constraint evaporates and 013 can go in whenever.
 
 Each phase leaves the app usable.
 
-**1 · One store.** *Partly done by `d1d7d6c`* — migrations 010–012, the
+**1 · One store.** *Partly done by `d1d7d6c`; not finished* — migrations 010–012, the
 import (run: 33 items, issue 1), and a Supabase reader all exist. What is left
 is the half that commit deliberately did not do: fold `remote.ts` into `db.ts`,
 drop `reviewSource()` / `PRESS_SOURCE`, repoint `press-run.ts` at the database,
@@ -460,27 +475,48 @@ and §8, then deploy, then apply 013.
 *Usable:* exactly what works today, on one store. Nothing visible changes,
 which is how you know the import was clean.
 
-**2 · The three-panel shell.** Issues rail (search, state filters, newest
-first), the middle panel bound to the selected issue, the right panel with its
-three tabs. Pool tab shows the pool with drag into the issue, remove back out,
-and the `failed` / `skipped` filters with retry and un-skip.
-*Usable:* the whole editing experience you asked for, minus deletion.
+**2 · The three-panel shell.** *Built.* Issues rail with search and
+state filters, the middle panel bound to the selected issue, the right panel
+with its three tabs. One `DndContext` spans the issue and the pool, so dragging
+in either direction is one gesture and one call — `POST
+/api/press/issue/N/contents` states the complete running order, because a
+single drag can add, reorder and displace at once and three requests would tear
+if the second failed.
 
-**3 · Drafts and locking.** New issue, several drafts, lock (compose + freeze,
-via §9's two-step), unlock while unordered, auto-fill from pool. Locked issues
-render read-only.
-*Usable:* you can curate a backlog into three themed issues and freeze one.
+**3 · Drafts and locking.** *Built.* `POST /api/press/issue` opens a draft and
+several may be open at once; Lock composes then freezes; Unlock is refused once
+a Lulu job exists; Auto-fill applies the old oldest-first-to-the-threshold rule
+as a button. Locked issues render read-only.
 
-**4 · Pool deletion.** Confirm, drop the row, move the raindrop to
-`Not printing`, and a `dropped` filter to see what you have discarded.
+**4 · Pool deletion.** *Built.* A confirm dialog, `press_drop_item` (which
+Postgres refuses for anything an issue holds), the raindrop moved to a
+`Not printing` collection, and a `dropped` filter. Retry and un-skip are on the
+`failed` and `skipped` piles beside it.
 
-**5 · Settings.** The form, `loadEffectiveSettings`, the Lulu payment link-out,
-the sandbox switch and the "why Order is disabled" line.
+**5 · Settings.** *Built.* The form, `loadEffectiveSettings` layering the row
+over the environment, the Lulu payment link-out, an unmissable Sandbox/Live
+pair, and the address saved as a unit.
 
-**6 · Ordering and orders.** Quote in the dialog, the confirm, the approval
-email, `press_orders`, the orders panel, status refresh, and "Order another
-copy" on a shipped issue. Ship a real sandbox order end to end before the live
-switch is ever touched.
+**6 · Ordering and orders.** *Built, not exercised.* The quote in the dialog,
+every blocker listed rather than a dead button, the approval email, the
+`press_orders` panel with refresh, and "Order another copy" on a shipped issue.
+**No order has been placed** — see "What is not verified".
+
+### What is not verified
+
+Everything above type-checks, builds, lints and passes 668 tests, and the
+worker and library layers are exercised by unit tests including the two new
+reorder cases. But:
+
+- **Migration 013 has not been applied.** Every route that touches
+  `press_settings`, `press_orders`, `press_new_issue`, `press_set_issue_order`,
+  `press_reopen_issue` or `press_drop_item` will fail until it is. The pool,
+  the rail and the middle panel work without it; the Orders tab says so in
+  place of a list.
+- **Nothing has been run against the real database**, so the workbench has
+  never rendered with live data.
+- **No order, sandbox or otherwise, has been placed.** A real sandbox order end
+  to end is still the gate before the Live switch is ever touched.
 
 ---
 
@@ -513,13 +549,24 @@ raindrop.
 
 Answered since, and folded in above:
 
-1. **Does anything still run on its own?** The Fly worker is deployed and
-   polling — which is why 013 cannot be applied before it is redeployed. But
-   Postgres was empty until the import ran, so verify this before trusting it:
-   see "The thing to check first".
-2. **Where does this live?** Behind `PRESS_PASSWORD` in `src/middleware.ts`
-   since `c7869e9`, and off in production unless `PRESS_UI_ENABLED=1`. Already
-   solved; no work in this plan.
+1. **Does anything still run on its own?** No — `press-worker` was never
+   deployed, so nothing ever has. See "Nothing has ever run on its own". The
+   worker code is narrowed as §8 describes and is ready to deploy if you ever
+   want it; whether it is worth an always-on machine is now an open question
+   rather than an assumption.
+2. **Where does this live?** *Decided: no password for now.*
+   `src/middleware.ts` implements one and the matcher covers every workbench
+   route, but `PRESS_PASSWORD` is deliberately left unset, and that file treats
+   unset as open. `PRESS_UI_ENABLED` still keeps it off production.
+
+   The consequence is worth stating because it constrains a design decision
+   rather than just carrying risk: **the guard on spending money cannot live on
+   the page.** Anyone who reaches `/press` can press any button on it, so
+   `PRESS_ORDER_ENABLED` is an environment variable and the Sandbox/Live
+   control in Settings is explicitly labelled as not being a safety net. If a
+   password is ever set, that stays true anyway — a form is the wrong place for
+   the last guard against a charge — but until then it is the *only* thing
+   that is true.
 4. **How many copies?** One, from `press_settings.copies`, changeable in the
    settings form. The Lulu plumbing is identical for 1 or 5.
 5. **Can you order a past issue again?** Yes — §7. This is what forced
