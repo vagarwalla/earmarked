@@ -20,8 +20,13 @@ import { loadSettings } from '@/lib/press/settings'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-/** Rendering is the whole point of this route; it must not be cut short. */
-export const maxDuration = 3600
+/**
+ * No maxDuration. A full render takes minutes, but the only place it ever runs
+ * is a local dev server, which does not enforce one — and asking for 3600 on
+ * Vercel is not a slow function, it is a failed *deploy*: Hobby caps
+ * maxDuration at 300, and the builder rejects the whole deployment rather than
+ * the one route. Deployed, this route answers 501 in a few milliseconds.
+ */
 
 export async function POST(
   _request: Request,
