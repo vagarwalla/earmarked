@@ -90,7 +90,15 @@ export function coverSizePt(pages: number): { width: number; height: number } {
 
 export type ItemSource = 'raindrop' | 'email_link' | 'newsletter' | 'pdf' | 'x'
 
-export type ItemState = 'queued' | 'extracted' | 'laid_out' | 'in_issue' | 'printed' | 'failed'
+export type ItemState =
+  | 'queued'
+  | 'extracted'
+  | 'laid_out'
+  | 'in_issue'
+  | 'printed'
+  | 'failed'
+  /** Deliberately excluded — a reference page, not reading. Reason recorded. */
+  | 'skipped'
 
 export interface PressItem {
   id: string
@@ -100,6 +108,12 @@ export interface PressItem {
   raindrop_id: string | null
   state: ItemState
   issue_id: string | null
+  /**
+   * Running order within `issue_id`, 0-based (migration 010). NULL means the
+   * issue has never been reordered by hand, and readers fall back to
+   * chronological — so an un-edited issue prints exactly as it always did.
+   */
+  position: number | null
   title: string | null
   byline: string | null
   source_name: string | null
@@ -136,6 +150,8 @@ export interface PressIssue {
   lulu_status: string | null
   tracking_url: string | null
   archive_collection_id: string | null
+  /** press_items.id in the order the stored PDFs were rendered from; null = never built. */
+  built_order: string[] | null
   rejection_reason: string | null
   opened_at: string
   closed_at: string | null
@@ -152,12 +168,14 @@ export interface PressIssue {
 export const ITEM_TRANSITIONS: Record<ItemState, readonly ItemState[]> = {
   queued: ['extracted', 'failed'],
   extracted: ['laid_out', 'failed'],
-  laid_out: ['in_issue', 'failed'],
+  laid_out: ['in_issue', 'failed', 'skipped'],
   // An issue that is skipped puts its items back to laid_out (see press_skip_issue).
   in_issue: ['printed', 'laid_out', 'failed'],
   printed: [],
   // A failure can be retried from the top.
   failed: ['queued'],
+  // Un-skipping returns a reference page to the pool; the call was always V's.
+  skipped: ['laid_out'],
 }
 
 export const ISSUE_TRANSITIONS: Record<IssueState, readonly IssueState[]> = {

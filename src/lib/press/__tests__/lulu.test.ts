@@ -80,6 +80,7 @@ function issue(over: Partial<PressIssue> = {}): PressIssue {
     lulu_status: null,
     tracking_url: null,
     archive_collection_id: null,
+    built_order: null,
     rejection_reason: null,
     opened_at: '2026-07-01T00:00:00Z',
     closed_at: '2026-08-30T00:00:00Z',

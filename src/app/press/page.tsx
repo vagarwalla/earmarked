@@ -15,14 +15,8 @@
  */
 
 import { notFound } from 'next/navigation'
-import {
-  formatBytes,
-  itemsInState,
-  listIssues,
-  pendingItems,
-  pressUiEnabled,
-  readState,
-} from '@/lib/press/local'
+import { formatBytes, pressUiEnabled } from '@/lib/press/local'
+import { loadReview } from '@/lib/press/review'
 import { loadSettings } from '@/lib/press/settings'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { IssueEditor } from './IssueEditor'
@@ -44,17 +38,8 @@ export default async function PressPage() {
   if (!pressUiEnabled()) notFound()
 
   const threshold = loadSettings().pageThreshold
-  const state = await readState()
-  const issues = await listIssues(state, threshold)
-
-  const waiting = pendingItems(state).map((i) => ({
-    id: i.id,
-    title: i.title,
-    url: i.url,
-    pageCount: i.pageCount ?? 0,
-  }))
-  const skipped = itemsInState(state, 'skipped')
-  const failed = itemsInState(state, 'failed')
+  // `.press/` on V's machine, Postgres + Storage when deployed. Same shape.
+  const { issues, waiting, skipped, failed } = await loadReview(threshold)
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-10">

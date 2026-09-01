@@ -230,15 +230,80 @@ export async function itemsInState(
   return (data as PressItem[]) ?? []
 }
 
+/**
+ * An issue's articles in the order they will be printed.
+ *
+ * `position` (010) is what the editor writes; it is NULL for any issue nobody
+ * has reordered, so the chronological sort stays the default and an un-edited
+ * issue reads exactly as it did before.
+ */
 export async function itemsForIssue(issueId: string, db: SupabaseClient = pressDb()): Promise<PressItem[]> {
   const { data, error } = await db
     .from('press_items')
     .select('*')
     .eq('issue_id', issueId)
+    .order('position', { ascending: true, nullsFirst: false })
     .order('published_at', { ascending: true, nullsFirst: false })
     .order('created_at', { ascending: true })
   if (error) throw new Error(`press/db: itemsForIssue: ${error.message}`)
   return (data as PressItem[]) ?? []
+}
+
+/**
+ * Set an issue's running order to exactly `itemIds`.
+ *
+ * Every position is rewritten rather than just the moved one: positions are
+ * unique per issue (010), so patching a single row would collide with whatever
+ * already sits in that slot. Membership is the caller's to validate.
+ */
+export async function setIssueOrder(
+  issueId: string,
+  itemIds: string[],
+  db: SupabaseClient = pressDb(),
+): Promise<void> {
+  const now = new Date().toISOString()
+  // Clear first: moving an article past another would otherwise trip the
+  // uniqueness index halfway through the rewrite.
+  const { error: clearError } = await db
+    .from('press_items')
+    .update({ position: null, updated_at: now })
+    .eq('issue_id', issueId)
+  if (clearError) throw new Error(`press/db: setIssueOrder: ${clearError.message}`)
+
+  for (const [position, id] of itemIds.entries()) {
+    const { error } = await db
+      .from('press_items')
+      .update({ position, updated_at: now })
+      .eq('id', id)
+      .eq('issue_id', issueId)
+    if (error) throw new Error(`press/db: setIssueOrder: ${error.message}`)
+  }
+}
+
+/** Pull a waiting article into an issue, at the end of the running order. */
+export async function addItemToIssue(
+  itemId: string,
+  issueId: string,
+  db: SupabaseClient = pressDb(),
+): Promise<void> {
+  const existing = await itemsForIssue(issueId, db)
+  await updateItem(itemId, { state: 'in_issue', issue_id: issueId, position: existing.length }, db)
+  await recordEvent({ item_id: itemId, issue_id: issueId, kind: 'item_added' }, db)
+}
+
+/**
+ * Drop an article back to the waiting list, closing the gap behind it so the
+ * order stays dense and the next add lands at the end rather than in a hole.
+ */
+export async function removeItemFromIssue(
+  itemId: string,
+  issueId: string,
+  db: SupabaseClient = pressDb(),
+): Promise<void> {
+  await updateItem(itemId, { state: 'laid_out', issue_id: null, position: null }, db)
+  const remaining = await itemsForIssue(issueId, db)
+  await setIssueOrder(issueId, remaining.map((i) => i.id), db)
+  await recordEvent({ item_id: itemId, issue_id: issueId, kind: 'item_removed' }, db)
 }
 
 export async function updateItem(

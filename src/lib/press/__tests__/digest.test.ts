@@ -13,6 +13,7 @@ function item(over: Partial<PressItem> = {}): PressItem {
     raindrop_id: null,
     state: 'failed',
     issue_id: null,
+    position: null,
     title: 'A piece',
     byline: null,
     source_name: null,
