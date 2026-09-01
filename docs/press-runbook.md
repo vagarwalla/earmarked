@@ -267,7 +267,10 @@ Two things are deliberate and worth not undoing:
   strings, translated, and put back in the same slots. Block structure, image
   paths and footnote numbering are never in the request, so they cannot move.
   Bylines and publication names are not translated either — a byline is a real
-  person's name.
+  person's name. They are *romanized* when they are in a script the magazine
+  cannot set: press sets Georgia and Helvetica, which have no CJK or Cyrillic,
+  so a byline left alone prints as empty boxes. Same name, Latin script — the
+  third option between leaving it and renaming the author.
 - **A partial translation is a failure, not a result.** Everything else in
   press degrades gracefully; this throws. Half a translation prints as English
   until it abruptly is not, and a reader cannot tell that from an essay quoting

@@ -210,6 +210,31 @@ Rules:
 5. Proper nouns, institutions and titles of works: use the established English form where one exists, otherwise transliterate conventionally. Do not gloss, and do not add explanations, brackets or translator's notes — there is nowhere on the page for them.
 6. Translate nothing into commentary. You are not summarising, improving, shortening or annotating the essay.`
 
+/**
+ * Anything outside the Latin blocks and shared punctuation — Cyrillic, CJK,
+ * Greek, Arabic, Devanagari. Deliberately crude: it only has to answer "would
+ * this print".
+ */
+const NON_LATIN = /[^ -˿Ḁ-ỿ -⁯₠-⃏]/
+
+/** Whether a string contains anything the magazine's fonts cannot set. */
+export function needsRomanizing(value: string | null): boolean {
+  return value !== null && NON_LATIN.test(value)
+}
+
+const NAMES_SCHEMA = {
+  type: 'object',
+  properties: {
+    names: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'The romanized names, in the same order as the input.',
+    },
+  },
+  required: ['names'],
+  additionalProperties: false,
+} as const
+
 /** The SDK surface these functions actually use, so tests can pass a stub. */
 export type TranslationClient = Pick<Anthropic, 'messages'>
 
@@ -298,6 +323,45 @@ async function translateChunk(
   return out
 }
 
+/**
+ * Romanize a byline or a masthead written in another script.
+ *
+ * This is not translation and is deliberately kept out of the segment pass: a
+ * name must not be translated, or Иван Кузнецов prints as "John Smith". But it
+ * cannot be left alone either — the magazine sets Georgia and Helvetica, which
+ * have no CJK or Cyrillic, so an untouched byline prints as empty boxes. The
+ * answer is the third thing: same name, Latin script.
+ */
+async function romanizeNames(
+  client: TranslationClient,
+  sourceLanguage: string,
+  names: string[],
+): Promise<string[]> {
+  const response = await client.messages.parse({
+    model: TRANSLATION_MODEL,
+    max_tokens: 1000,
+    messages: [
+      {
+        role: 'user',
+        content: `Romanize these ${sourceLanguage} names into the Latin alphabet, so they can be set in a magazine that has no ${sourceLanguage} font.
+
+Do not translate them — a personal name keeps its identity, it does not acquire an English equivalent. Use the spelling the person or publication uses in English if there is a well-known one, otherwise the standard romanization for the language. Give a person's name in the order an English-language magazine would print it. Return one romanization per input, in the same order.
+
+${JSON.stringify(names, null, 1)}`,
+      },
+    ],
+    output_config: { format: jsonSchemaOutputFormat(NAMES_SCHEMA) },
+  })
+
+  const parsed = response.parsed_output as { names: string[] } | null
+  if (!parsed || parsed.names.length !== names.length) {
+    throw new TranslationError(
+      `romanization came back wrong: sent ${names.length}, got ${parsed?.names.length ?? 0}`,
+    )
+  }
+  return parsed.names
+}
+
 export interface TranslateArticleOptions {
   article: Article
   /** English name of the language to translate from, e.g. "Russian". */
@@ -333,7 +397,22 @@ export async function translateArticle(opts: TranslateArticleOptions): Promise<A
     translated.push(...(await translateChunk(client, sourceLanguage, chunk)))
   }
 
-  const out = applySegments(article, translated)
+  let out = applySegments(article, translated)
+
+  // The byline and the masthead were held back from the segment pass because
+  // they must not be translated. They still have to be printable.
+  const toRomanize: Array<'byline' | 'sourceName'> = (['byline', 'sourceName'] as const).filter(
+    (field) => needsRomanizing(out[field]),
+  )
+  if (toRomanize.length > 0) {
+    const romanized = await romanizeNames(
+      client,
+      sourceLanguage,
+      toRomanize.map((field) => out[field] as string),
+    )
+    out = { ...out, ...Object.fromEntries(toRomanize.map((f, i) => [f, romanized[i]])) }
+  }
+
   const now = opts.now ?? (() => new Date())
   return {
     ...out,

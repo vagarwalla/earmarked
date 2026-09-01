@@ -5,6 +5,7 @@ import {
   collectSegments,
   detectArticleLanguage,
   mapArticleText,
+  needsRomanizing,
   translateArticle,
   TranslationError,
   TRANSLATION_MODEL,
@@ -140,9 +141,14 @@ describe('translateArticle', () => {
     parsed_output: { segments },
   })
 
+  const names = (list: string[]) => ({ stop_reason: 'end_turn', parsed_output: { names: list } })
+
   it('translates an article and records what it did', async () => {
     const source = article()
-    const { client } = clientReturning(ok(collectSegments(source).map((s) => `EN:${s}`)))
+    const { client } = clientReturning(
+      ok(collectSegments(source).map((s) => `EN:${s}`)),
+      names(['Ivan Ivanov', 'Zhurnal']),
+    )
 
     const out = await translateArticle({
       article: source,
@@ -167,6 +173,7 @@ describe('translateArticle', () => {
     expect(chunks.length).toBeGreaterThan(1)
     const { client, parse } = clientReturning(
       ...chunks.map((c) => ok(c.map((s) => `EN:${s}`))),
+      names(['Ivan Ivanov', 'Zhurnal']),
     )
 
     const out = await translateArticle({
@@ -178,7 +185,8 @@ describe('translateArticle', () => {
       now: () => new Date(0),
     })
 
-    expect(parse).toHaveBeenCalledTimes(chunks.length)
+    // One request per chunk, plus the one that romanizes the byline.
+    expect(parse).toHaveBeenCalledTimes(chunks.length + 1)
     expect(out.title).toBe('EN:Заглавие')
     expect(out.footnotes).toEqual([{ marker: '1', html: 'EN:Примечание' }])
   })
@@ -209,10 +217,64 @@ describe('translateArticle', () => {
     ).rejects.toThrow(/cut off/)
   })
 
+  // Georgia and Helvetica have no CJK or Cyrillic, so a byline left in its own
+  // script prints as empty boxes. Romanizing is the third option between
+  // leaving it and translating it — the latter would rename the author.
+  it('romanizes a byline it cannot set, without translating it', async () => {
+    const source = article()
+    const { client, parse } = clientReturning(
+      ok(collectSegments(source).map((s) => `EN:${s}`)),
+      names(['Ivan Ivanov', 'Zhurnal']),
+    )
+
+    const out = await translateArticle({
+      article: source,
+      sourceLanguage: 'Russian',
+      apiKey: 'k',
+      client,
+    })
+
+    expect(out.byline).toBe('Ivan Ivanov')
+    expect(out.sourceName).toBe('Zhurnal')
+    expect(parse).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not spend a call romanizing a byline already in Latin script', async () => {
+    const source = article({ byline: 'By A. Writer', sourceName: 'The Atlantic' })
+    const { client, parse } = clientReturning(ok(collectSegments(source).map((s) => `EN:${s}`)))
+
+    const out = await translateArticle({
+      article: source,
+      sourceLanguage: 'French',
+      apiKey: 'k',
+      client,
+    })
+
+    expect(out.byline).toBe('By A. Writer')
+    expect(parse).toHaveBeenCalledTimes(1)
+  })
+
   it('throws without an API key instead of printing the original', async () => {
     await expect(
       translateArticle({ article: article(), sourceLanguage: 'Russian', apiKey: null }),
     ).rejects.toThrow(TranslationError)
+  })
+})
+
+describe('needsRomanizing', () => {
+  it.each(['芹沢一也', 'Иван Иванов', 'Ελλάδα'])('flags %s', (name) => {
+    expect(needsRomanizing(name)).toBe(true)
+  })
+
+  it.each(['Ivan Ivanov', 'Émile Durkheim', 'Ørsted', 'The Atlantic'])(
+    'leaves %s alone',
+    (name) => {
+      expect(needsRomanizing(name)).toBe(false)
+    },
+  )
+
+  it('treats a missing byline as nothing to do', () => {
+    expect(needsRomanizing(null)).toBe(false)
   })
 })
 
