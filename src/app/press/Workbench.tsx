@@ -403,6 +403,19 @@ export function Workbench(props: Props) {
     void commit(issue.number, next.map((e) => e.id))
   }
 
+  /**
+   * The ticked issues that are still orderable.
+   *
+   * Read through the current issues rather than trusted as stored: once the
+   * emailed link is followed the issue moves to `approved` and its checkbox
+   * goes, and a bar still offering to order it would be offering something the
+   * server now refuses. Stale numbers fall out silently rather than needing a
+   * cleanup pass on every re-seed.
+   */
+  const selection = bundle.filter((n) =>
+    issues.some((i) => i.number === n && orderable(i.state)),
+  )
+
   const railIssues = issues
     .filter((i) => inFilter(i.state, railFilter))
     .filter((i) =>
@@ -458,7 +471,7 @@ export function Workbench(props: Props) {
                   <input
                     type="checkbox"
                     className="shrink-0"
-                    checked={bundle.includes(i.number)}
+                    checked={selection.includes(i.number)}
                     onChange={(e) =>
                       setBundle((b) =>
                         e.target.checked ? [...b, i.number].sort((x, y) => x - y) : b.filter((n) => n !== i.number),
@@ -494,17 +507,17 @@ export function Workbench(props: Props) {
           {/* The bundling gesture, and the only place it is offered. Two
               issues in one Lulu job pay for one parcel instead of two, and
               the dialog says how much that is before anything is sent. */}
-          {bundle.length > 0 && (
+          {selection.length > 0 && (
             <div className="mt-2 rounded-md border p-2">
               <p className="text-muted-foreground text-xs">
-                {bundle.length === 1
-                  ? `Issue ${bundle[0]} selected. Tick another to share one parcel.`
-                  : `${bundle.map((n) => `#${n}`).join(', ')} — one job, one shipping charge.`}
+                {selection.length === 1
+                  ? `Issue ${selection[0]} selected. Tick another to share one parcel.`
+                  : `${selection.map((n) => `#${n}`).join(', ')} — one job, one shipping charge.`}
               </p>
               <div className="mt-1.5 flex gap-2">
-                <Button size="xs" onClick={() => setOrdering(bundle)}>
+                <Button size="xs" onClick={() => setOrdering(selection)}>
                   <Package data-icon="inline-start" />
-                  Order {bundle.length === 1 ? 'it' : `these ${bundle.length}`}
+                  Order {selection.length === 1 ? 'it' : `these ${selection.length}`}
                 </Button>
                 <Button size="xs" variant="ghost" onClick={() => setBundle([])}>
                   Clear
