@@ -11,36 +11,29 @@
  */
 
 import {
-  bootstrapIssue,
   failItem,
   getIssue,
   getItem,
-  getOpenIssue,
   insertItem,
-  itemsForIssue,
   itemsInState,
   issuesInState,
   putObject,
   recordEvent,
-  setIssueOrder,
-  signedUrl,
   storagePath,
   updateItem,
   updateIssue,
-  closeIssue,
 } from '../src/lib/press/db'
 import { loadSettings, missingSettings } from '../src/lib/press/settings'
 import { pollRaindrops } from '../src/lib/press/raindrop'
 import { extractFromUrl, extractFromNewsletterHtml, ExtractionError } from '../src/lib/press/extract'
 import { classifyLinkpost, MAX_TARGETS, type OutboundLink } from '../src/lib/press/linkpost'
 import { renderArticle } from '../src/lib/press/layout/render'
-import { composeIssue, shouldCloseIssue } from '../src/lib/press/compose'
-import { issueActionTokens, sendApprovalEmail } from '../src/lib/press/approval'
 import { createLuluClient, isRejected, isShipped } from '../src/lib/press/lulu'
 import { archiveIssue } from '../src/lib/press/archive'
+import { refreshOrders } from '../src/lib/press/orders'
 import { sendWeeklyDigest } from '../src/lib/press/digest'
 import { getObject } from '../src/lib/press/db'
-import type { Article, LinkpostTarget, PressItem } from '../src/lib/press/types'
+import type { Article, LinkpostTarget } from '../src/lib/press/types'
 
 const MINUTE = 60_000
 const POLL_INTERVAL = 30 * MINUTE
@@ -169,7 +162,6 @@ async function queueLinkpostTargets(
  * pages — compose re-renders everything.
  */
 async function layoutExtracted(): Promise<number> {
-  const open = await bootstrapIssue()
   const items = await itemsInState(['extracted'], undefined, 25)
   let done = 0
 
@@ -178,7 +170,11 @@ async function layoutExtracted(): Promise<number> {
       if (!item.content_path) throw new Error('extracted item has no article')
       const article = JSON.parse(new TextDecoder().decode(await getObject(item.content_path))) as Article
       const result = await renderArticle(article, {
-        issueNumber: open.number,
+        // A measurement render is thrown away — only its page count is kept —
+        // and an item no longer belongs to an issue when it is measured, so
+        // there is no issue number to put in the footer. Compose re-renders
+        // every page with the real one.
+        issueNumber: 0,
         startPage: 1,
         measurement: true,
       })
@@ -194,115 +190,21 @@ async function layoutExtracted(): Promise<number> {
   return done
 }
 
-/**
- * laid_out → in_issue, joining whichever issue is currently open.
- *
- * The order is written rather than left to the chronological fallback, because
- * a linkpost's pieces have to sit directly behind it and they arrive in the
- * queue alongside everything else extracted that tick. `setIssueOrder` applies
- * the same grouping the editor and the local pipeline apply.
- */
-async function assignToOpenIssue(): Promise<number> {
-  const open = await bootstrapIssue()
-  const items = await itemsInState(['laid_out'], undefined, 200)
-  if (items.length === 0) return 0
-
-  const existing = (await itemsForIssue(open.id)).map((i) => i.id)
-  for (const item of items) {
-    await updateItem(item.id, { state: 'in_issue', issue_id: open.id })
-  }
-  // New arrivals go on the end; the grouping is imposed across the whole issue.
-  await setIssueOrder(open.id, [...existing, ...items.map((i) => i.id)])
-  return items.length
-}
-
-function pageTotal(items: PressItem[]): number {
-  return items.reduce((n, i) => n + (i.page_count ?? 0), 0)
-}
+// assignToOpenIssue used to live here: laid_out → in_issue, into whichever
+// issue was open. It is gone, and its absence is the point of the workbench.
+// An article that has been measured stays `laid_out` with issue_id NULL —
+// that *is* the pool — until someone puts it somewhere. Deciding what goes in
+// an issue is the one part of this pipeline that was never the worker's to do.
+// See docs/plans/2026-08-31-003-feat-press-workbench-plan.md §2.
 
 // ── The weekly tick ──────────────────────────────────────────────────────────
 
-/** Close the open issue if it is ready, and return it if it closed. */
-async function closeIfReady(now: Date) {
-  const settings = loadSettings()
-  const open = await getOpenIssue()
-  if (!open) return null
-
-  const items = await itemsForIssue(open.id)
-  const decision = shouldCloseIssue(open, pageTotal(items), settings, now)
-  log('close_check', { issue: open.number, ...decision })
-  if (!decision.close) return null
-
-  return closeIssue(open.id, decision.pageTotal)
-}
-
-/**
- * Compose a closed issue and ask for approval. Re-sent on every tick while the
- * issue is still waiting, so a buried email cannot stall the loop.
- */
-async function composeAndAsk(issueId: string, now: Date): Promise<void> {
-  const settings = loadSettings()
-  const issue = await getIssue(issueId)
-  if (!issue) return
-
-  const composed = await composeIssue(issue)
-  log('composed', {
-    issue: composed.number,
-    name: composed.name,
-    pages: composed.pageCount,
-    skipped: composed.skipped.length,
-    preflight: composed.preflight,
-  })
-
-  let quote = null
-  try {
-    if (settings.shipping) {
-      quote = await createLuluClient({ settings }).quote(
-        {
-          title: composed.name,
-          packageId: settings.luluPackageId,
-          pageCount: composed.pageCount,
-          quantity: 1,
-        },
-        settings.shipping,
-      )
-      await updateIssue(issue.id, { quote_cents: quote.totalCents, quote_currency: quote.currency })
-    }
-  } catch (err) {
-    // A quote is information, not a gate. Say so in the email rather than
-    // holding the issue back over it.
-    log('quote_failed', { issue: composed.number, reason: (err as Error).message })
-  }
-
-  const tokens = await issueActionTokens(
-    issue.id,
-    [
-      { action: 'approve' },
-      { action: 'skip' },
-      ...composed.toc.map((e) => ({ action: 'drop' as const, itemId: e.itemId })),
-    ],
-    { now },
-  )
-
-  const approve = tokens.find((t) => t.action === 'approve')!
-  const skip = tokens.find((t) => t.action === 'skip')!
-  const dropUrls = new Map(
-    tokens.filter((t) => t.action === 'drop' && t.itemId).map((t) => [t.itemId as string, t.url]),
-  )
-
-  await sendApprovalEmail(issue.id, {
-    issueNumber: composed.number,
-    issueName: composed.name,
-    pageCount: composed.pageCount,
-    quote,
-    toc: composed.toc,
-    previewUrl: await signedUrl(storagePath.interior(issue.id), 30 * 24 * 60 * 60),
-    approveUrl: approve.url,
-    skipUrl: skip.url,
-    dropUrls,
-  })
-  log('approval_sent', { issue: composed.number })
-}
+// closeIfReady and composeAndAsk used to live here — the timer that decided an
+// issue was full, rendered it, priced it, and emailed to ask whether to buy it.
+// All three are now the Lock and Order buttons in the workbench, because the
+// decision they automated is the one most worth making by hand. The compose in
+// particular has to run where there is a browser, which a Vercel function is
+// not; see plan §9.
 
 /** Follow ordered issues to their conclusion, and archive them (U9). */
 async function followOrders(): Promise<void> {
@@ -355,7 +257,15 @@ export async function runPoll(): Promise<void> {
   log('polled', { scanned: result.scanned, ingested: result.ingested.length })
   log('extracted', { count: await extractQueued() })
   log('laid_out', { count: await layoutExtracted() })
-  log('assigned', { count: await assignToOpenIssue() })
+  // Order status on the poll rather than only the weekly tick: the orders
+  // panel has a Refresh button of its own, and this is what keeps it right
+  // when nobody is looking at it.
+  try {
+    const refreshed = await refreshOrders()
+    if (refreshed.refreshed || refreshed.errors.length) log('orders_refreshed', refreshed)
+  } catch (err) {
+    log('order_refresh_failed', { reason: (err as Error).message })
+  }
 }
 
 /** Sunday evening PT. The tick is idempotent, so a double fire is harmless. */
@@ -367,20 +277,16 @@ export function isWeeklyTick(now: Date): boolean {
 export async function runWeeklyTick(now = new Date()): Promise<void> {
   log('weekly_tick_start')
 
-  const closed = await closeIfReady(now)
-  if (closed) await composeAndAsk(closed.id, now)
-
-  // Anything still waiting on V — including a rejection that has been fixed —
-  // gets composed and asked about again.
-  for (const issue of await issuesInState(['closed', 'rejected'])) {
-    if (closed && issue.id === closed.id) continue
-    try {
-      await composeAndAsk(issue.id, now)
-    } catch (err) {
-      log('compose_failed', { issue: issue.number, reason: (err as Error).message })
-    }
-  }
-
+  // Closing an issue, composing it and asking to buy it used to happen here,
+  // on a timer, whenever the open issue crossed the page threshold. It does
+  // not any more: you decide when an issue is finished, and the Lock button in
+  // the workbench is where that decision is made and where the compose runs.
+  //
+  // What is left is everything that must happen whether or not anyone is
+  // looking: following orders already placed to shipped and archived, and
+  // saying once a week what arrived and what broke. The threshold survives in
+  // the UI as a progress bar and an Auto-fill button — a guide rail, not a
+  // trigger. See plan §8.
   await followOrders()
 
   const since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
@@ -398,7 +304,9 @@ async function main(): Promise<void> {
     if (missing.length) throw new Error(`press/worker: ${unit} is missing ${missing.join(', ')}`)
   }
 
-  await bootstrapIssue()
+  // No bootstrapIssue(): issues are opened by hand in the workbench now, and
+  // there may legitimately be none at all. Arriving articles land in the pool,
+  // which needs nothing to exist first.
   log('worker_started', { poll_minutes: POLL_INTERVAL / MINUTE })
 
   const guard = async (name: string, fn: () => Promise<void>) => {

@@ -117,3 +117,37 @@ export async function archiveIssue(
 
   return { collectionId, collectionName, moved, printed: pending.length, alreadyDone: false }
 }
+
+/**
+ * The other archive: where a deleted article's raindrop goes.
+ *
+ * Deleting from the pool is permanent in the database — the row becomes a
+ * `dropped` tombstone so `url_key`'s unique index stops a re-save resurrecting
+ * it — which is exactly why the raindrop itself must not be destroyed. It moves
+ * to a `Not printing` collection instead, and that collection is the undo:
+ * everything you have ever declined, still in Raindrop, still findable.
+ *
+ * Distinct from `archiveIssue`, which files what was *printed* under a dated
+ * collection per issue. This is one flat collection for what was not.
+ *
+ * Idempotent: the collection is found before it is created, and moving a
+ * raindrop that is already there is a no-op Raindrop accepts happily.
+ */
+export const NOT_PRINTING_COLLECTION = 'Not printing'
+
+export async function archiveRaindropElsewhere(
+  raindropId: string,
+  deps: { raindrop?: RaindropClient; settings?: PressSettings } = {},
+): Promise<string> {
+  const settings = deps.settings ?? loadSettings()
+  const raindrop = deps.raindrop ?? createRaindropClient({ token: settings.raindropToken })
+
+  const existing = (await raindrop.listCollections()).find(
+    (c) => c.title.trim().toLowerCase() === NOT_PRINTING_COLLECTION.toLowerCase(),
+  )
+  const collection = existing ?? (await raindrop.createCollection(NOT_PRINTING_COLLECTION))
+  const collectionId = String(collection._id)
+
+  await raindrop.moveRaindrops([raindropId], collectionId)
+  return collectionId
+}

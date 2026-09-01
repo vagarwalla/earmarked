@@ -9,7 +9,7 @@
 import { NextResponse } from 'next/server'
 import { claimToken } from '@/lib/press/approval'
 import { getIssue, skipIssue, updateItem, recordEvent } from '@/lib/press/db'
-import { performApproval } from '@/lib/press/order'
+import { approveIssueById } from '@/lib/press/order'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -29,7 +29,12 @@ export async function POST(_request: Request, context: { params: Promise<{ token
 
   switch (action.action) {
     case 'approve': {
-      const result = await performApproval(issue)
+      // approveIssueById, not performApproval: it derives `reorder` from the
+      // issue's own state. performApproval defaults it to false, which makes
+      // idempotencyKeyFor return the *first* order's key — so an extra copy of
+      // a shipped issue found that order, reported 'already-ordered', and
+      // returned HTTP 200 having bought nothing.
+      const result = await approveIssueById(issue.id)
       return NextResponse.json(result, { status: result.ok ? 200 : 409 })
     }
 

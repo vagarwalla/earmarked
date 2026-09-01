@@ -107,12 +107,11 @@ function unwrap<T>(res: { data: T | null; error: { message: string } | null }, w
   return res.data
 }
 
-/** The single open issue, creating one if the pipeline has never run. */
-export async function bootstrapIssue(db: SupabaseClient = pressDb()): Promise<PressIssue> {
-  const res = await db.rpc('press_bootstrap_issue')
-  const data = unwrap(res as { data: PressIssue | null; error: { message: string } | null }, 'bootstrap_issue')
-  return data
-}
+// bootstrapIssue lived here. press_bootstrap_issue returned "the open issue,
+// creating one if there is none", which is ambiguous the moment more than one
+// can be open — and since items land in the pool rather than being swept into
+// whichever issue is open, several drafts at once is the point. Opening an
+// issue is now something you ask for: see newIssue() in workbench.ts.
 
 export async function getIssue(issueId: string, db: SupabaseClient = pressDb()): Promise<PressIssue | null> {
   const { data, error } = await db.from('press_issues').select('*').eq('id', issueId).maybeSingle()
@@ -152,31 +151,11 @@ export async function skipIssue(issueId: string, db: SupabaseClient = pressDb())
   return (res.data as number) ?? 0
 }
 
-export interface OrderClaim {
-  claimed: boolean
-  idempotency_key: string | null
-  lulu_job_id: string | null
-}
-
-/**
- * Approve and claim the sole right to create a Lulu job for this issue.
- * A retry after a timeout gets `claimed: false` plus the key the first attempt
- * persisted, so it can reconcile instead of ordering a second copy.
- */
-export async function claimOrder(
-  issueId: string,
-  idempotencyKey: string,
-  db: SupabaseClient = pressDb(),
-): Promise<OrderClaim> {
-  const res = await db.rpc('press_claim_order', {
-    p_issue_id: issueId,
-    p_idempotency_key: idempotencyKey,
-  })
-  if (res.error) throw new Error(`press/db: claim_order: ${res.error.message}`)
-  const row = Array.isArray(res.data) ? res.data[0] : res.data
-  if (!row) return { claimed: false, idempotency_key: null, lulu_job_id: null }
-  return row as OrderClaim
-}
+// claimOrder lived here, wrapping press_claim_order. Both are gone (013).
+// The claim kept `lulu_job_id` on the issue, which made "ordered exactly once,
+// forever" a property of the schema rather than a policy — so a second copy of
+// a shipped issue was not an unbuilt feature, it was an inexpressible one. It
+// is a row in press_orders now; see src/lib/press/orders.ts.
 
 export async function updateIssue(
   issueId: string,

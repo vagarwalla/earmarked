@@ -5,7 +5,7 @@ import {
   insertItem,
   closeIssue,
   skipIssue,
-  claimOrder,
+
   consumeActionToken,
   getCursor,
   setCursor,
@@ -236,27 +236,10 @@ describe('skipIssue', () => {
   })
 })
 
-describe('claimOrder', () => {
-  it('claims on the first call', async () => {
-    const { client } = fakeDb({ rpc: { data: [{ claimed: true, idempotency_key: 'k1', lulu_job_id: 'pending' }] } })
-    const claim = await claimOrder('iss1', 'k1', client)
-    expect(claim.claimed).toBe(true)
-    expect(claim.idempotency_key).toBe('k1')
-  })
-
-  it('refuses the retry and hands back the first attempt’s key', async () => {
-    const { client } = fakeDb({ rpc: { data: [{ claimed: false, idempotency_key: 'k1', lulu_job_id: 'job_9' }] } })
-    const claim = await claimOrder('iss1', 'k2', client)
-    expect(claim.claimed).toBe(false)
-    expect(claim.idempotency_key).toBe('k1')
-    expect(claim.lulu_job_id).toBe('job_9')
-  })
-
-  it('treats an empty result as not claimed', async () => {
-    const { client } = fakeDb({ rpc: { data: [] } })
-    expect((await claimOrder('iss1', 'k1', client)).claimed).toBe(false)
-  })
-})
+// claimOrder's tests moved with it. What they were protecting — "a retry
+// after a timeout must not buy a second copy" — is now protected one level
+// down, by press_orders.idempotency_key, and is tested against performApproval
+// in lulu.test.ts where the retry actually happens.
 
 describe('consumeActionToken', () => {
   it('returns the token when it was still unspent', async () => {

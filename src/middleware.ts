@@ -68,5 +68,13 @@ export const config = {
     '/press',
     '/api/press/issue/:path*',
     '/api/press/file/:path*',
+    // The workbench's own routes. A pool you can delete from, an address you
+    // can change and a button that spends money all need the same password the
+    // page does — and a matcher that lists routes one by one is a matcher that
+    // will one day be missing one, so every new /api/press/* route belongs
+    // here unless it is deliberately public like action/ and email-in/.
+    '/api/press/item/:path*',
+    '/api/press/settings',
+    '/api/press/orders',
   ],
 }

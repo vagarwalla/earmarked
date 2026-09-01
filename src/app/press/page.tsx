@@ -1,201 +1,135 @@
 /**
- * press — the review page.
+ * press — the workbench.
  *
- * Everything the local pipeline has produced, in one place: composed issues
- * with a live PDF preview and download links, the contents of each with links
- * back to the originals so a bad extraction can be spotted, and what is still
- * waiting in `hw` for the next issue.
+ * Three panels: every issue on the left, the one you are working on in the
+ * middle, and on the right the three things that are not the issue itself —
+ * the pool of unprinted articles, the orders you have placed, and the settings
+ * those orders are made from.
  *
- * The open issue is editable — reorder, drop, pull one forward, rebuild — via
- * `IssueEditor`; a printed issue is fixed and reads as a plain list. Both come
- * from the same draft in `.press/state.json`.
+ * A server component, and everything it reads comes from Postgres. The
+ * workbench is not one of the two sources `review.ts` chooses between: a pool
+ * you can delete from, an address you can change and an order you can place
+ * have no representation on disk at all. `press-run` and `press-sync` keep the
+ * disk in step for the renderer, which is the one job that cannot move off
+ * this machine.
  *
- * A server component reading `.press/` directly — there is no database in the
- * local setup, and the files are the state.
+ * Off in production unless PRESS_UI_ENABLED=1, and behind a password either
+ * way (src/middleware.ts) — it lists what V has been reading.
+ *
+ * See docs/plans/2026-08-31-003-feat-press-workbench-plan.md.
  */
 
 import { notFound } from 'next/navigation'
-import { formatBytes, pressUiEnabled } from '@/lib/press/local'
-import { loadReview } from '@/lib/press/review'
+import { pressUiEnabled } from '@/lib/press/local'
+import { itemsForIssue } from '@/lib/press/db'
+import { itemsInState, listIssueRows, poolItems } from '@/lib/press/workbench'
+import { loadEffectiveSettings, readSettingsRow, SETTINGS_DEFAULTS } from '@/lib/press/settings-db'
+import { listOrders, type OrderWithIssue } from '@/lib/press/orders'
 import { loadSettings } from '@/lib/press/settings'
 import { ThemeToggle } from '@/components/ThemeToggle'
-import { Badge } from '@/components/ui/badge'
-import { IssueEditor } from './IssueEditor'
-import { IssuePreview } from './IssuePreview'
-import { PrintSpec } from './PrintSpec'
+import { Workbench, type PoolItem, type WorkbenchIssue } from './Workbench'
+import type { PressItem } from '@/lib/press/types'
 
 export const dynamic = 'force-dynamic'
 
-function hostOf(url: string | null): string {
-  if (!url) return ''
-  try {
-    return new URL(url).hostname.replace(/^www\./, '')
-  } catch {
-    return url
+function toPoolItem(item: PressItem): PoolItem {
+  return {
+    id: item.id,
+    title: item.title ?? item.url ?? item.id,
+    url: item.url,
+    byline: item.byline,
+    sourceName: item.source_name,
+    pageCount: item.page_count ?? 0,
+    reason: item.failure_reason,
   }
 }
 
+const sameOrder = (a: string[], b: string[]) =>
+  a.length === b.length && a.every((id, i) => id === b[i])
+
 export default async function PressPage() {
-  // The page lists what V has been reading; it has no place on a public deploy.
   if (!pressUiEnabled()) notFound()
 
-  const settings = loadSettings()
-  const threshold = settings.pageThreshold
-  const packageId = settings.luluPackageId
-  // `.press/` on V's machine, Postgres + Storage when deployed. Same shape.
-  const { issues, waiting, skipped, failed } = await loadReview(threshold)
+  const rows = await listIssueRows()
+
+  const issues: WorkbenchIssue[] = []
+  for (const row of rows) {
+    const items = await itemsForIssue(row.id)
+    const order = items.map((i) => i.id)
+    issues.push({
+      id: row.id,
+      number: row.number,
+      name: row.name ?? `Issue ${row.number}`,
+      state: row.state,
+      contents: items.map(toPoolItem),
+      pages: items.reduce((n, i) => n + (i.page_count ?? 0), 0),
+      pageTotal: row.page_total,
+      built: Boolean(row.interior_path),
+      hasCover: Boolean(row.cover_path),
+      // The PDFs on file were rendered from `built_order`; if the running
+      // order has moved since, the page numbers in them belong to an
+      // arrangement that no longer exists and the panel has to say so.
+      dirty: !row.interior_path || !sameOrder(order, row.built_order ?? []),
+      luluJobId: row.lulu_job_id,
+      rejectionReason: row.rejection_reason,
+    })
+  }
+
+  const [pool, failed, skipped, dropped] = await Promise.all([
+    poolItems(),
+    itemsInState('failed'),
+    itemsInState('skipped'),
+    itemsInState('dropped').catch(() => []),
+  ])
+
+  const settings = await loadEffectiveSettings()
+
+  // Orders and the settings row live in tables migration 013 creates. Until it
+  // is applied the rest of the workbench still works, and those two panels say
+  // what is missing rather than taking the page down with them.
+  let orders: OrderWithIssue[] | null = null
+  try {
+    orders = await listOrders()
+  } catch {
+    orders = null
+  }
+  const settingsRow = await readSettingsRow().catch(() => null)
+
+  const env = loadSettings()
 
   return (
-    <main className="mx-auto max-w-4xl px-6 py-10">
-      <header className="mb-10 flex items-baseline justify-between">
-        <div>
-          <h1 className="font-serif text-3xl">Saved reading, laid out for print.</h1>
-        </div>
+    <main className="mx-auto max-w-[1600px] px-4 py-6">
+      <header className="mb-5 flex items-baseline justify-between gap-4">
+        <h1 className="font-serif text-2xl">Saved reading, laid out for print.</h1>
         <ThemeToggle />
       </header>
 
-      {issues.length === 0 && (
-        <p className="text-muted-foreground rounded-lg border border-dashed p-8 text-center text-sm">
-          Nothing here yet. Run{' '}
-          <code className="bg-muted rounded px-1.5 py-0.5">npx tsx scripts/press-run.ts</code>
-        </p>
-      )}
-
-      {issues.map((issue) => (
-        <section key={issue.number} className="mb-14">
-          <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
-            <div>
-              <h2 className="font-serif text-2xl">{issue.name}</h2>
-              <p className="text-muted-foreground mt-0.5 text-xs">
-                Issue {issue.number}
-                {issue.built
-                  ? ` · ${issue.pageCount} pages · ${formatBytes(issue.interiorBytes)}`
-                  : ' · not built yet'}
-                {issue.printed && ' · printed'}
-                {issue.builtAt && ` · built ${issue.builtAt.slice(0, 10)}`}
-              </p>
-            </div>
-            <div className="flex gap-2 text-sm">
-              {/* Open in the browser's viewer rather than saving to disk: the
-                  route serves these inline unless `?download` asks otherwise,
-                  and looking at a proof should not litter ~/Downloads. */}
-              {issue.hasInterior && (
-                <a
-                  className="hover:bg-accent rounded-md border px-3 py-1.5"
-                  href={`/api/press/file/${issue.number}/interior.pdf`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Interior PDF
-                </a>
-              )}
-              {issue.hasCover && (
-                <a
-                  className="hover:bg-accent rounded-md border px-3 py-1.5"
-                  href={`/api/press/file/${issue.number}/cover.pdf`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Cover PDF
-                </a>
-              )}
-            </div>
-          </div>
-
-          <PrintSpec packageId={packageId} pageCount={issue.pageCount} />
-
-          {issue.hasInterior && (
-            <IssuePreview
-              issueNumber={issue.number}
-              version={issue.builtAt}
-              hasCover={issue.hasCover}
-            />
-          )}
-
-          {issue.printed ? (
-            // Its raindrops have been archived and the copy bought; what it
-            // contains is now a matter of record rather than a decision.
-            <ol className="mt-6 divide-y rounded-lg border">
-              {issue.contents.map((entry) => (
-                <li key={entry.itemId} className="flex items-baseline gap-4 px-4 py-3">
-                  <span className="text-muted-foreground w-10 shrink-0 text-right text-xs tabular-nums">
-                    {entry.startPage === null ? '' : `p.${entry.startPage}`}
-                  </span>
-                  {/* Indented under the linkpost that brought it in, exactly as
-                      it printed. */}
-                  <span className={`min-w-0 flex-1 ${entry.linkpostOf ? 'pl-4' : ''}`}>
-                    {entry.url ? (
-                      <a
-                        href={entry.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="font-serif hover:underline"
-                      >
-                        {entry.title}
-                      </a>
-                    ) : (
-                      <span className="font-serif">{entry.title}</span>
-                    )}
-                    {entry.isLinkpost && (
-                      <Badge
-                        variant="outline"
-                        className="ml-2 align-middle text-[10px] font-normal tracking-wide uppercase"
-                      >
-                        Linkpost
-                      </Badge>
-                    )}
-                    <span className="text-muted-foreground block text-xs">
-                      {[entry.byline, entry.sourceName].filter(Boolean).join(' · ') ||
-                        hostOf(entry.url)}
-                    </span>
-                    {entry.linkpostOf && (
-                      <span className="text-muted-foreground block truncate text-xs italic">
-                        Linkpost of {entry.linkpostOf}
-                      </span>
-                    )}
-                  </span>
-                  <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
-                    {entry.pageCount}pp
-                  </span>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <IssueEditor
-              issueNumber={issue.number}
-              contents={issue.contents}
-              waiting={waiting}
-              dirty={issue.dirty}
-              built={issue.built}
-              threshold={threshold}
-            />
-          )}
-        </section>
-      ))}
-
-      {(skipped.length > 0 || failed.length > 0) && (
-        <section className="text-muted-foreground mb-12 text-sm">
-          <h2 className="text-foreground font-serif text-xl">Not included</h2>
-          <ul className="mt-3 space-y-2">
-            {skipped.map((item) => (
-              <li key={item.id}>
-                <a href={item.url} target="_blank" rel="noreferrer" className="hover:underline">
-                  {item.title ?? item.url}
-                </a>{' '}
-                — skipped as a reference page
-              </li>
-            ))}
-            {failed.map((item) => (
-              <li key={item.id}>
-                <a href={item.url} target="_blank" rel="noreferrer" className="hover:underline">
-                  {item.title ?? hostOf(item.url)}
-                </a>{' '}
-                — {item.reason}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      <Workbench
+        issues={issues}
+        pool={pool.map(toPoolItem)}
+        failed={failed.map(toPoolItem)}
+        skipped={skipped.map(toPoolItem)}
+        dropped={dropped.map(toPoolItem)}
+        orders={orders}
+        settings={{
+          row: settingsRow ?? SETTINGS_DEFAULTS,
+          hasRow: settingsRow !== null,
+          env: {
+            hasShipping: Boolean(env.shipping),
+            mailTo: env.mailTo || null,
+            pageThreshold: env.pageThreshold,
+            luluPackageId: env.luluPackageId || null,
+            luluSandbox: env.luluSandbox,
+          },
+          effective: {
+            hasShipping: Boolean(settings.shipping),
+            mailTo: settings.mailTo || null,
+            luluSandbox: settings.luluSandbox,
+            copies: settings.copies,
+          },
+        }}
+        threshold={settings.pageThreshold}
+      />
     </main>
   )
 }

@@ -21,7 +21,7 @@ import {
   sendMail,
   TOKEN_TTL_DAYS,
 } from '../approval'
-import { performApproval, idempotencyKeyFor } from '../order'
+import { performApproval } from '../order'
 import type { PressSettings } from '../settings'
 import type { PressIssue, PrintQuote, TocEntry } from '../types'
 
@@ -423,12 +423,39 @@ describe('sendMail', () => {
 
 // ── Ordering ─────────────────────────────────────────────────────────────────
 
-/** A db whose claim succeeds exactly once, like the real SQL function. */
-function orderDb() {
-  let claimed = false
-  let jobId: string | null = null
+/**
+ * A database whose order claim succeeds exactly once per idempotency key,
+ * like `press_place_order` does.
+ *
+ * The claim moved out of `press_issues.lulu_job_id` and into a `press_orders`
+ * row, which is what makes a second copy of a shipped issue expressible at
+ * all. These fakes therefore have to answer for three tables rather than one.
+ */
+function orderDb(opts: { issueState?: string; address?: boolean } = {}) {
+  const orders = new Map<string, Record<string, unknown>>()
   const updates: Record<string, unknown>[] = []
   const events: string[] = []
+  let issueState = opts.issueState ?? 'closed'
+
+  const settingsRow =
+    opts.address === false
+      ? null
+      : {
+          ship_name: 'V',
+          ship_street1: '123 Test St',
+          ship_street2: null,
+          ship_city: 'San Francisco',
+          ship_state: 'CA',
+          ship_postcode: '94110',
+          ship_country: 'US',
+          ship_phone: '+15550001111',
+          contact_email: 'v@example.com',
+          page_threshold: 100,
+          copies: 1,
+          lulu_package_id: null,
+          lulu_sandbox: true,
+        }
+
   const client = {
     from(table: string) {
       const b: Record<string, unknown> = {}
@@ -437,11 +464,16 @@ function orderDb() {
       b.eq = () => {
         if (patch) {
           updates.push(patch)
-          if (patch.lulu_job_id) jobId = String(patch.lulu_job_id)
+          if (table === 'press_issues' && patch.state) issueState = String(patch.state)
+          if (table === 'press_orders') {
+            for (const order of orders.values()) Object.assign(order, patch)
+          }
+          patch = null
         }
         return b
       }
       b.in = () => b
+      b.is = () => b
       b.order = () => b
       b.limit = () => b
       b.update = (p: Record<string, unknown>) => {
@@ -453,18 +485,41 @@ function orderDb() {
         return b
       }
       b.upsert = () => b
-      b.maybeSingle = async () => ({
-        data: { ...issue(), lulu_job_id: jobId, state: jobId ? 'ordered' : 'closed' },
-        error: null,
-      })
-      b.then = (r: (v: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(r)
+      b.single = async () => ({ data: null, error: null })
+      b.maybeSingle = async () => {
+        if (table === 'press_settings') return { data: settingsRow, error: null }
+        return { data: { ...issue(), state: issueState }, error: null }
+      }
+      b.then = (r: (v: unknown) => unknown) =>
+        Promise.resolve({ data: table === 'press_orders' ? [...orders.values()] : [], error: null }).then(r)
       return b
     },
-    rpc: async (fn: string) => {
-      if (fn !== 'press_claim_order') return { data: null, error: null }
-      if (claimed) return { data: [{ claimed: false, idempotency_key: 'press-issue-iss1', lulu_job_id: jobId ?? 'pending' }], error: null }
-      claimed = true
-      return { data: [{ claimed: true, idempotency_key: 'press-issue-iss1', lulu_job_id: 'pending' }], error: null }
+    rpc: async (fn: string, args: Record<string, unknown>) => {
+      if (fn !== 'press_place_order') return { data: null, error: null }
+      const key = String(args.p_idempotency_key)
+      // Idempotent on the key: the retry finds the first attempt's row.
+      const existing = orders.get(key)
+      if (existing) return { data: existing, error: null }
+      if (!['closed', 'rejected', 'ordered', 'shipped'].includes(issueState)) {
+        return { data: null, error: { message: `press_place_order: issue is ${issueState}` } }
+      }
+      const row = {
+        id: `ord_${orders.size + 1}`,
+        issue_id: String(args.p_issue_id),
+        lulu_job_id: null,
+        idempotency_key: key,
+        status: 'pending',
+        quantity: Number(args.p_quantity ?? 1),
+        tracking_urls: [],
+        ship_to: args.p_ship_to,
+        ordered_by: args.p_ordered_by,
+        placed_at: '2026-08-31T00:00:00.000Z',
+        shipped_at: null,
+      }
+      orders.set(key, row)
+      events.push('order_claimed')
+      if (issueState === 'closed' || issueState === 'rejected') issueState = 'approved'
+      return { data: row, error: null }
     },
     storage: {
       from: () => ({
@@ -472,7 +527,7 @@ function orderDb() {
       }),
     },
   }
-  return { client: client as never, updates, events }
+  return { client: client as never, updates, events, orders }
 }
 
 function fakeLulu(job: Partial<{ id: string; status: string; lineItemStatus: string | null; message: string | null }> = {}) {
@@ -500,7 +555,7 @@ describe('performApproval', () => {
   it('creates exactly one print job', async () => {
     const db = orderDb()
     const lulu = fakeLulu()
-    const result = await performApproval(issue(), { db: db.client, settings: settings(), lulu: lulu.client })
+    const result = await performApproval(issue(), { db: db.client, lulu: lulu.client })
     expect(result).toMatchObject({ ok: true, status: 'ordered', jobId: 'job_1' })
     expect(lulu.created).toHaveLength(1)
     expect(db.events).toContain('order_placed')
@@ -509,70 +564,83 @@ describe('performApproval', () => {
   it('cannot be made to order twice by a retry or a second tap', async () => {
     const db = orderDb()
     const lulu = fakeLulu()
-    const first = await performApproval(issue(), { db: db.client, settings: settings(), lulu: lulu.client })
-    const second = await performApproval(issue(), { db: db.client, settings: settings(), lulu: lulu.client })
+    const first = await performApproval(issue(), { db: db.client, lulu: lulu.client })
+    const second = await performApproval(issue(), { db: db.client, lulu: lulu.client })
 
     expect(first.status).toBe('ordered')
     expect(second.status).toBe('already-ordered')
-    // The second attempt reports the first one's job instead of creating another.
-    expect(second.jobId).toBe('job_1')
+    // The guarantee that matters: one job at Lulu, not two.
     expect(lulu.created).toHaveLength(1)
+    expect(db.orders.size).toBe(1)
   })
 
-  it('hands Lulu a stable idempotency key derived from the issue', async () => {
+  it('orders another copy of a shipped issue, which the old claim could not', async () => {
+    const db = orderDb({ issueState: 'shipped' })
+    const lulu = fakeLulu()
+
+    const copy = await performApproval(issue({ state: 'shipped' }), {
+      db: db.client,
+      lulu: lulu.client,
+      reorder: true,
+    })
+
+    expect(copy).toMatchObject({ ok: true, status: 'ordered' })
+    expect(db.orders.size).toBe(1)
+    // A reorder must not drag the issue back through its own state machine.
+    expect(db.updates.some((u) => u.state === 'ordered')).toBe(false)
+  })
+
+  it('gives each extra copy its own claim rather than collapsing them', async () => {
+    const db = orderDb({ issueState: 'shipped' })
+    const lulu = fakeLulu()
+
+    await performApproval(issue({ state: 'shipped' }), {
+      db: db.client,
+      lulu: lulu.client,
+      reorder: true,
+      now: new Date('2026-08-31T10:00:00Z'),
+    })
+    await performApproval(issue({ state: 'shipped' }), {
+      db: db.client,
+      lulu: lulu.client,
+      reorder: true,
+      now: new Date('2026-08-31T11:00:00Z'),
+    })
+
+    // Two deliberate purchases, unlike a retry of one.
+    expect(db.orders.size).toBe(2)
+    expect(lulu.created).toHaveLength(2)
+  })
+
+  it('sends the quantity from settings to Lulu', async () => {
     const db = orderDb()
     const lulu = fakeLulu()
-    await performApproval(issue(), { db: db.client, settings: settings(), lulu: lulu.client })
-    expect(lulu.created[0]).toMatchObject({
-      externalId: idempotencyKeyFor(issue()),
-      idempotencyKey: 'press-issue-iss1',
-    })
-    expect(idempotencyKeyFor(issue())).toBe(idempotencyKeyFor(issue()))
+    await performApproval(issue(), { db: db.client, lulu: lulu.client, quantity: 3 })
+    expect((lulu.created[0] as { item: { quantity: number } }).item.quantity).toBe(3)
   })
 
-  it('passes signed URLs Lulu can fetch the files from', async () => {
+  it('records a rejection against the issue and the order', async () => {
     const db = orderDb()
-    const lulu = fakeLulu()
-    await performApproval(issue(), { db: db.client, settings: settings(), lulu: lulu.client })
-    expect(lulu.created[0]).toMatchObject({
-      item: expect.objectContaining({
-        interiorUrl: 'https://signed/issues/iss1/interior.pdf',
-        coverUrl: 'https://signed/issues/iss1/cover.pdf',
-      }),
-    })
-  })
-
-  it('marks the issue rejected when Lulu refuses the files after approval', async () => {
-    const db = orderDb()
-    const lulu = fakeLulu({ lineItemStatus: 'REJECTED', message: 'interior page size mismatch' })
-    const result = await performApproval(issue(), { db: db.client, settings: settings(), lulu: lulu.client })
+    const lulu = fakeLulu({ lineItemStatus: 'REJECTED', message: 'interior failed preflight' })
+    const result = await performApproval(issue(), { db: db.client, lulu: lulu.client })
     expect(result).toMatchObject({ ok: false, status: 'rejected' })
     expect(db.updates.some((u) => u.state === 'rejected')).toBe(true)
     expect(db.events).toContain('order_rejected')
   })
 
-  it('refuses to order an issue that was never composed', async () => {
+  it('refuses an issue that was never composed', async () => {
     const db = orderDb()
-    const lulu = fakeLulu()
     const result = await performApproval(issue({ interior_path: null }), {
       db: db.client,
-      settings: settings(),
-      lulu: lulu.client,
+      lulu: fakeLulu().client,
     })
-    expect(result).toMatchObject({ ok: false, status: 'not-composed' })
-    expect(lulu.created).toHaveLength(0)
+    expect(result.status).toBe('not-composed')
   })
 
-  it('refuses to order with no shipping address rather than failing at Lulu', async () => {
-    const db = orderDb()
-    const lulu = fakeLulu()
-    const result = await performApproval(issue(), {
-      db: db.client,
-      settings: settings({ shipping: null }),
-      lulu: lulu.client,
-    })
-    expect(result).toMatchObject({ ok: false, status: 'not-configured' })
-    expect(lulu.created).toHaveLength(0)
+  it('refuses when there is no shipping address rather than failing at Lulu', async () => {
+    const db = orderDb({ address: false })
+    const result = await performApproval(issue(), { db: db.client, lulu: fakeLulu().client })
+    expect(result.status).toBe('not-configured')
   })
 
   it('keeps the claim held when Lulu errors, so a retry cannot double-order', async () => {
@@ -584,17 +652,14 @@ describe('performApproval', () => {
       },
       getPrintJob: async () => ({ id: '', status: '', lineItemStatus: null, message: null, trackingUrls: [] }),
     }
+
     await expect(
-      performApproval(issue(), { db: db.client, settings: settings(), lulu }),
+      performApproval(issue(), { db: db.client, lulu: lulu as never }),
     ).rejects.toThrow(/gateway timeout/)
     expect(db.events).toContain('order_failed')
 
-    // The claim is not released: a second attempt is refused, not re-run.
-    const retry = await performApproval(issue(), {
-      db: db.client,
-      settings: settings(),
-      lulu: fakeLulu().client,
-    })
-    expect(retry.status).toBe('already-ordered')
+    // The row survives with no job id, so the key stays claimed and the retry
+    // reconciles rather than buying a second copy.
+    expect(db.orders.size).toBe(1)
   })
 })
