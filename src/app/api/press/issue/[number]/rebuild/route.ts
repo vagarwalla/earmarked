@@ -14,8 +14,8 @@
  */
 
 import { NextResponse } from 'next/server'
-import { BuildBusyError, BuildError, buildIssue, withBuildLock } from '@/lib/press/build'
 import { listIssues, pressUiEnabled, readState } from '@/lib/press/local'
+import { reviewSource } from '@/lib/press/review'
 import { loadSettings } from '@/lib/press/settings'
 
 export const runtime = 'nodejs'
@@ -32,6 +32,21 @@ export async function POST(
   const { number: raw } = await context.params
   if (!/^\d+$/.test(raw)) return NextResponse.json({ error: 'bad issue' }, { status: 400 })
   const number = Number.parseInt(raw, 10)
+
+  // Rendering an issue is minutes of headless Chromium. It does not fit a
+  // serverless function, and the 93MB of browser it would drag along puts the
+  // whole route over the deploy size limit — so deployed, this is honestly a
+  // 501 and the rebuild happens where press-run runs.
+  if (reviewSource() === 'supabase') {
+    return NextResponse.json(
+      { error: 'Rebuilding needs a machine with a browser. Run press-run locally, then re-import.' },
+      { status: 501 },
+    )
+  }
+
+  // Imported here rather than at module scope so the Chromium-adjacent
+  // packages are only ever loaded on a machine that can use them.
+  const { BuildBusyError, BuildError, buildIssue, withBuildLock } = await import('@/lib/press/build')
 
   const settings = loadSettings()
   const state = await readState()
