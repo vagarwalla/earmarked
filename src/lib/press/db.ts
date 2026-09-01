@@ -10,6 +10,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { loadSettings } from './settings'
+import { orderWithLinkposts } from './linkpost'
 import type {
   ActionKind,
   ActionToken,
@@ -262,6 +263,11 @@ export async function setIssueOrder(
   db: SupabaseClient = pressDb(),
 ): Promise<void> {
   const now = new Date().toISOString()
+  // A linkpost's children print directly behind it, whatever order arrived —
+  // the same normalisation the local pipeline applies, so one definition of the
+  // invariant serves both. See src/lib/press/linkpost.ts.
+  const parents = await linkpostParents(itemIds, db)
+  const ordered = orderWithLinkposts(itemIds, (id) => parents.get(id))
   // Clear first: moving an article past another would otherwise trip the
   // uniqueness index halfway through the rewrite.
   const { error: clearError } = await db
@@ -270,7 +276,7 @@ export async function setIssueOrder(
     .eq('issue_id', issueId)
   if (clearError) throw new Error(`press/db: setIssueOrder: ${clearError.message}`)
 
-  for (const [position, id] of itemIds.entries()) {
+  for (const [position, id] of ordered.entries()) {
     const { error } = await db
       .from('press_items')
       .update({ position, updated_at: now })
@@ -280,15 +286,82 @@ export async function setIssueOrder(
   }
 }
 
-/** Pull a waiting article into an issue, at the end of the running order. */
+/**
+ * The linkpost each of these items came from, for the rows that came from one.
+ * Read from the table rather than from the list in hand: a parent can be in a
+ * different issue, or in the pool, and the ordering still has to know.
+ */
+export async function linkpostParents(
+  itemIds: readonly string[],
+  db: SupabaseClient = pressDb(),
+): Promise<Map<string, string | null>> {
+  if (itemIds.length === 0) return new Map()
+  const { data, error } = await db
+    .from('press_items')
+    .select('id, linkpost_parent_id')
+    .in('id', [...itemIds])
+  if (error) throw new Error(`press/db: linkpostParents: ${error.message}`)
+  const rows = (data as Array<{ id: string; linkpost_parent_id: string | null }>) ?? []
+  return new Map(rows.map((r) => [r.id, r.linkpost_parent_id]))
+}
+
+/** The pieces a linkpost named, whatever state they are in. */
+export async function linkpostChildren(
+  itemId: string,
+  db: SupabaseClient = pressDb(),
+): Promise<PressItem[]> {
+  const { data, error } = await db
+    .from('press_items')
+    .select('*')
+    .eq('linkpost_parent_id', itemId)
+    .order('created_at', { ascending: true })
+  if (error) throw new Error(`press/db: linkpostChildren: ${error.message}`)
+  return (data as PressItem[]) ?? []
+}
+
+/**
+ * Pull a waiting article into an issue, at the end of the running order.
+ *
+ * A linkpost brings the pieces it named with it, and a piece brings the
+ * linkpost that named it: half a roundup prints an opener that says "Linkpost"
+ * above nothing, or one that says "Linkpost of X" where X is not in the issue.
+ * Anything already spoken for by another issue is left where it is.
+ */
 export async function addItemToIssue(
   itemId: string,
   issueId: string,
   db: SupabaseClient = pressDb(),
 ): Promise<void> {
   const existing = await itemsForIssue(issueId, db)
-  await updateItem(itemId, { state: 'in_issue', issue_id: issueId, position: existing.length }, db)
-  await recordEvent({ item_id: itemId, issue_id: issueId, kind: 'item_added' }, db)
+  const here = new Set(existing.map((i) => i.id))
+  const add: string[] = []
+
+  const claim = (item: Pick<PressItem, 'id' | 'state' | 'issue_id'>) => {
+    if (here.has(item.id) || add.includes(item.id)) return
+    if (item.issue_id && item.issue_id !== issueId) return
+    if (item.state !== 'laid_out' && item.issue_id !== issueId) return
+    add.push(item.id)
+  }
+
+  const item = await getItem(itemId, db)
+  add.push(itemId)
+
+  if (item?.linkpost_parent_id) {
+    const parent = await getItem(item.linkpost_parent_id, db)
+    if (parent) claim(parent)
+  }
+  if (item?.is_linkpost) {
+    for (const child of await linkpostChildren(itemId, db)) claim(child)
+  }
+
+  let position = existing.length
+  for (const id of add) {
+    await updateItem(id, { state: 'in_issue', issue_id: issueId, position: position++ }, db)
+    await recordEvent({ item_id: id, issue_id: issueId, kind: 'item_added' }, db)
+  }
+
+  // The adds land at the end; the normaliser puts each group back together.
+  await setIssueOrder(issueId, [...existing.map((i) => i.id), ...add], db)
 }
 
 /**
@@ -300,10 +373,24 @@ export async function removeItemFromIssue(
   issueId: string,
   db: SupabaseClient = pressDb(),
 ): Promise<void> {
-  await updateItem(itemId, { state: 'laid_out', issue_id: null, position: null }, db)
+  // Taking out a linkpost takes out what it brought in: those pieces are here
+  // only because it named them, and an opener reading "Linkpost of X" with X
+  // gone is a printed mistake. They go back to the pool, not to the bin.
+  const item = await getItem(itemId, db)
+  const going = [itemId]
+  if (item?.is_linkpost) {
+    for (const child of await linkpostChildren(itemId, db)) {
+      if (child.issue_id === issueId) going.push(child.id)
+    }
+  }
+
+  for (const id of going) {
+    await updateItem(id, { state: 'laid_out', issue_id: null, position: null }, db)
+    await recordEvent({ item_id: id, issue_id: issueId, kind: 'item_removed' }, db)
+  }
+
   const remaining = await itemsForIssue(issueId, db)
   await setIssueOrder(issueId, remaining.map((i) => i.id), db)
-  await recordEvent({ item_id: itemId, issue_id: issueId, kind: 'item_removed' }, db)
 }
 
 export async function updateItem(

@@ -222,6 +222,99 @@ describe('applyIssueAction', () => {
   })
 })
 
+// ── Linkposts ────────────────────────────────────────────────────────────────
+
+describe('linkposts in an issue', () => {
+  /** A roundup, the two pieces it named, and an unrelated article. */
+  const pool = () =>
+    state({
+      items: [
+        item({ id: 'zvi', savedAt: '2026-08-01T00:00:00Z', pageCount: 6, isLinkpost: true }),
+        item({ id: 'k1', savedAt: '2026-08-01T00:00:00Z', pageCount: 20, linkpostParentId: 'zvi' }),
+        item({ id: 'k2', savedAt: '2026-08-01T00:00:00Z', pageCount: 20, linkpostParentId: 'zvi' }),
+        item({ id: 'solo', savedAt: '2026-08-02T00:00:00Z', pageCount: 10 }),
+      ],
+    })
+
+  const draft = (itemIds: string[]): IssueDraft => ({ number: 1, itemIds, state: 'draft' })
+
+  it('selects a roundup together with the pieces it named', () => {
+    // The threshold falls inside the group; taking half of it would print an
+    // opener promising two pieces that are not there.
+    const chosen = selectForIssue(pool(), 10).map((i) => i.id)
+    expect(chosen).toContain('zvi')
+    expect(chosen).toContain('k1')
+    expect(chosen).toContain('k2')
+  })
+
+  it('prints them directly behind their linkpost', () => {
+    expect(selectForIssue(pool(), 200).map((i) => i.id)).toEqual(['zvi', 'k1', 'k2', 'solo'])
+  })
+
+  it('adding a linkpost adds what it named', () => {
+    const s = pool()
+    const d = applyIssueAction(s, draft([]), { action: 'add', itemId: 'zvi' })
+    expect(d.itemIds).toEqual(['zvi', 'k1', 'k2'])
+  })
+
+  it('adding one of the named pieces brings its linkpost with it', () => {
+    const s = pool()
+    const d = applyIssueAction(s, draft([]), { action: 'add', itemId: 'k1' })
+    // Without the roundup, "Linkpost of Monthly Roundup" points at nothing.
+    expect(d.itemIds).toContain('zvi')
+    expect(d.itemIds).toContain('k1')
+    expect(d.itemIds.indexOf('zvi')).toBeLessThan(d.itemIds.indexOf('k1'))
+  })
+
+  it('refuses a named piece when its linkpost belongs to another issue', () => {
+    const s = pool()
+    s.issues = [{ number: 2, itemIds: ['zvi'], state: 'draft' }]
+    expect(() => applyIssueAction(s, draft([]), { action: 'add', itemId: 'k1' })).toThrow(
+      IssueEditError,
+    )
+  })
+
+  it('removing a linkpost removes what it brought in', () => {
+    const s = pool()
+    const d = applyIssueAction(s, draft(['zvi', 'k1', 'k2', 'solo']), {
+      action: 'remove',
+      itemId: 'zvi',
+    })
+    expect(d.itemIds).toEqual(['solo'])
+  })
+
+  it('removing one named piece leaves the rest of the group alone', () => {
+    const s = pool()
+    const d = applyIssueAction(s, draft(['zvi', 'k1', 'k2']), { action: 'remove', itemId: 'k1' })
+    expect(d.itemIds).toEqual(['zvi', 'k2'])
+  })
+
+  it('pulls a dragged-away piece back behind its linkpost', () => {
+    const s = pool()
+    const d = applyIssueAction(s, draft(['zvi', 'k1', 'k2', 'solo']), {
+      action: 'reorder',
+      itemIds: ['k1', 'solo', 'zvi', 'k2'],
+    })
+    expect(d.itemIds).toEqual(['solo', 'zvi', 'k1', 'k2'])
+  })
+
+  it('still refuses a reorder that changes the membership', () => {
+    const s = pool()
+    expect(() =>
+      applyIssueAction(s, draft(['zvi', 'k1']), { action: 'reorder', itemIds: ['zvi'] }),
+    ).toThrow(IssueEditError)
+  })
+
+  it('leaves an issue with no linkposts in it exactly as it was', () => {
+    const s = state({ items: [item({ id: 'a' }), item({ id: 'b' }), item({ id: 'c' })] })
+    const d = applyIssueAction(s, draft(['a', 'b', 'c']), {
+      action: 'reorder',
+      itemIds: ['c', 'a', 'b'],
+    })
+    expect(d.itemIds).toEqual(['c', 'a', 'b'])
+  })
+})
+
 describe('estimatePages', () => {
   const s = state({
     items: [item({ id: 'a', pageCount: 12 }), item({ id: 'b', pageCount: 30 }), item({ id: 'c' })],

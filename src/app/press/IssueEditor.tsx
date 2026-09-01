@@ -37,6 +37,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { GripVertical, Plus, X } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import type { IssueEntry } from '@/lib/press/local'
 
@@ -45,6 +46,37 @@ export interface WaitingItem {
   title: string | null
   url: string
   pageCount: number
+  /** This article is a linkpost; adding it adds the pieces it named. */
+  isLinkpost?: boolean
+  /** Title of the linkpost that brought it into the pool, when one did. */
+  linkpostOf?: string | null
+}
+
+/**
+ * The small mark that says what an article has to do with the one above it.
+ * A linkpost announces itself in the accent colour; a piece it named explains
+ * itself quietly, because the roundup is the thing you are choosing.
+ */
+function LinkpostMark({
+  isLinkpost,
+  linkpostOf,
+}: {
+  isLinkpost?: boolean
+  linkpostOf?: string | null
+}) {
+  if (isLinkpost) {
+    return (
+      <Badge variant="outline" className="ml-2 align-middle text-[10px] font-normal tracking-wide uppercase">
+        Linkpost
+      </Badge>
+    )
+  }
+  if (!linkpostOf) return null
+  return (
+    <span className="text-muted-foreground block truncate text-xs italic">
+      Linkpost of {linkpostOf}
+    </span>
+  )
 }
 
 interface EditorProps {
@@ -129,7 +161,9 @@ function ContentsRow({
         {entry.startPage === null ? `${position}.` : `p.${entry.startPage}`}
       </span>
 
-      <span className="min-w-0 flex-1">
+      {/* Indented under the linkpost that brought it in — the same grouping the
+          contents page prints, so the editor shows what the reader will see. */}
+      <span className={`min-w-0 flex-1 ${entry.linkpostOf ? 'pl-4' : ''}`}>
         {entry.url ? (
           <a href={entry.url} target="_blank" rel="noreferrer" className="font-serif hover:underline">
             {entry.title}
@@ -137,12 +171,14 @@ function ContentsRow({
         ) : (
           <span className="font-serif">{entry.title}</span>
         )}
+        {entry.isLinkpost && <LinkpostMark isLinkpost />}
         <span className="text-muted-foreground block text-xs">
           {[entry.byline, entry.sourceName]
             .filter((p): p is string => Boolean(p))
             .filter((p, i, all) => all.findIndex((q) => q.toLowerCase() === p.toLowerCase()) === i)
             .join(' · ') || hostOf(entry.url)}
         </span>
+        <LinkpostMark linkpostOf={entry.linkpostOf} />
       </span>
 
       <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
@@ -438,11 +474,13 @@ export function IssueEditor(props: EditorProps) {
         <ol className="mt-3 divide-y rounded-lg border">
           {waiting.map((item) => (
             <li key={item.id} className="flex items-baseline gap-3 px-4 py-3">
-              <span className="min-w-0 flex-1">
+              <span className={`min-w-0 flex-1 ${item.linkpostOf ? 'pl-4' : ''}`}>
                 <a href={item.url} target="_blank" rel="noreferrer" className="font-serif hover:underline">
                   {item.title ?? item.url}
                 </a>
+                {item.isLinkpost && <LinkpostMark isLinkpost />}
                 <span className="text-muted-foreground block text-xs">{hostOf(item.url)}</span>
+                <LinkpostMark linkpostOf={item.linkpostOf} />
               </span>
               <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
                 {item.pageCount || '?'}pp

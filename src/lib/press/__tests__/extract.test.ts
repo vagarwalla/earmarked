@@ -837,3 +837,44 @@ describe('extractFootnotes', () => {
     expect(notes).toEqual([{ marker: '2', html: 'Real.' }])
   })
 })
+
+// ── Outbound links, for the linkpost classifier ──────────────────────────────
+
+describe('outbound links survive extraction', () => {
+  const page = (body: string) => `<!doctype html><html><head><title>Roundup</title></head><body>
+    <article>${body}</article></body></html>`
+
+  const roundup = page(
+    `<h1>Monthly Roundup</h1>` +
+      Array.from(
+        { length: 6 },
+        (_, i) =>
+          `<p>Worth reading: <a href="https://s${i}.test/essay">Essay number ${i} about something</a>, which argues a point at length and is well worth the time it takes.</p>`,
+      ).join('') +
+      `<p>${'Padding sentence to clear the minimum article length. '.repeat(20)}</p>`,
+  )
+
+  it('hands the classifier the hrefs the printed page throws away', () => {
+    const rung = extractWithDefuddle(roundup, 'https://zvi.test/p/roundup')
+    expect(rung).not.toBeNull()
+    expect(rung!.links.length).toBeGreaterThanOrEqual(6)
+    expect(rung!.links[0].url).toMatch(/^https:\/\/s0\.test/)
+    expect(rung!.links[0].text).toContain('Essay number 0')
+
+    // The blocks themselves still carry no href: print cannot follow one.
+    const html = rung!.blocks
+      .map((b) => (b.type === 'para' ? b.html : ''))
+      .join(' ')
+    expect(html).not.toContain('href')
+  })
+
+  it('harvests them from a newsletter too', async () => {
+    const { links } = await extractFromNewsletterHtml({
+      itemId: 'i1',
+      html: roundup,
+      senderName: 'A Newsletter',
+      deps: { storeImages: (async () => []) as never },
+    })
+    expect(links.length).toBeGreaterThanOrEqual(6)
+  })
+})

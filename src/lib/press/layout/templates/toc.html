@@ -8,7 +8,13 @@
   <ol class="toc-list">
     <li class="toc-entry">
       <span class="toc-title">{{TITLE}}</span>
-      <span class="toc-meta">{{BYLINE}} · {{SOURCE}}</span>
+      <span class="toc-meta">{{BYLINE}} · {{SOURCE}} · <span class="toc-flag">Linkpost</span></span>
+      <span class="toc-page">{{PAGE}}</span>
+    </li>
+    <!-- A piece a linkpost named sits under it, indented, and says whose it is. -->
+    <li class="toc-entry toc-entry--child">
+      <span class="toc-title">{{TITLE}}</span>
+      <span class="toc-meta">{{BYLINE}} · {{SOURCE}} · <span class="toc-via">via {{LINKPOST_TITLE}}</span></span>
       <span class="toc-page">{{PAGE}}</span>
     </li>
   </ol>

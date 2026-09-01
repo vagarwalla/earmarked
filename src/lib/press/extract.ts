@@ -22,6 +22,7 @@ import { Readability } from '@mozilla/readability'
 import Defuddle from 'defuddle'
 import { safeFetchText } from './fetch'
 import { fetchAndStoreImages, type CandidateImage, type StoredImage } from './images'
+import { collectOutboundLinks, type OutboundLink } from './linkpost'
 import type { Article, ArticleBlock, ArticleFootnote, ArticleImage } from './types'
 
 export type ExtractionRung = 'defuddle' | 'readability' | 'raindrop-cache' | 'newsletter'
@@ -565,6 +566,11 @@ interface RungResult {
   blocks: ArticleBlock[]
   images: CandidateImage[]
   footnotes: ArticleFootnote[]
+  /**
+   * Outbound links, harvested before `toBlocks` flattens the anchors away.
+   * Only the linkpost classifier reads these; the printed page never does.
+   */
+  links: OutboundLink[]
 }
 
 function contentRoot(html: string, url: string): Element | null {
@@ -598,6 +604,10 @@ function buildRung(
   // toBlocks walks it into paragraphs at the end of the piece as well.
   const alsoHere = extractFootnotes(root)
   const footnotes = footnotesFromSource.length ? footnotesFromSource : alsoHere
+  // Before toBlocks: it keeps the words and drops the href, and the classifier
+  // needs the href. `root` is not mutated by the walk, but reading first keeps
+  // that from becoming a load-bearing accident.
+  const links = collectOutboundLinks(root, url)
   const { blocks, images } = toBlocks(root)
   if (articleLength(blocks) < MIN_ARTICLE_CHARS) return null
   return {
@@ -609,6 +619,7 @@ function buildRung(
     blocks,
     images,
     footnotes,
+    links,
   }
 }
 
@@ -688,6 +699,12 @@ export interface ExtractOptions {
 export interface ExtractedArticle {
   article: Article
   rung: ExtractionRung
+  /**
+   * The outbound links this page carried, for the linkpost classifier. Not
+   * stored with the article — the printed page has no use for them, and a
+   * re-classification re-fetches rather than trusting a stale harvest.
+   */
+  links: OutboundLink[]
 }
 
 /**
@@ -759,7 +776,7 @@ export async function extractFromUrl(opts: ExtractOptions): Promise<ExtractedArt
   }
 
   const article = await finish(itemId, url, result, storeImages)
-  return { article, rung }
+  return { article, rung, links: result.links }
 }
 
 /**
@@ -782,6 +799,7 @@ export async function extractFromNewsletterHtml(
   const root = doc.body
   stripExternalReferences(root)
   const footnotes = extractFootnotes(root)
+  const links = collectOutboundLinks(root, url)
   const { blocks, images } = toBlocks(root)
   const cleaned = stripNewsletterCruft(blocks)
 
@@ -806,10 +824,11 @@ export async function extractFromNewsletterHtml(
       blocks: body,
       images,
       footnotes,
+      links,
     },
     storeImages,
   )
-  return { article, rung: 'newsletter' }
+  return { article, rung: 'newsletter', links }
 }
 
 async function finish(

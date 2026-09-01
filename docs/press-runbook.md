@@ -105,7 +105,8 @@ these in Vercel, in `fly secrets`, and in a local `.env.local`.
 ## How it runs
 
 **Every 30 minutes:** poll `hw` → extract → measure-render each new article →
-assign to the open issue.
+classify it as a linkpost or not → assign to the open issue. A linkpost's
+pointers are queued as articles of their own and extracted on the same tick.
 
 **Sunday 19:00 PT:** close the open issue if it has filled (≥ threshold) or has
 been open past the age backstop and still clears Lulu's 32-page floor; compose
@@ -130,7 +131,16 @@ Raindrop collection named `YYYY-MM-DD — <issue name>`.
   over content that arrived through a public email address.
 - **Everything outbound goes through the SSRF guard** (`src/lib/press/fetch.ts`):
   http(s) only, DNS resolved and checked against private ranges, every redirect
-  hop re-checked.
+  hop re-checked. Links harvested from a linkpost are no exception — they arrive
+  from a saved page, which is untrusted input.
+- **A linkpost's pieces print directly behind it**, and an issue never holds one
+  without the other. The invariant is imposed on write (`orderWithLinkposts`)
+  rather than defended in the editor, so it holds however the order arrived —
+  a drag, a stale page, or a script — and `press_set_issue_order` refuses an
+  order that would leave a piece captioned "Linkpost of …" pointing at nothing.
+- **A linkpost is never followed twice.** Only articles saved to `hw` are
+  classified; a roundup reached *through* a roundup is left alone, so ingestion
+  cannot walk off down the web.
 
 ---
 
@@ -172,8 +182,53 @@ cadence tolerates minutes.
 npm test                          # the whole suite
 npx vitest run src/lib/press      # press only
 npx tsx scripts/press-preview.ts  # render a sample article to look at
+npm run press:linkposts -- --dry-run   # what the pool's linkposts would pull in
 ```
 
 `scripts/press-preview.ts` writes HTML plus a PDF when a browser is reachable
 (set `PRESS_CHROMIUM_PATH` if it is not found). Typography bugs do not show up
 in unit tests — look at the PDF.
+
+---
+
+## Linkposts
+
+Some of what lands in `hw` is not a piece of writing but a set of pointers at
+other writing — a links roundup, "assorted links", a crosspost that exists to
+say "this is a linkpost for X". Printed as-is those become pages of anchor text
+with the anchors removed, because extraction throws every href away: print
+cannot follow one.
+
+So press treats a linkpost as front matter for the reading it names. The post
+itself still prints — the commentary is usually why it was saved — and the
+pieces it points at are fetched, printed after it, and labelled as belonging to
+it, on the opener and on the contents page.
+
+**How the call is made.** A cheap deterministic pass
+(`worthClassifying` in `src/lib/press/linkpost.ts`) decides whether a piece is
+even worth asking about: link density against body length, how many of the links
+stand alone or are headings, how many different sites it points at. Roughly nine
+articles in ten never reach the model. The ones that do get a single
+`claude-opus-5` call that answers two questions — is this a linkpost, and which
+of its pointers are reading in their own right rather than the source of a
+number, a book to buy, or a link back into the author's own archive. It is asked
+to be selective, because a missed pointer costs the reader little and a printed
+pricing page costs them a page.
+
+A declared crosspost ("This is a linkpost for …") skips the model entirely: the
+page says what it is.
+
+**Without `ANTHROPIC_API_KEY`, or when the call fails**, the deterministic
+answer stands on its own — standalone pointers with real anchor text, one per
+site, capped. Blunter, and it never blocks an issue.
+
+**Existing articles.** `npm run press:linkposts` walks everything in the pool
+that has never been asked about. Each is re-fetched, because the stored
+`article.json` has no hrefs left in it; nothing is re-extracted and no images
+are touched. Pieces it finds are queued, and the next `press-run` extracts them
+through exactly one code path. `--dry-run` says what it would do, `--force`
+re-asks about everything, `--limit N` takes a bite.
+
+**Cost control.** `MAX_TARGETS` (12) is a backstop rather than a policy: the
+model is asked for what is actually reading and usually returns a handful, and
+this exists so a pathological roundup cannot turn one save into forty items.

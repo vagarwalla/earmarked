@@ -14,12 +14,15 @@ import {
   bootstrapIssue,
   failItem,
   getIssue,
+  getItem,
   getOpenIssue,
+  insertItem,
   itemsForIssue,
   itemsInState,
   issuesInState,
   putObject,
   recordEvent,
+  setIssueOrder,
   signedUrl,
   storagePath,
   updateItem,
@@ -29,6 +32,7 @@ import {
 import { loadSettings, missingSettings } from '../src/lib/press/settings'
 import { pollRaindrops } from '../src/lib/press/raindrop'
 import { extractFromUrl, extractFromNewsletterHtml, ExtractionError } from '../src/lib/press/extract'
+import { classifyLinkpost, MAX_TARGETS, type OutboundLink } from '../src/lib/press/linkpost'
 import { renderArticle } from '../src/lib/press/layout/render'
 import { composeIssue, shouldCloseIssue } from '../src/lib/press/compose'
 import { issueActionTokens, sendApprovalEmail } from '../src/lib/press/approval'
@@ -36,7 +40,7 @@ import { createLuluClient, isRejected, isShipped } from '../src/lib/press/lulu'
 import { archiveIssue } from '../src/lib/press/archive'
 import { sendWeeklyDigest } from '../src/lib/press/digest'
 import { getObject } from '../src/lib/press/db'
-import type { Article, PressItem } from '../src/lib/press/types'
+import type { Article, LinkpostTarget, PressItem } from '../src/lib/press/types'
 
 const MINUTE = 60_000
 const POLL_INTERVAL = 30 * MINUTE
@@ -53,24 +57,58 @@ async function extractQueued(): Promise<number> {
   const items = await itemsInState(['queued'], undefined, 25)
   let done = 0
 
+  const settings = loadSettings()
+
   for (const item of items) {
     try {
       let article: Article
+      let links: OutboundLink[]
       if (item.source === 'newsletter') {
         if (!item.content_path) throw new ExtractionError('newsletter has no stored html', ['newsletter'])
         const html = new TextDecoder().decode(await getObject(item.content_path))
-        article = (
-          await extractFromNewsletterHtml({
-            itemId: item.id,
-            html,
-            senderName: item.source_name,
-          })
-        ).article
+        ;({ article, links } = await extractFromNewsletterHtml({
+          itemId: item.id,
+          html,
+          senderName: item.source_name,
+        }))
       } else {
         if (!item.url) throw new ExtractionError('item has no url', [])
-        article = (
-          await extractFromUrl({ itemId: item.id, url: item.url, raindropId: item.raindrop_id })
-        ).article
+        ;({ article, links } = await extractFromUrl({
+          itemId: item.id,
+          url: item.url,
+          raindropId: item.raindrop_id,
+        }))
+      }
+
+      // A piece a linkpost named says so on its own opener, so the relationship
+      // survives into print rather than living only in the database.
+      const parent = item.linkpost_parent_id ? await getItem(item.linkpost_parent_id) : null
+      if (parent) {
+        article.linkpostOf = {
+          title: parent.title ?? parent.url ?? 'a linkpost',
+          url: parent.url,
+          anchor: item.linkpost_anchor,
+        }
+      }
+
+      // Only what was saved to `hw` is examined. A roundup reached *through* a
+      // roundup is a rabbit hole, so anything that arrived this way is skipped
+      // and the queue can never walk off down the web.
+      const judgement = item.linkpost_parent_id
+        ? null
+        : await classifyLinkpost({
+            article,
+            links,
+            apiKey: settings.anthropicApiKey,
+            maxTargets: MAX_TARGETS,
+          })
+
+      if (judgement?.isLinkpost) {
+        article.linkpost = {
+          kind: judgement.kind,
+          reason: judgement.reason,
+          targets: judgement.targets,
+        }
       }
 
       const path = storagePath.articleJson(item.id)
@@ -82,7 +120,14 @@ async function extractQueued(): Promise<number> {
         byline: article.byline,
         source_name: article.sourceName ?? item.source_name,
         published_at: article.publishedAt ?? item.published_at,
+        is_linkpost: Boolean(judgement?.isLinkpost),
+        linkpost_scanned_at: new Date().toISOString(),
       })
+
+      if (judgement?.isLinkpost) {
+        const added = await queueLinkpostTargets(item.id, judgement.targets)
+        log('linkpost', { item: item.id, named: judgement.targets.length, queued: added })
+      }
       done++
     } catch (err) {
       await failItem(item.id, (err as Error).message)
@@ -90,6 +135,32 @@ async function extractQueued(): Promise<number> {
   }
 
   return done
+}
+
+/**
+ * The pieces a linkpost named, queued as items of their own.
+ *
+ * `insertItem` upserts on `url_key` and returns null for a duplicate, so a link
+ * already in the pipeline — saved to `hw` by hand, or named by two roundups in
+ * the same week — is one article, and re-running this adds nothing.
+ */
+async function queueLinkpostTargets(
+  parentId: string,
+  targets: readonly LinkpostTarget[],
+): Promise<number> {
+  let added = 0
+  for (const target of targets) {
+    const inserted = await insertItem({
+      source: 'raindrop',
+      url: target.url,
+      title: target.anchor || null,
+      state: 'queued',
+      linkpost_parent_id: parentId,
+      linkpost_anchor: target.anchor || null,
+    })
+    if (inserted) added++
+  }
+  return added
 }
 
 /**
@@ -123,13 +194,25 @@ async function layoutExtracted(): Promise<number> {
   return done
 }
 
-/** laid_out → in_issue, joining whichever issue is currently open. */
+/**
+ * laid_out → in_issue, joining whichever issue is currently open.
+ *
+ * The order is written rather than left to the chronological fallback, because
+ * a linkpost's pieces have to sit directly behind it and they arrive in the
+ * queue alongside everything else extracted that tick. `setIssueOrder` applies
+ * the same grouping the editor and the local pipeline apply.
+ */
 async function assignToOpenIssue(): Promise<number> {
   const open = await bootstrapIssue()
   const items = await itemsInState(['laid_out'], undefined, 200)
+  if (items.length === 0) return 0
+
+  const existing = (await itemsForIssue(open.id)).map((i) => i.id)
   for (const item of items) {
     await updateItem(item.id, { state: 'in_issue', issue_id: open.id })
   }
+  // New arrivals go on the end; the grouping is imposed across the whole issue.
+  await setIssueOrder(open.id, [...existing, ...items.map((i) => i.id)])
   return items.length
 }
 

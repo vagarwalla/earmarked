@@ -375,6 +375,117 @@ figcaption {
   max-width: 300pt;
 }
 
+/* ── Linkposts ───────────────────────────────────────────────────────────────
+   A flag above the title, in the kicker's register but ruled, so the reader
+   sees the relationship between two pieces before reading either. It is set in
+   the accent colour on a linkpost and in soft ink on the pieces beneath it —
+   the roundup announces itself, its children only explain themselves. */
+
+.flag {
+  font-family: var(--sans);
+  font-size: 7pt;
+  line-height: 1.2;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--accent);
+  padding-bottom: 5pt;
+  margin-bottom: 9pt;
+  border-bottom: 0.75pt solid var(--accent);
+  /* Only as wide as its words: a rule across the column would read as a divider. */
+  display: inline-block;
+}
+
+.flag--via {
+  color: var(--ink-soft);
+  font-weight: 400;
+  border-bottom-color: var(--rule);
+}
+
+/* The parent's title inside the flag is a title, so it is not letterspaced
+   into unreadability along with the label. */
+.flag-source {
+  letter-spacing: 0.04em;
+  text-transform: none;
+  font-style: italic;
+  color: var(--ink);
+}
+
+/* What a roundup named. Set like the notes — smaller, tighter, ruled off —
+   because that is what it is: apparatus, after the piece rather than in it. */
+.linked {
+  margin-top: 16pt;
+  padding-top: 8pt;
+  border-top: 0.5pt solid var(--rule);
+}
+
+.linked-head {
+  font-family: var(--sans);
+  font-size: 7pt;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin: 0 0 6pt;
+  break-after: avoid;
+}
+
+.linked-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 8pt;
+  line-height: 11pt;
+}
+
+.linked-item {
+  margin-bottom: 5pt;
+  break-inside: avoid;
+}
+
+.linked-anchor {
+  font-family: var(--serif);
+  color: var(--ink);
+}
+
+/* Note and address each take their own line under the anchor, so a long list
+   stays scannable down the left edge rather than running together. */
+.linked-note {
+  display: block;
+  font-family: var(--serif);
+  font-style: italic;
+  color: var(--ink-soft);
+}
+
+.linked-host {
+  display: block;
+  font-family: var(--sans);
+  font-size: 6.5pt;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+
+/* On the contents page, the same two relationships in one line of small type. */
+.toc-flag {
+  font-family: var(--sans);
+  font-size: 6.5pt;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.toc-via {
+  font-style: italic;
+  color: var(--ink-soft);
+}
+
+/* An article the roundup brought in is indented under it, so the contents page
+   shows the grouping the issue is arranged in without any extra furniture. */
+.toc-entry--child .toc-title,
+.toc-entry--child .toc-meta {
+  padding-left: 14pt;
+}
+
 /* ── Notes ───────────────────────────────────────────────────────────────────
    Set smaller and tighter than the body, the way notes are, and allowed to
    break across pages — a long apparatus is common and forcing it whole would
@@ -524,6 +635,13 @@ figcaption {
 
 .toc-meta:empty {
   display: none;
+}
+
+/* `.sep` carries its spacing from whatever context it sits in, so the contents
+   page needs its own rule; without one the flag runs straight into the byline. */
+.toc-meta .sep {
+  color: var(--rule);
+  padding: 0 0.4em;
 }
 
 .toc-page {

@@ -40,6 +40,11 @@ interface LocalItem {
   pageCount?: number
   reason?: string
   savedAt: string
+  isLinkpost?: boolean
+  /** A *local* item id, resolved to the remote UUID in a second pass. */
+  linkpostParentId?: string
+  linkpostAnchor?: string
+  linkpostScannedAt?: string
 }
 
 interface LocalState {
@@ -215,6 +220,8 @@ async function main(): Promise<void> {
 
   // ── Items. ─────────────────────────────────────────────────────────────────
   let imported = 0
+  /** Local item id → the UUID Postgres gave it, for the linkpost pass below. */
+  const remoteId = new Map<string, string>()
   for (const item of state.items) {
     const where = membership.get(item.id)
     const issueId = where ? (issueIdByNumber.get(where.number) ?? null) : null
@@ -231,6 +238,11 @@ async function main(): Promise<void> {
       title: item.title,
       page_count: item.pageCount ?? null,
       failure_reason: item.reason ?? null,
+      is_linkpost: item.isLinkpost ?? false,
+      linkpost_anchor: item.linkpostAnchor ?? null,
+      linkpost_scanned_at: item.linkpostScannedAt ?? null,
+      // linkpost_parent_id needs the *remote* UUID of the parent, which may not
+      // exist yet. Filled in by the second pass below.
       content_path: existsSync(path.join(ROOT, 'items', item.id, 'article.json'))
         ? storagePath.articleJson(item.id)
         : null,
@@ -239,30 +251,65 @@ async function main(): Promise<void> {
     }
 
     if (DRY) {
-      say(`item ${item.raindropId} ${row.state}${where ? ` @${where.position}` : ''} — ${item.title ?? item.url}`)
+      say(`item ${item.raindropId || item.id} ${row.state}${where ? ` @${where.position}` : ''} — ${item.title ?? item.url}`)
+      // Stand-in so the linkpost pass below can still report what it would link.
+      remoteId.set(item.id, `dry-${item.id}`)
       imported++
       continue
     }
 
+    // Identity is the raindrop id where there is one. A piece that arrived
+    // through a linkpost has none, so its normalised URL stands in — which is
+    // the column that is uniquely indexed anyway.
+    const match = /^\d+$/.test(item.raindropId)
+      ? { column: 'raindrop_id', value: item.raindropId }
+      : { column: 'url_key', value: row.url_key ?? item.url }
+
     const { data: existing } = await db
       .from('press_items')
       .select('id')
-      .eq('raindrop_id', item.raindropId)
+      .eq(match.column, match.value)
       .maybeSingle()
 
     if (existing) {
-      const { error } = await db.from('press_items').update(row).eq('id', (existing as { id: string }).id)
-      if (error) throw new Error(`item ${item.raindropId}: ${error.message}`)
+      const id = (existing as { id: string }).id
+      const { error } = await db.from('press_items').update(row).eq('id', id)
+      if (error) throw new Error(`item ${item.id}: ${error.message}`)
+      remoteId.set(item.id, id)
     } else {
-      const { error } = await db.from('press_items').insert(row)
-      if (error) throw new Error(`item ${item.raindropId}: ${error.message}`)
+      const { data: inserted, error } = await db.from('press_items').insert(row).select('id').single()
+      if (error) throw new Error(`item ${item.id}: ${error.message}`)
+      remoteId.set(item.id, (inserted as { id: string }).id)
     }
 
     await uploadItemFiles(db, bucket, item.id)
     imported++
   }
 
-  say(`done: ${imported} items, ${issueIdByNumber.size} issues`)
+  // ── Linkpost parents, once every item has a remote id. ─────────────────────
+  // Local ids are raindrop ids (or `lp-…` for a piece a linkpost brought in);
+  // the column is a UUID foreign key, so the mapping only exists after the
+  // loop above has run.
+  let linked = 0
+  for (const item of state.items) {
+    if (!item.linkpostParentId) continue
+    const child = remoteId.get(item.id)
+    const parent = remoteId.get(item.linkpostParentId)
+    if (!child || !parent) continue
+    if (DRY) {
+      say(`link ${item.title ?? item.url} -> ${item.linkpostParentId}`)
+      linked++
+      continue
+    }
+    const { error } = await db
+      .from('press_items')
+      .update({ linkpost_parent_id: parent, updated_at: new Date().toISOString() })
+      .eq('id', child)
+    if (error) throw new Error(`link ${item.id}: ${error.message}`)
+    linked++
+  }
+
+  say(`done: ${imported} items (${linked} from linkposts), ${issueIdByNumber.size} issues`)
   if (DRY) say('nothing was written — drop --dry-run to import for real')
 }
 

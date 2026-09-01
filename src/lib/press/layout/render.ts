@@ -360,6 +360,7 @@ function openerHtml(article: Article, anchorId: string): string {
   const kicker = article.sourceName
     ? `<p class="kicker">${escapeHtml(article.sourceName)}</p>`
     : ''
+  const flag = flagHtml(article)
   const dek = article.dek ? `<p class="dek">${escapeHtml(article.dek)}</p>` : ''
 
   const bylineParts: string[] = []
@@ -378,6 +379,7 @@ function openerHtml(article: Article, anchorId: string): string {
     `<section class="${classes.join(' ')}" id="${escapeHtml(anchorId)}">`,
     figure,
     '<div class="opener-text">',
+    flag,
     kicker,
     `<h1 class="article-title">${escapeHtml(article.title)}</h1>`,
     dek,
@@ -386,6 +388,59 @@ function openerHtml(article: Article, anchorId: string): string {
     '</div>',
     '</section>',
   ].join('')
+}
+
+/**
+ * The line above the title that says what kind of thing this is: a linkpost,
+ * or a piece that is here because one pointed at it.
+ *
+ * It goes above the kicker rather than inside it because it answers a different
+ * question — the kicker says where a piece came from, this says why it is here —
+ * and because a reader flicking through needs to see the relationship before
+ * they start reading, not after.
+ */
+function flagHtml(article: Article): string {
+  if (article.linkpost) {
+    const count = article.linkpost.targets.length
+    const label =
+      article.linkpost.kind === 'pointer'
+        ? 'Linkpost'
+        : count > 0
+          ? `Linkpost · ${count} piece${count === 1 ? '' : 's'} follow${count === 1 ? 's' : ''}`
+          : 'Linkpost'
+    return `<p class="flag">${escapeHtml(label)}</p>`
+  }
+  if (article.linkpostOf) {
+    const title = article.linkpostOf.title?.trim()
+    return title
+      ? `<p class="flag flag--via">Linkpost of <span class="flag-source">${escapeHtml(title)}</span></p>`
+      : '<p class="flag flag--via">Linked from a linkpost</p>'
+  }
+  return ''
+}
+
+/**
+ * What a linkpost named, set after its own text.
+ *
+ * The pieces that were fetched are printed immediately after this article, so
+ * this is not a table of contents — it is the roundup's own list, kept so the
+ * ones that could not be fetched (paywalled, dead, a video) are still visible
+ * as something that was pointed at. Addresses are printed without a scheme,
+ * like every other address in the magazine, so they can be typed.
+ */
+function linkedHtml(article: Article): string {
+  const targets = article.linkpost?.targets ?? []
+  if (!targets.length) return ''
+  const items = targets
+    .map((t) => {
+      const anchor = t.anchor?.trim() || formatSourceUrl(t.url) || t.url
+      const note = t.note ? `<span class="linked-note">${escapeHtml(t.note)}</span>` : ''
+      const where = formatSourceUrl(t.url)
+      const host = where ? `<span class="linked-host">${escapeHtml(where)}</span>` : ''
+      return `<li class="linked-item"><span class="linked-anchor">${escapeHtml(anchor)}</span>${note}${host}</li>`
+    })
+    .join('')
+  return `<section class="linked"><h2 class="linked-head">Linked here</h2><ol class="linked-list">${items}</ol></section>`
 }
 
 /**
@@ -431,6 +486,7 @@ export function buildArticleSection(entry: ArticleEntry, index = 0): string {
     openerHtml(article, anchorId),
     '<div class="article-body">',
     blocks,
+    linkedHtml(article),
     footnotesHtml(article),
     sourceLineHtml(article),
     '</div>',

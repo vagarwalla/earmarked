@@ -77,6 +77,10 @@ function item(over: Partial<PressItem> = {}): PressItem {
     page_count: 4,
     failure_reason: null,
     raw_email_path: null,
+    is_linkpost: false,
+    linkpost_parent_id: null,
+    linkpost_anchor: null,
+    linkpost_scanned_at: null,
     created_at: '2026-08-01T00:00:00Z',
     updated_at: '2026-08-01T00:00:00Z',
     ...over,
@@ -243,6 +247,33 @@ describe('buildTocSection', () => {
 
   it('references nothing remote', () => {
     expect(buildTocSection('Name', 1, toc)).not.toMatch(/https?:\/\//)
+  })
+
+  it('marks a linkpost, and indents what it named under it', () => {
+    const html = buildTocSection('Winter Light', 3, [
+      { ...toc[0], itemId: 'zvi', title: 'Monthly Roundup', isLinkpost: true },
+      { ...toc[0], itemId: 'k1', title: 'On sincerity', startPage: 7, linkpostOf: 'Monthly Roundup' },
+    ])
+    expect(html).toContain('<span class="toc-flag">Linkpost</span>')
+    expect(html).toContain('<span class="toc-via">via Monthly Roundup</span>')
+    expect(html).toContain('class="toc-entry toc-entry--child"')
+    // The roundup itself is not indented.
+    expect(html).toContain('<li class="toc-entry">')
+  })
+
+  it('escapes the linkpost title on the contents page too', () => {
+    const html = buildTocSection('Name', 1, [
+      { ...toc[0], linkpostOf: '<script>alert(1)</script>' },
+    ])
+    expect(html).not.toContain('<script>')
+    expect(html).toContain('&lt;script&gt;')
+  })
+
+  it('leaves an ordinary entry unmarked', () => {
+    const html = buildTocSection('Name', 1, toc)
+    expect(html).not.toContain('toc-flag')
+    expect(html).not.toContain('toc-via')
+    expect(html).not.toContain('toc-entry--child')
   })
 })
 

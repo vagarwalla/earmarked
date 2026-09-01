@@ -54,6 +54,10 @@ export interface IssueEntry {
   pageCount: number
   /** Where it starts in the built PDF, or null if the draft has moved on. */
   startPage: number | null
+  /** This article is a linkpost; the entries under it are what it named. */
+  isLinkpost?: boolean
+  /** Title of the linkpost that brought it in, when one did. */
+  linkpostOf?: string | null
 }
 
 export interface LocalIssue {
@@ -176,6 +180,10 @@ function resolveContents(
       // Page numbers from the last build are only true if nothing has moved
       // since; showing them against an edited order would be a lie.
       startPage: dirty ? null : (toc?.startPage ?? null),
+      isLinkpost: item?.isLinkpost ?? toc?.isLinkpost ?? false,
+      linkpostOf: item?.linkpostParentId
+        ? (byId.get(item.linkpostParentId)?.title ?? null)
+        : (toc?.linkpostOf ?? null),
     }
   })
 }

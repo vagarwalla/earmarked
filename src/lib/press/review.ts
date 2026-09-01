@@ -24,7 +24,12 @@ import {
   readState,
   type LocalIssue,
 } from './local'
-import { remoteItemsInState, remoteListIssues, remotePendingItems } from './remote'
+import {
+  remoteItemsInState,
+  remoteLinkpostTitles,
+  remoteListIssues,
+  remotePendingItems,
+} from './remote'
 
 export type ReviewSource = 'local' | 'supabase'
 
@@ -35,6 +40,10 @@ export interface ReviewItem {
   url: string
   pageCount: number
   reason?: string
+  /** This item is a linkpost; the pieces it named travel with it. */
+  isLinkpost?: boolean
+  /** Title of the linkpost that brought it into the pool, when one did. */
+  linkpostOf?: string | null
 }
 
 export interface Review {
@@ -57,18 +66,23 @@ export async function loadReview(threshold: number): Promise<Review> {
 
   if (source === 'local') {
     const state = await readState()
+    const titles = new Map((state?.items ?? []).map((i) => [i.id, i.title ?? i.url]))
     const toItem = (i: {
       id: string
       title: string | null
       url: string
       pageCount?: number
       reason?: string
+      isLinkpost?: boolean
+      linkpostParentId?: string
     }): ReviewItem => ({
       id: i.id,
       title: i.title,
       url: i.url,
       pageCount: i.pageCount ?? 0,
       reason: i.reason,
+      isLinkpost: i.isLinkpost ?? false,
+      linkpostOf: i.linkpostParentId ? (titles.get(i.linkpostParentId) ?? null) : null,
     })
 
     return {
@@ -80,19 +94,25 @@ export async function loadReview(threshold: number): Promise<Review> {
     }
   }
 
-  const toItem = (i: {
-    id: string
-    title: string | null
-    url: string | null
-    page_count: number | null
-    failure_reason: string | null
-  }): ReviewItem => ({
-    id: i.id,
-    title: i.title,
-    url: i.url ?? '',
-    pageCount: i.page_count ?? 0,
-    reason: i.failure_reason ?? undefined,
-  })
+  const toItem =
+    (titles: Map<string, string>) =>
+    (i: {
+      id: string
+      title: string | null
+      url: string | null
+      page_count: number | null
+      failure_reason: string | null
+      is_linkpost?: boolean
+      linkpost_parent_id?: string | null
+    }): ReviewItem => ({
+      id: i.id,
+      title: i.title,
+      url: i.url ?? '',
+      pageCount: i.page_count ?? 0,
+      reason: i.failure_reason ?? undefined,
+      isLinkpost: i.is_linkpost ?? false,
+      linkpostOf: i.linkpost_parent_id ? (titles.get(i.linkpost_parent_id) ?? null) : null,
+    })
 
   const [issues, waiting, skipped, failed] = await Promise.all([
     remoteListIssues(),
@@ -101,11 +121,16 @@ export async function loadReview(threshold: number): Promise<Review> {
     remoteItemsInState('failed'),
   ])
 
+  // One lookup for all three lists: a linkpost's children can be waiting while
+  // it is skipped, or the other way round.
+  const titles = await remoteLinkpostTitles([...waiting, ...skipped, ...failed])
+  const row = toItem(titles)
+
   return {
     source,
     issues,
-    waiting: waiting.map(toItem),
-    skipped: skipped.map(toItem),
-    failed: failed.map(toItem),
+    waiting: waiting.map(row),
+    skipped: skipped.map(row),
+    failed: failed.map(row),
   }
 }

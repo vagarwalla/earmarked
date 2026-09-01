@@ -52,7 +52,7 @@ export async function remoteItemsInState(
 const sameOrder = (a: string[], b: string[]) =>
   a.length === b.length && a.every((id, i) => id === b[i])
 
-function toEntry(item: PressItem): IssueEntry {
+function toEntry(item: PressItem, linkpostTitles: Map<string, string> = new Map()): IssueEntry {
   return {
     itemId: item.id,
     title: item.title ?? item.url ?? item.id,
@@ -64,7 +64,34 @@ function toEntry(item: PressItem): IssueEntry {
     // Postgres, so the deployed page shows running order instead. `local.ts`
     // suppresses them the moment an edit lands, for the same reason.
     startPage: null,
+    isLinkpost: item.is_linkpost,
+    linkpostOf: item.linkpost_parent_id
+      ? (linkpostTitles.get(item.linkpost_parent_id) ?? null)
+      : null,
   }
+}
+
+/**
+ * Titles of the linkposts these items came from, in one query.
+ *
+ * A parent is usually in the same issue, but not always — a piece can outlive
+ * the roundup's own placement — so the lookup goes to the table rather than to
+ * the list in hand. Failure is not fatal: an unlabelled row is worse than a
+ * labelled one and better than a blank page.
+ */
+export async function remoteLinkpostTitles(
+  items: readonly PressItem[],
+  db: SupabaseClient = pressDb(),
+): Promise<Map<string, string>> {
+  const ids = [...new Set(items.map((i) => i.linkpost_parent_id).filter((id): id is string => Boolean(id)))]
+  if (ids.length === 0) return new Map()
+  const { data, error } = await db.from('press_items').select('id, title, url').in('id', ids)
+  if (error) {
+    console.warn(`press/remote: linkpostTitles: ${error.message}`)
+    return new Map()
+  }
+  const rows = (data as Array<{ id: string; title: string | null; url: string | null }>) ?? []
+  return new Map(rows.map((r) => [r.id, r.title ?? r.url ?? r.id]))
 }
 
 /**
@@ -84,6 +111,7 @@ export async function remoteListIssues(db: SupabaseClient = pressDb()): Promise<
   const issues: LocalIssue[] = []
   for (const issue of (data as PressIssue[]) ?? []) {
     const items = await itemsForIssue(issue.id, db)
+    const linkpostTitles = await remoteLinkpostTitles(items, db)
     const order = items.map((i) => i.id)
     const built = issue.built_order ?? []
     // Never built, or built from a different set or sequence.
@@ -92,7 +120,7 @@ export async function remoteListIssues(db: SupabaseClient = pressDb()): Promise<
     issues.push({
       number: issue.number,
       name: issue.name ?? `Issue ${issue.number}`,
-      contents: items.map(toEntry),
+      contents: items.map((i) => toEntry(i, linkpostTitles)),
       draftPages: items.reduce((n, i) => n + (i.page_count ?? 0), 0),
       // Once a copy is bought the contents are a matter of record.
       printed: issue.state === 'ordered' || issue.state === 'shipped',
