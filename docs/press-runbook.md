@@ -116,6 +116,32 @@ Follow ordered issues to shipped and archive them. Send the weekly digest.
 **On approve:** one Lulu print job, then the articles move out of `hw` into a
 Raindrop collection named `YYYY-MM-DD — <issue name>`.
 
+### Ordering several issues at once
+
+Lulu charges shipping per *job*, not per book, so two issues sent as two jobs
+pay for two deliveries of the same weight to the same door. Tick them in the
+workbench rail instead and they go as one job: on live prices a 100pp and a
+64pp issue are $27.60 apart and $22.41 together, and the $5.19 is the second
+parcel.
+
+The path is the same two deliberate acts as a single order, and the dialog
+still spends nothing:
+
+1. Tick two or more locked (or already shipped, for another copy) issues in the
+   rail and press **Order these N**. `GET /api/press/order?issues=3,4` prices
+   the job as it would be placed *and* each issue as the job it would have been
+   alone, so the saving is shown as the comparison it is.
+2. **Send approval** mails one link covering the whole bundle.
+   `POST /api/press/order`. Still nothing ordered.
+3. The link opens the confirmation page, which lists every issue in the parcel;
+   its button POSTs to `/api/press/action/[token]`, which runs
+   `performBundledApproval` over all of them.
+
+Needs migrations `015_press_order_bundles.sql` (the job columns on
+`press_orders`) and `016_press_bundle_tokens.sql` (`issue_ids` on
+`press_action_tokens`). Until both are applied, approval fails with a missing
+function or column and nothing is placed.
+
 ### Invariants worth knowing
 
 - **Exactly one issue is open**, enforced by a partial unique index. Closing an
@@ -131,6 +157,17 @@ Raindrop collection named `YYYY-MM-DD — <issue name>`.
   outbound (a job cannot be sent half-way, so one uncomposed issue refuses the
   whole bundle) and per-issue inbound (Lulu validates each interior separately,
   so a refused issue 4 leaves issue 3 printing on the next line of the job).
+- **A bundle is approved by ONE link.** The token names every issue it covers
+  (`press_action_tokens.issue_ids`), so the single-use property covers the
+  parcel rather than each issue in it — N links would be N chances to buy half
+  a parcel. Expiring a token matches that array, so a fresh approval for issue 4
+  kills an outstanding bundle link that also carried issue 4: the two would
+  carry different idempotency keys, and following both would buy issue 4 twice.
+- **A bundle's outcome is never one verdict.** `/api/press/action/[token]`
+  answers a bundle with 200 once the job exists — even where a line of it was
+  refused — and puts the per-issue verdicts in the body. 409 is kept for the
+  case it describes: nothing was sent. Reporting "it failed" over a book already
+  in production is the failure worth designing against.
 - **Approval links are GET-safe.** A GET only renders a confirmation page; the
   state change is a POST. Mail scanners prefetch links, and an acting GET would
   let Gmail place an order or burn a single-use token before it was ever read.
