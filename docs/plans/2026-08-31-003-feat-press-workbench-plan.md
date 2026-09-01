@@ -554,13 +554,19 @@ Answered since, and folded in above:
    worker code is narrowed as §8 describes and is ready to deploy if you ever
    want it; whether it is worth an always-on machine is now an open question
    rather than an assumption.
-2. **Where does this live?** *Half solved.* `src/middleware.ts` implements the
-   password and the matcher covers every workbench route — but `PRESS_PASSWORD`
-   is not set, and that file treats unset as "open" on purpose. So `/press` is
-   reachable by anyone who has the URL, which is why the money guard is
-   `PRESS_ORDER_ENABLED` in the environment rather than anything on the page.
-   `PRESS_UI_ENABLED` still gates production. **Set a password before this is
-   anywhere but localhost.**
+2. **Where does this live?** *Decided: no password for now.*
+   `src/middleware.ts` implements one and the matcher covers every workbench
+   route, but `PRESS_PASSWORD` is deliberately left unset, and that file treats
+   unset as open. `PRESS_UI_ENABLED` still keeps it off production.
+
+   The consequence is worth stating because it constrains a design decision
+   rather than just carrying risk: **the guard on spending money cannot live on
+   the page.** Anyone who reaches `/press` can press any button on it, so
+   `PRESS_ORDER_ENABLED` is an environment variable and the Sandbox/Live
+   control in Settings is explicitly labelled as not being a safety net. If a
+   password is ever set, that stays true anyway — a form is the wrong place for
+   the last guard against a charge — but until then it is the *only* thing
+   that is true.
 4. **How many copies?** One, from `press_settings.copies`, changeable in the
    settings form. The Lulu plumbing is identical for 1 or 5.
 5. **Can you order a past issue again?** Yes — §7. This is what forced
