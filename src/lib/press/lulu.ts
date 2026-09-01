@@ -44,26 +44,74 @@ export interface LineItem {
   interiorUrl: string
   coverUrl: string
   quantity: number
+  /**
+   * Identifies this line back to the order row it was placed for.
+   *
+   * A one-issue job does not need it — there is only one line and only one
+   * row. A bundle does: Lulu reports file validation per line item, and
+   * "issue 3's interior was refused" has to reach issue 3's row and no other.
+   */
+  externalId?: string
+}
+
+/** What pricing needs. The files are not fetched to quote, so they are absent. */
+export type QuoteLine = Omit<LineItem, 'interiorUrl' | 'coverUrl'>
+
+/** One line of a job as Lulu reports it back. */
+export interface PrintJobLine {
+  externalId: string | null
+  title: string | null
+  status: string | null
+  message: string | null
+  trackingUrls: string[]
 }
 
 export interface PrintJob {
   id: string
   status: string
-  /** Lulu's own line-item status, where a file-validation failure shows up. */
+  /**
+   * Lulu's line-item status for the FIRST line, where a file-validation
+   * failure shows up. Correct for a single-line job, which is every job press
+   * placed before bundling; `lines` is the answer for a bundle.
+   */
   lineItemStatus: string | null
+  /** Every line, in the order Lulu returned them. */
+  lines: PrintJobLine[]
   message: string | null
   trackingUrls: string[]
 }
 
 export interface LuluClient {
-  quote(item: Omit<LineItem, 'interiorUrl' | 'coverUrl'>, address: ShippingAddress): Promise<PrintQuote>
+  /**
+   * Price a job. One line or several — several is the point: Lulu charges
+   * shipping per job, not per book, so two issues in one job cost one parcel.
+   */
+  quote(lines: QuoteLine | QuoteLine[], address: ShippingAddress): Promise<PrintQuote>
   createPrintJob(opts: {
-    item: LineItem
+    /** One item, or the several that make up a bundle. */
+    item?: LineItem
+    items?: LineItem[]
     address: ShippingAddress
     externalId: string
     idempotencyKey: string
   }): Promise<PrintJob>
   getPrintJob(jobId: string): Promise<PrintJob>
+}
+
+/**
+ * Which line of a job belongs to a given order row.
+ *
+ * By external id where Lulu echoes one back, because that is the only mapping
+ * that survives the API reordering the array. Where it does not, position is
+ * what we have — the lines were sent in a known order, and for the single-line
+ * jobs that predate bundling the two agree anyway.
+ */
+export function lineFor(job: PrintJob, externalId: string | null, index: number): PrintJobLine | null {
+  if (externalId) {
+    const byId = job.lines.find((l) => l.externalId === externalId)
+    if (byId) return byId
+  }
+  return job.lines[index] ?? job.lines[0] ?? null
 }
 
 export interface LuluClientOptions {
@@ -84,26 +132,31 @@ interface TokenState {
 function normalizeStatus(payload: Record<string, unknown>): PrintJob {
   const status = payload.status as { name?: string; message?: string } | undefined
   const lineItems = (payload.line_items as Array<Record<string, unknown>>) ?? []
-  const lineItemStatus = lineItems
-    .map((li) => (li.status as { name?: string } | undefined)?.name)
-    .find(Boolean)
 
-  const trackingUrls = lineItems
-    .flatMap((li) => (li.tracking_urls as string[]) ?? [])
-    .filter(Boolean)
+  const lines: PrintJobLine[] = lineItems.map((li) => {
+    const s = li.status as { name?: string; message?: string } | undefined
+    return {
+      externalId: li.external_id ? String(li.external_id) : null,
+      title: li.title ? String(li.title) : null,
+      status: s?.name ?? null,
+      message: s?.message ?? null,
+      trackingUrls: ((li.tracking_urls as string[]) ?? []).filter(Boolean),
+    }
+  })
 
   return {
     id: String(payload.id ?? ''),
     status: status?.name ?? 'UNKNOWN',
-    lineItemStatus: lineItemStatus ?? null,
+    lineItemStatus: lines.map((l) => l.status).find(Boolean) ?? null,
+    lines,
     message: status?.message ?? null,
-    trackingUrls,
+    trackingUrls: lines.flatMap((l) => l.trackingUrls),
   }
 }
 
 /** Lulu reports a refused file through the line item, not the job status. */
 export function isRejected(job: PrintJob): boolean {
-  return job.status === 'REJECTED' || job.lineItemStatus === 'REJECTED'
+  return job.status === 'REJECTED' || job.lines.some((l) => l.status === 'REJECTED')
 }
 
 export function isShipped(job: PrintJob): boolean {
@@ -175,17 +228,16 @@ export function createLuluClient(options: LuluClientOptions = {}): LuluClient {
   }
 
   return {
-    async quote(item, address) {
+    async quote(lines, address) {
+      const items = Array.isArray(lines) ? lines : [lines]
       const body = (await call('/print-job-cost-calculations/', {
         method: 'POST',
         body: JSON.stringify({
-          line_items: [
-            {
-              page_count: item.pageCount,
-              pod_package_id: item.packageId || LULU_PACKAGE_ID,
-              quantity: item.quantity,
-            },
-          ],
+          line_items: items.map((item) => ({
+            page_count: item.pageCount,
+            pod_package_id: item.packageId || LULU_PACKAGE_ID,
+            quantity: item.quantity,
+          })),
           shipping_address: addressPayload(address),
           shipping_option: SHIPPING_LEVEL,
         }),
@@ -193,40 +245,50 @@ export function createLuluClient(options: LuluClientOptions = {}): LuluClient {
 
       const total = body.total_cost_incl_tax ?? body.total_cost_excl_tax
       const shipping = (body.shipping_cost as Record<string, unknown> | undefined)?.total_cost_incl_tax
-      const print = (body.line_item_costs as Array<Record<string, unknown>> | undefined)?.[0]
-        ?.total_cost_incl_tax
+      const lineCosts = (body.line_item_costs as Array<Record<string, unknown>> | undefined) ?? []
 
       const cents = (v: unknown): number | null =>
         v === null || v === undefined ? null : Math.round(Number(v) * 100)
+
+      const lineCents = items.map((_, i) => cents(lineCosts[i]?.total_cost_incl_tax))
+      // The job's print cost is every line, not the first one. With a single
+      // line — every job press placed before bundling — this is the same
+      // number it always was.
+      const printCents = lineCents.every((c) => c === null)
+        ? null
+        : lineCents.reduce<number>((a, c) => a + (c ?? 0), 0)
 
       return {
         totalCents: cents(total) ?? 0,
         currency: String(body.currency ?? 'USD'),
         shippingCents: cents(shipping),
-        printCents: cents(print),
+        printCents,
+        lineCents,
       }
     },
 
-    async createPrintJob({ item, address, externalId, idempotencyKey }) {
+    async createPrintJob({ item, items, address, externalId, idempotencyKey }) {
+      const lines = items ?? (item ? [item] : [])
+      if (lines.length === 0) throw new Error('lulu: a print job needs at least one line item')
+
       const body = (await call('/print-jobs/', {
         method: 'POST',
         headers: {
-          // Belt to the database's braces: even if press_claim_order were
+          // Belt to the database's braces: even if press_place_order were
           // somehow bypassed, Lulu should collapse the duplicate itself.
           'idempotency-key': idempotencyKey,
         },
         body: JSON.stringify({
           external_id: externalId,
-          line_items: [
-            {
-              title: item.title,
-              cover_source_url: item.coverUrl,
-              interior_source_url: item.interiorUrl,
-              pod_package_id: item.packageId || LULU_PACKAGE_ID,
-              page_count: item.pageCount,
-              quantity: item.quantity,
-            },
-          ],
+          line_items: lines.map((line) => ({
+            title: line.title,
+            ...(line.externalId ? { external_id: line.externalId } : {}),
+            cover_source_url: line.coverUrl,
+            interior_source_url: line.interiorUrl,
+            pod_package_id: line.packageId || LULU_PACKAGE_ID,
+            page_count: line.pageCount,
+            quantity: line.quantity,
+          })),
           shipping_address: addressPayload(address),
           shipping_level: SHIPPING_LEVEL,
         }),

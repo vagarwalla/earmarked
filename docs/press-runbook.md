@@ -120,9 +120,17 @@ Raindrop collection named `YYYY-MM-DD — <issue name>`.
 
 - **Exactly one issue is open**, enforced by a partial unique index. Closing an
   issue and opening its successor happen in one transaction.
-- **An issue can be ordered once.** `press_claim_order` check-and-sets
-  `lulu_job_id` in a single statement, so a timeout-then-retry or a double tap
-  reports the existing job rather than placing a second order.
+- **An issue can be ordered once.** `press_place_order` claims a `press_orders`
+  row against an idempotency key in a single statement, so a timeout-then-retry
+  or a double tap reports the existing order rather than placing a second one.
+- **Several issues can share one Lulu job.** Lulu charges shipping per job, not
+  per book, so bundling issues into one job pays for one parcel instead of two
+  — $22.72 against $27.91 for issues 1 and 2 at live prices. A bundle is still
+  one `press_orders` row per issue, tied together by `bundle_key` and numbered
+  by `line_index`; `performBundledApproval` places it. It is all-or-nothing
+  outbound (a job cannot be sent half-way, so one uncomposed issue refuses the
+  whole bundle) and per-issue inbound (Lulu validates each interior separately,
+  so a refused issue 4 leaves issue 3 printing on the next line of the job).
 - **Approval links are GET-safe.** A GET only renders a confirmation page; the
   state change is a POST. Mail scanners prefetch links, and an acting GET would
   let Gmail place an order or burn a single-use token before it was ever read.

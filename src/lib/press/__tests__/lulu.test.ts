@@ -7,6 +7,8 @@ import {
   LuluError,
   LULU_SANDBOX_BASE,
   LULU_PRODUCTION_BASE,
+  lineFor,
+  type PrintJob,
   type ShippingAddress,
 } from '../lulu'
 import {
@@ -21,11 +23,31 @@ import {
   sendMail,
   TOKEN_TTL_DAYS,
 } from '../approval'
-import { performApproval } from '../order'
+import { bundleKeyFor, performApproval, performBundledApproval, rowKeyFor } from '../order'
 import type { PressSettings } from '../settings'
+import { allocateQuote } from '../types'
 import type { PressIssue, PrintQuote, TocEntry } from '../types'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
+
+/** A job as Lulu reports it: an overall status, and one status per line. */
+function printJob(status: string, lineStatuses: (string | null)[], ids: (string | null)[] = []): PrintJob {
+  const lines = lineStatuses.map((s, i) => ({
+    externalId: ids[i] ?? null,
+    title: `line ${i}`,
+    status: s,
+    message: null,
+    trackingUrls: [],
+  }))
+  return {
+    id: 'job_1',
+    status,
+    lineItemStatus: lines.map((l) => l.status).find(Boolean) ?? null,
+    lines,
+    message: null,
+    trackingUrls: [],
+  }
+}
 
 const address: ShippingAddress = {
   name: 'A Reader',
@@ -197,19 +219,35 @@ describe('createLuluClient', () => {
 
 describe('job status', () => {
   it('spots a rejection reported on the line item, not the job', () => {
-    expect(isRejected({ id: '1', status: 'IN_PRODUCTION', lineItemStatus: 'REJECTED', message: null, trackingUrls: [] })).toBe(true)
-    expect(isRejected({ id: '1', status: 'REJECTED', lineItemStatus: null, message: null, trackingUrls: [] })).toBe(true)
-    expect(isRejected({ id: '1', status: 'CREATED', lineItemStatus: 'CREATED', message: null, trackingUrls: [] })).toBe(false)
+    expect(isRejected(printJob('IN_PRODUCTION', ['REJECTED']))).toBe(true)
+    expect(isRejected(printJob('REJECTED', []))).toBe(true)
+    expect(isRejected(printJob('CREATED', ['CREATED']))).toBe(false)
+  })
+
+  /**
+   * A bundle is one job carrying several issues. Lulu refusing any one of the
+   * interiors is a rejection of the job, whichever line it lands on — reading
+   * only the first would let a refused issue 4 sail past behind a healthy
+   * issue 3.
+   */
+  it('spots a rejection on a line other than the first', () => {
+    expect(isRejected(printJob('IN_PRODUCTION', ['CREATED', 'REJECTED']))).toBe(true)
   })
 
   it('spots a shipped job', () => {
-    expect(isShipped({ id: '1', status: 'SHIPPED', lineItemStatus: null, message: null, trackingUrls: [] })).toBe(true)
+    expect(isShipped(printJob('SHIPPED', []))).toBe(true)
   })
 })
 
 describe('formatQuote', () => {
   it('states the cost before anything is spent', () => {
-    const quote: PrintQuote = { totalCents: 1324, currency: 'USD', shippingCents: 473, printCents: 851 }
+    const quote: PrintQuote = {
+      totalCents: 1324,
+      currency: 'USD',
+      shippingCents: 473,
+      printCents: 851,
+      lineCents: [851],
+    }
     expect(formatQuote(quote)).toBe('13.24 USD total · 8.51 USD print · 4.73 USD shipping')
   })
 })
@@ -435,7 +473,11 @@ function orderDb(opts: { issueState?: string; address?: boolean } = {}) {
   const orders = new Map<string, Record<string, unknown>>()
   const updates: Record<string, unknown>[] = []
   const events: string[] = []
-  let issueState = opts.issueState ?? 'closed'
+  // Per issue, not one global: a bundle claims several issues in turn, and a
+  // shared state variable would have the second one refused as 'approved'
+  // because the first had just moved.
+  const states = new Map<string, string>()
+  const stateOf = (id: string) => states.get(id) ?? opts.issueState ?? 'closed'
 
   const settingsRow =
     opts.address === false
@@ -461,12 +503,17 @@ function orderDb(opts: { issueState?: string; address?: boolean } = {}) {
       const b: Record<string, unknown> = {}
       let patch: Record<string, unknown> | null = null
       b.select = () => b
-      b.eq = () => {
+      b.eq = (column?: string, value?: unknown) => {
         if (patch) {
-          updates.push(patch)
-          if (table === 'press_issues' && patch.state) issueState = String(patch.state)
+          updates.push({ ...patch, ...(column ? { [`eq_${column}`]: value } : {}) })
+          if (table === 'press_issues' && patch.state) states.set(String(value), String(patch.state))
           if (table === 'press_orders') {
-            for (const order of orders.values()) Object.assign(order, patch)
+            // Targeted, like the real update is. Applying a bundle's first
+            // row's patch to every row would hide exactly the bug these tests
+            // exist to catch.
+            for (const order of orders.values()) {
+              if (!column || order[column as string] === value) Object.assign(order, patch)
+            }
           }
           patch = null
         }
@@ -488,7 +535,7 @@ function orderDb(opts: { issueState?: string; address?: boolean } = {}) {
       b.single = async () => ({ data: null, error: null })
       b.maybeSingle = async () => {
         if (table === 'press_settings') return { data: settingsRow, error: null }
-        return { data: { ...issue(), state: issueState }, error: null }
+        return { data: { ...issue(), state: stateOf('iss1') }, error: null }
       }
       b.then = (r: (v: unknown) => unknown) =>
         Promise.resolve({ data: table === 'press_orders' ? [...orders.values()] : [], error: null }).then(r)
@@ -500,8 +547,10 @@ function orderDb(opts: { issueState?: string; address?: boolean } = {}) {
       // Idempotent on the key: the retry finds the first attempt's row.
       const existing = orders.get(key)
       if (existing) return { data: existing, error: null }
-      if (!['closed', 'rejected', 'ordered', 'shipped'].includes(issueState)) {
-        return { data: null, error: { message: `press_place_order: issue is ${issueState}` } }
+      const issueId = String(args.p_issue_id)
+      const state = stateOf(issueId)
+      if (!['closed', 'rejected', 'ordered', 'shipped'].includes(state)) {
+        return { data: null, error: { message: `press_place_order: issue is ${state}` } }
       }
       const row = {
         id: `ord_${orders.size + 1}`,
@@ -513,12 +562,14 @@ function orderDb(opts: { issueState?: string; address?: boolean } = {}) {
         tracking_urls: [],
         ship_to: args.p_ship_to,
         ordered_by: args.p_ordered_by,
+        bundle_key: (args.p_bundle_key as string | null) ?? null,
+        line_index: Number(args.p_line_index ?? 0),
         placed_at: '2026-08-31T00:00:00.000Z',
         shipped_at: null,
       }
       orders.set(key, row)
       events.push('order_claimed')
-      if (issueState === 'closed' || issueState === 'rejected') issueState = 'approved'
+      if (state === 'closed' || state === 'rejected') states.set(issueId, 'approved')
       return { data: row, error: null }
     },
     storage: {
@@ -527,7 +578,7 @@ function orderDb(opts: { issueState?: string; address?: boolean } = {}) {
       }),
     },
   }
-  return { client: client as never, updates, events, orders }
+  return { client: client as never, updates, events, orders, stateOf }
 }
 
 function fakeLulu(job: Partial<{ id: string; status: string; lineItemStatus: string | null; message: string | null }> = {}) {
@@ -535,18 +586,37 @@ function fakeLulu(job: Partial<{ id: string; status: string; lineItemStatus: str
   return {
     created,
     client: {
-      quote: async () => ({ totalCents: 1324, currency: 'USD', shippingCents: 473, printCents: 851 }),
+      quote: async (lines: unknown) => {
+        const n = Array.isArray(lines) ? lines.length : 1
+        return {
+          totalCents: 1324,
+          currency: 'USD',
+          shippingCents: 473,
+          printCents: 851 * n,
+          lineCents: Array.from({ length: n }, () => 851),
+        }
+      },
       createPrintJob: async (opts: unknown) => {
         created.push(opts)
+        const status = job.lineItemStatus ?? null
         return {
           id: job.id ?? 'job_1',
           status: job.status ?? 'CREATED',
-          lineItemStatus: job.lineItemStatus ?? null,
+          lineItemStatus: status,
+          lines: ((opts as { items?: unknown[]; item?: unknown }).items ?? [(opts as { item: unknown }).item]).map(
+            (line) => ({
+              externalId: (line as { externalId?: string }).externalId ?? null,
+              title: (line as { title?: string }).title ?? null,
+              status,
+              message: job.message ?? null,
+              trackingUrls: [],
+            }),
+          ),
           message: job.message ?? null,
           trackingUrls: [],
         }
       },
-      getPrintJob: async () => ({ id: 'job_1', status: 'CREATED', lineItemStatus: null, message: null, trackingUrls: [] }),
+      getPrintJob: async () => printJob('CREATED', []),
     },
   }
 }
@@ -616,7 +686,7 @@ describe('performApproval', () => {
     const db = orderDb()
     const lulu = fakeLulu()
     await performApproval(issue(), { db: db.client, lulu: lulu.client, quantity: 3 })
-    expect((lulu.created[0] as { item: { quantity: number } }).item.quantity).toBe(3)
+    expect((lulu.created[0] as { items: { quantity: number }[] }).items[0].quantity).toBe(3)
   })
 
   it('records a rejection against the issue and the order', async () => {
@@ -646,11 +716,17 @@ describe('performApproval', () => {
   it('keeps the claim held when Lulu errors, so a retry cannot double-order', async () => {
     const db = orderDb()
     const lulu = {
-      quote: async () => ({ totalCents: 0, currency: 'USD', shippingCents: null, printCents: null }),
+      quote: async () => ({
+        totalCents: 0,
+        currency: 'USD',
+        shippingCents: null,
+        printCents: null,
+        lineCents: [null],
+      }),
       createPrintJob: async () => {
         throw new Error('gateway timeout')
       },
-      getPrintJob: async () => ({ id: '', status: '', lineItemStatus: null, message: null, trackingUrls: [] }),
+      getPrintJob: async () => printJob('', []),
     }
 
     await expect(
@@ -661,5 +737,220 @@ describe('performApproval', () => {
     // The row survives with no job id, so the key stays claimed and the retry
     // reconciles rather than buying a second copy.
     expect(db.orders.size).toBe(1)
+  })
+})
+
+
+// ── Bundles ──────────────────────────────────────────────────────────────────
+//
+// Lulu charges shipping per job, not per book. Two issues in one job is one
+// parcel and one shipping charge; the same two as separate jobs is two of
+// each. Everything below exists to make that saving safe to take.
+
+describe('allocateQuote', () => {
+  it('gives each line its own print cost and an equal share of the one parcel', () => {
+    const quote: PrintQuote = {
+      totalCents: 2272,
+      currency: 'USD',
+      shippingCents: 694,
+      printCents: 1503,
+      lineCents: [965, 538],
+    }
+    const [first, second] = allocateQuote(quote, 2)
+    expect(first).toBe(965 + 347)
+    expect(second).toBe(538 + 347)
+    expect(first + second).toBe(quote.totalCents - 75) // the rest is tax
+  })
+
+  /**
+   * The parts have to sum to the shipping actually charged. A plain division
+   * loses the odd cent, and a bundle of three would then be recorded as
+   * costing less than it did — every time, forever.
+   */
+  it('never loses the odd cent when the parcel will not divide', () => {
+    const quote: PrintQuote = {
+      totalCents: 0,
+      currency: 'USD',
+      shippingCents: 100,
+      printCents: 0,
+      lineCents: [0, 0, 0],
+    }
+    const parts = allocateQuote(quote, 3)
+    expect(parts).toEqual([34, 33, 33])
+    expect(parts.reduce((a, c) => a + c, 0)).toBe(100)
+  })
+
+  it('still charges a line its share of the parcel when Lulu did not price it', () => {
+    const quote: PrintQuote = {
+      totalCents: 1000,
+      currency: 'USD',
+      shippingCents: 400,
+      printCents: 600,
+      lineCents: [600, null],
+    }
+    const parts = allocateQuote(quote, 2)
+    expect(parts[1]).toBeGreaterThan(0)
+  })
+})
+
+describe('bundle keys', () => {
+  it('leaves a single issue with exactly the key it has always had', () => {
+    const one = issue()
+    expect(bundleKeyFor([one], false)).toBe('press-issue-iss1')
+    expect(rowKeyFor(bundleKeyFor([one], false), one, false)).toBe('press-issue-iss1')
+  })
+
+  /**
+   * A bundle re-driven after a timeout has to carry the SAME key to Lulu, or
+   * the retry buys the parcel a second time. Deriving it from the issues means
+   * it cannot drift, and sorting means the order they were passed in does not
+   * change the answer.
+   */
+  it('is stable across a retry and independent of the order the issues came in', () => {
+    const a = issue({ id: 'iss1' })
+    const b = issue({ id: 'iss2' })
+    expect(bundleKeyFor([a, b], false)).toBe(bundleKeyFor([b, a], false))
+    expect(bundleKeyFor([a, b], false)).toBe('press-bundle-iss1+iss2')
+  })
+
+  it('marks a bundled reorder as a copy, so it is never mistaken for the print run', () => {
+    const key = bundleKeyFor([issue({ id: 'iss1' }), issue({ id: 'iss2' })], true, new Date(1000))
+    expect(key).toContain('-copy-')
+  })
+
+  it('gives each issue in a bundle its own row key', () => {
+    const a = issue({ id: 'iss1' })
+    const b = issue({ id: 'iss2' })
+    const key = bundleKeyFor([a, b], false)
+    expect(rowKeyFor(key, a, true)).not.toBe(rowKeyFor(key, b, true))
+  })
+})
+
+describe('performBundledApproval', () => {
+  const two = () => [issue({ id: 'iss1', number: 3 }), issue({ id: 'iss2', number: 4, name: 'Spring Tide' })]
+
+  it('buys two issues as ONE job, which is the entire point', async () => {
+    const db = orderDb()
+    const lulu = fakeLulu()
+    const result = await performBundledApproval(two(), { db: db.client, lulu: lulu.client })
+
+    expect(result.ok).toBe(true)
+    // One job at Lulu — one parcel, one shipping charge.
+    expect(lulu.created).toHaveLength(1)
+    expect((lulu.created[0] as { items: unknown[] }).items).toHaveLength(2)
+    // Two rows, because everything downstream of an order is per issue.
+    expect(db.orders.size).toBe(2)
+    expect(result.issues.map((i) => i.issueNumber)).toEqual([3, 4])
+  })
+
+  it('ties the rows together and numbers their lines', async () => {
+    const db = orderDb()
+    await performBundledApproval(two(), { db: db.client, lulu: fakeLulu().client })
+    const rows = [...db.orders.values()]
+    expect(new Set(rows.map((r) => r.bundle_key)).size).toBe(1)
+    expect(rows.map((r) => r.line_index)).toEqual([0, 1])
+  })
+
+  it('records what each issue cost, not what the parcel cost', async () => {
+    const db = orderDb()
+    await performBundledApproval(two(), { db: db.client, lulu: fakeLulu().client })
+    const costs = [...db.orders.values()].map((r) => r.cost_cents as number)
+    // 851 print each, plus half of the 473 shipping — not 1324 twice, which
+    // is the whole bundle billed to both issues.
+    expect(costs).toEqual([851 + 237, 851 + 236])
+  })
+
+  /**
+   * The one that would hurt. Lulu validates each interior separately, so a
+   * refused issue 4 must not drag issue 3 — printing perfectly well on the
+   * next line of the same job — into 'rejected' beside it.
+   */
+  it('rejects only the issue whose own line Lulu refused', async () => {
+    const db = orderDb()
+    const lulu = {
+      quote: async () => ({
+        totalCents: 2272,
+        currency: 'USD',
+        shippingCents: 694,
+        printCents: 1503,
+        lineCents: [965, 538],
+      }),
+      createPrintJob: async (opts: { items: { externalId: string }[] }) => ({
+        id: 'job_1',
+        status: 'IN_PRODUCTION',
+        lineItemStatus: 'CREATED',
+        lines: [
+          { externalId: opts.items[0].externalId, title: 'a', status: 'CREATED', message: null, trackingUrls: [] },
+          {
+            externalId: opts.items[1].externalId,
+            title: 'b',
+            status: 'REJECTED',
+            message: 'interior failed preflight',
+            trackingUrls: [],
+          },
+        ],
+        message: null,
+        trackingUrls: [],
+      }),
+      getPrintJob: async () => printJob('IN_PRODUCTION', []),
+    }
+
+    const result = await performBundledApproval(two(), { db: db.client, lulu: lulu as never })
+
+    expect(result.ok).toBe(false)
+    expect(result.issues[0]).toMatchObject({ ok: true, status: 'ordered', issueNumber: 3 })
+    expect(result.issues[1]).toMatchObject({ ok: false, status: 'rejected', issueNumber: 4 })
+    expect(db.stateOf('iss1')).toBe('ordered')
+    expect(db.stateOf('iss2')).toBe('rejected')
+  })
+
+  /**
+   * A job cannot be placed half-way. If one issue in the bundle is not ready,
+   * the caller asked for a parcel that cannot be sent — quietly ordering the
+   * rest would charge for a delivery they did not ask for.
+   */
+  it('refuses the whole bundle rather than ordering the issues that are ready', async () => {
+    const db = orderDb()
+    const lulu = fakeLulu()
+    const issues = [issue({ id: 'iss1', number: 3 }), issue({ id: 'iss2', number: 4, interior_path: null })]
+    const result = await performBundledApproval(issues, { db: db.client, lulu: lulu.client })
+
+    expect(result.ok).toBe(false)
+    expect(result.issues.every((i) => i.status === 'not-composed')).toBe(true)
+    expect(lulu.created).toHaveLength(0)
+    expect(db.orders.size).toBe(0)
+  })
+
+  it('cannot be made to buy the parcel twice by a retry', async () => {
+    const db = orderDb()
+    const lulu = fakeLulu()
+    const first = await performBundledApproval(two(), { db: db.client, lulu: lulu.client })
+    const second = await performBundledApproval(two(), { db: db.client, lulu: lulu.client })
+
+    expect(first.issues.every((i) => i.status === 'ordered')).toBe(true)
+    expect(second.issues.every((i) => i.status === 'already-ordered')).toBe(true)
+    expect(lulu.created).toHaveLength(1)
+    expect(db.orders.size).toBe(2)
+  })
+
+  it('sends each line the external id of its own row, so a verdict finds the right issue', async () => {
+    const db = orderDb()
+    const lulu = fakeLulu()
+    await performBundledApproval(two(), { db: db.client, lulu: lulu.client })
+    const sent = (lulu.created[0] as { items: { externalId: string }[] }).items
+    const keys = [...db.orders.values()].map((r) => r.idempotency_key)
+    expect(sent.map((i) => i.externalId)).toEqual(keys)
+  })
+})
+
+describe('lineFor', () => {
+  it('finds a line by its external id however Lulu ordered the array', () => {
+    const job = printJob('CREATED', ['CREATED', 'REJECTED'], ['row-a', 'row-b'])
+    expect(lineFor(job, 'row-b', 0)?.status).toBe('REJECTED')
+  })
+
+  it('falls back to position where Lulu echoed no id back', () => {
+    const job = printJob('CREATED', ['CREATED', 'REJECTED'])
+    expect(lineFor(job, 'row-b', 1)?.status).toBe('REJECTED')
   })
 })
