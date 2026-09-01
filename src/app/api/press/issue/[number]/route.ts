@@ -28,7 +28,7 @@ import {
   removeItemFromIssue,
   setIssueOrder,
 } from '@/lib/press/db'
-import { remoteListIssues, remotePendingItems } from '@/lib/press/remote'
+import { remoteLinkpostTitles, remoteListIssues, remotePendingItems } from '@/lib/press/remote'
 import { reviewSource } from '@/lib/press/review'
 import { loadSettings } from '@/lib/press/settings'
 
@@ -114,6 +114,7 @@ async function applyRemote(number: number, edit: IssueAction, threshold: number)
 
   const issue = (await remoteListIssues(db)).find((i) => i.number === number)
   const waiting = await remotePendingItems(db)
+  const waitingParents = await remoteLinkpostTitles(waiting, db)
   return NextResponse.json({
     itemIds: issue?.contents.map((e) => e.itemId) ?? [],
     contents: issue?.contents ?? [],
@@ -122,6 +123,8 @@ async function applyRemote(number: number, edit: IssueAction, threshold: number)
       title: i.title,
       url: i.url ?? '',
       pageCount: i.page_count ?? 0,
+      isLinkpost: i.is_linkpost,
+      linkpostOf: i.linkpost_parent_id ? (waitingParents.get(i.linkpost_parent_id) ?? null) : null,
     })),
     dirty: issue?.dirty ?? true,
     draftPages: issue?.draftPages ?? 0,
@@ -179,6 +182,10 @@ export async function POST(
         title: i.title,
         url: i.url,
         pageCount: i.pageCount ?? 0,
+        isLinkpost: i.isLinkpost ?? false,
+        linkpostOf: i.linkpostParentId
+          ? (state?.items.find((p) => p.id === i.linkpostParentId)?.title ?? null)
+          : null,
       })),
       dirty: issue?.dirty ?? true,
       draftPages: estimatePages(state, itemIds),

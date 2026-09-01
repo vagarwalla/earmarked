@@ -26,6 +26,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { createRaindropClient, raindropToItem, type Raindrop } from '../src/lib/press/raindrop'
 import { extractFromUrl, ExtractionError } from '../src/lib/press/extract'
+import { classifyLinkpost, MAX_TARGETS } from '../src/lib/press/linkpost'
+import { normalizeUrl } from '../src/lib/press/db'
 import { fetchAndStoreImage, type CandidateImage, type StoredImage } from '../src/lib/press/images'
 import {
   articleImages,
@@ -43,6 +45,7 @@ import {
   readState,
   readyItems,
   selectForIssue,
+  sortForPrint,
   withStateLock,
   type PressState,
   type StateItem,
@@ -51,7 +54,7 @@ import { archiveCollectionName, nameIssue } from '../src/lib/press/naming'
 import { computeToc, type ComposeEntry } from '../src/lib/press/compose'
 import { createLuluClient, formatQuote } from '../src/lib/press/lulu'
 import { loadSettings } from '../src/lib/press/settings'
-import { PRINT_SPEC, type Article, type PressItem } from '../src/lib/press/types'
+import { PRINT_SPEC, type Article, type LinkpostTarget, type PressItem } from '../src/lib/press/types'
 
 const ROOT = PRESS_ROOT
 
@@ -115,7 +118,57 @@ async function poll(state: PressState): Promise<number> {
 }
 
 /** What extracting one item concluded, ready to be written back under the lock. */
-type ItemOutcome = Pick<StateItem, 'title' | 'state' | 'pageCount' | 'reason'>
+type ItemOutcome = Pick<
+  StateItem,
+  'title' | 'state' | 'pageCount' | 'reason' | 'isLinkpost' | 'linkpostScannedAt'
+>
+
+/** An item id for a piece that arrived through a linkpost rather than through `hw`. */
+function linkpostChildId(url: string): string {
+  // Deterministic, so re-running a roundup that already produced children
+  // recognises them instead of minting a second copy. `lp-` keeps it out of the
+  // numeric namespace Raindrop ids live in.
+  const key = normalizeUrl(url) ?? url
+  let hash = 0
+  for (let i = 0; i < key.length; i++) hash = (Math.imul(31, hash) + key.charCodeAt(i)) | 0
+  return `lp-${(hash >>> 0).toString(36)}-${key.length.toString(36)}`
+}
+
+/**
+ * The pieces a linkpost named, as items of their own.
+ *
+ * Anything already in the pipeline under the same URL is left alone: a link
+ * saved to `hw` by hand, or named by two roundups in the same week, is one
+ * article. Returns only what is genuinely new.
+ */
+function childItems(
+  parent: StateItem,
+  targets: readonly LinkpostTarget[],
+  existing: readonly StateItem[],
+): StateItem[] {
+  const known = new Set(
+    existing.map((i) => normalizeUrl(i.url)).filter((k): k is string => Boolean(k)),
+  )
+  const out: StateItem[] = []
+  for (const target of targets) {
+    const key = normalizeUrl(target.url)
+    if (!key || known.has(key)) continue
+    known.add(key)
+    out.push({
+      id: linkpostChildId(target.url),
+      url: target.url,
+      // No raindrop: this arrived through a linkpost, not through `hw`. Nothing
+      // is written to the Raindrop account on V's behalf.
+      raindropId: '',
+      title: target.anchor || null,
+      state: 'queued',
+      savedAt: parent.savedAt,
+      linkpostParentId: parent.id,
+      linkpostAnchor: target.anchor || undefined,
+    })
+  }
+  return out
+}
 
 /**
  * Extract and measure everything queued.
@@ -128,12 +181,16 @@ type ItemOutcome = Pick<StateItem, 'title' | 'state' | 'pageCount' | 'reason'>
 async function processQueued(
   queued: StateItem[],
   issueNumber: number,
-): Promise<Map<string, ItemOutcome>> {
+  allItems: readonly StateItem[] = queued,
+): Promise<{ outcomes: Map<string, ItemOutcome>; discovered: StateItem[] }> {
   const outcomes = new Map<string, ItemOutcome>()
+  const discovered: StateItem[] = []
+  const byId = new Map(allItems.map((i) => [i.id, i]))
+  const settings = loadSettings()
 
   for (const item of queued) {
     try {
-      const { article } = await extractFromUrl({
+      const { article, links } = await extractFromUrl({
         itemId: item.id,
         url: item.url,
         raindropId: item.raindropId,
@@ -153,6 +210,37 @@ async function processQueued(
         },
       })
 
+      // A piece that a linkpost named says so on its own opener, so the
+      // relationship survives into the printed page rather than living only in
+      // the state file.
+      const parent = item.linkpostParentId ? byId.get(item.linkpostParentId) : undefined
+      if (parent) {
+        article.linkpostOf = {
+          title: parent.title ?? parent.url,
+          url: parent.url,
+          anchor: item.linkpostAnchor ?? null,
+        }
+      }
+
+      // Only pieces saved to `hw` are examined: a roundup reached through
+      // another roundup is a rabbit hole, not an issue.
+      const judgement = item.linkpostParentId
+        ? null
+        : await classifyLinkpost({
+            article,
+            links,
+            apiKey: settings.anthropicApiKey,
+            maxTargets: MAX_TARGETS,
+          })
+
+      if (judgement?.isLinkpost) {
+        article.linkpost = {
+          kind: judgement.kind,
+          reason: judgement.reason,
+          targets: judgement.targets,
+        }
+      }
+
       await mkdir(itemDir(item.id), { recursive: true })
       await store(`items/${item.id}/article.json`, JSON.stringify(article))
 
@@ -167,17 +255,32 @@ async function processQueued(
       }
       const { pageCount } = await renderHtml(html, images)
 
+      const scanned = { isLinkpost: Boolean(judgement?.isLinkpost), linkpostScannedAt: nowIso() }
+
       if (isReferencePage(article.title)) {
         outcomes.set(item.id, {
           title: article.title,
           pageCount,
           state: 'skipped',
           reason: 'reference page, not an article',
+          ...scanned,
         })
         console.log(`  – ${String(pageCount).padStart(3)}pp  ${article.title}  (skipped: reference page)`)
       } else {
-        outcomes.set(item.id, { title: article.title, pageCount, state: 'laid_out' })
-        console.log(`  ✓ ${String(pageCount).padStart(3)}pp  ${article.title}`)
+        outcomes.set(item.id, { title: article.title, pageCount, state: 'laid_out', ...scanned })
+        const mark = judgement?.isLinkpost ? ' ⇢' : ' '
+        console.log(`  ✓${mark}${String(pageCount).padStart(3)}pp  ${article.title}`)
+      }
+
+      if (judgement?.isLinkpost) {
+        // Not the reference page's `skipped`, and not a failure: a linkpost
+        // still prints. What it adds is the reading it pointed at.
+        const children = childItems(item, judgement.targets, [...allItems, ...discovered])
+        discovered.push(...children)
+        console.log(
+          `       linkpost (${judgement.reason}) — ${judgement.targets.length} named, ${children.length} new`,
+        )
+        for (const child of children) console.log(`         + ${child.title ?? child.url}`)
       }
     } catch (err) {
       const reason = err instanceof ExtractionError ? err.message : (err as Error).message
@@ -186,8 +289,10 @@ async function processQueued(
     }
   }
 
-  return outcomes
+  return { outcomes, discovered }
 }
+
+const nowIso = (): string => new Date().toISOString()
 
 /**
  * The contents of the next issue, made durable.
@@ -208,14 +313,17 @@ async function resolveDraftItems(force: boolean): Promise<StateItem[]> {
     // --force builds early, so it takes everything waiting rather than
     // stopping at a threshold it is never going to reach.
     const seed = force && ready.length > 0 && sum(ready) < settings.pageThreshold
-      ? ready
+      ? sortForPrint(ready)
       : selectForIssue(state, settings.pageThreshold)
     return ensureDraft(state, state.issueNumber, seed.map((i) => i.id)).itemIds
   })
 
   const state = await readState()
   const byId = new Map((state?.items ?? []).map((i) => [i.id, i]))
-  return itemIds.map((id) => byId.get(id)).filter((i): i is StateItem => Boolean(i))
+  const items = itemIds.map((id) => byId.get(id)).filter((i): i is StateItem => Boolean(i))
+  // A draft edited before linkposts existed, or by hand, may not have its
+  // groups together. The order that prints is always the grouped one.
+  return sortForPrint(items)
 }
 
 async function compose(force: boolean): Promise<void> {
@@ -302,7 +410,9 @@ async function markPrinted(): Promise<void> {
   const client = createRaindropClient({ token: settings.raindropToken })
   const collectionName = archiveCollectionName(new Date(), name)
   const collection = await client.createCollection(collectionName)
-  const moved = await client.moveRaindrops(chosen.map((i) => i.raindropId), String(collection._id))
+  // A piece that came in through a linkpost has no raindrop to move.
+  const dropIds = chosen.map((i) => i.raindropId).filter((id) => /^\d+$/.test(id))
+  const moved = await client.moveRaindrops(dropIds, String(collection._id))
 
   const nextNumber = await withStateLock((state) => {
     const ids = new Set(chosen.map((i) => i.id))
@@ -342,14 +452,30 @@ async function main(): Promise<void> {
   const added = await withStateLock((state) => poll(state))
   console.log(`${added} new save${added === 1 ? '' : 's'}\n`)
 
-  const queued = (await readState())?.items.filter((i) => i.state === 'queued') ?? []
-  if (queued.length > 0) {
-    console.log('extracting…')
-    const outcomes = await processQueued(queued, (await readState())?.issueNumber ?? 1)
+  // Two passes at most. The first extracts what `hw` holds and finds the
+  // linkposts among it; the second extracts the pieces those linkposts named.
+  // There is no third: a roundup reached through a roundup is a rabbit hole,
+  // and `processQueued` refuses to classify anything that arrived that way, so
+  // the second pass can never discover more.
+  for (let pass = 0; pass < 2; pass++) {
+    const current = await readState()
+    const queued = current?.items.filter((i) => i.state === 'queued') ?? []
+    if (queued.length === 0) break
+
+    console.log(pass === 0 ? 'extracting…' : '\nextracting what the linkposts pointed at…')
+    const { outcomes, discovered } = await processQueued(
+      queued,
+      current?.issueNumber ?? 1,
+      current?.items ?? queued,
+    )
     await withStateLock((state) => {
       for (const item of state.items) {
         const outcome = outcomes.get(item.id)
         if (outcome) Object.assign(item, outcome)
+      }
+      const known = new Set(state.items.map((i) => i.id))
+      for (const child of discovered) {
+        if (!known.has(child.id)) state.items.push(child)
       }
     })
   }
@@ -370,7 +496,11 @@ async function main(): Promise<void> {
   const byId = new Map((state?.items ?? []).map((i) => [i.id, i]))
   for (const id of inIssue) {
     const item = byId.get(id)
-    if (item) console.log(`   ${String(item.pageCount).padStart(3)}pp  ${item.title ?? item.url}`)
+    if (!item) continue
+    // Indented under the linkpost that brought it in, which is how it prints.
+    const indent = item.linkpostParentId && inIssue.includes(item.linkpostParentId) ? '  ↳ ' : '   '
+    const flag = item.isLinkpost ? '  ⇢ linkpost' : ''
+    console.log(`${indent}${String(item.pageCount).padStart(3)}pp  ${item.title ?? item.url}${flag}`)
   }
 
   const waiting = ready.filter((i) => !inIssue.includes(i.id))

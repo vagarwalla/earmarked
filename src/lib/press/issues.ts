@@ -19,6 +19,7 @@
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
+import { orderWithLinkposts, withLinkpostChildren } from './linkpost'
 
 export const PRESS_ROOT = path.join(process.cwd(), '.press')
 
@@ -38,6 +39,19 @@ export interface StateItem {
   pageCount?: number
   reason?: string
   savedAt: string
+  /**
+   * This item is a linkpost: it exists to point at the items whose
+   * `linkpostParentId` is its id. All four fields are optional so state files
+   * written before linkposts existed still parse — `readState` is a bare
+   * JSON.parse with no validation.
+   */
+  isLinkpost?: boolean
+  /** The id of the linkpost that named this item. */
+  linkpostParentId?: string
+  /** The words that linkpost pointed with, kept for the printed opener. */
+  linkpostAnchor?: string
+  /** When it was last examined. Absent means never asked, which is what the backfill walks. */
+  linkpostScannedAt?: string
 }
 
 /**
@@ -167,14 +181,30 @@ export function readyItems(state: PressState | null): StateItem[] {
  * that decides, and this is never consulted for that issue again.
  */
 export function selectForIssue(state: PressState | null, threshold: number): StateItem[] {
+  const ready = readyItems(state)
   const chosen: StateItem[] = []
   let total = 0
-  for (const item of readyItems(state)) {
+  for (const item of ready) {
     chosen.push(item)
     total += item.pageCount ?? 0
     if (total >= threshold) break
   }
-  return chosen
+
+  // Half a roundup is worse than none of it: taking a linkpost takes the pieces
+  // it pointed at, even when that overshoots the threshold. The overshoot is
+  // the same kind the loop above already accepts.
+  const withChildren = withLinkpostChildren(chosen, ready, (i) => i.linkpostParentId)
+  return sortForPrint(withChildren)
+}
+
+/** The order an issue prints in: whatever it is, with every linkpost's children behind it. */
+export function sortForPrint(items: readonly StateItem[]): StateItem[] {
+  const byId = new Map(items.map((i) => [i.id, i]))
+  const order = orderWithLinkposts(
+    items.map((i) => i.id),
+    (id) => byId.get(id)?.linkpostParentId,
+  )
+  return order.map((id) => byId.get(id)!).filter(Boolean)
 }
 
 export function findDraft(state: PressState | null, number: number): IssueDraft | undefined {
@@ -250,14 +280,20 @@ export function applyIssueAction(
       if (!sameMembers(edit.itemIds, draft.itemIds)) {
         throw new IssueEditError('The issue changed underneath you — reload and try again.')
       }
-      draft.itemIds = [...edit.itemIds]
+      draft.itemIds = normaliseOrder(state, edit.itemIds)
       return draft
     }
     case 'remove': {
       if (!draft.itemIds.includes(edit.itemId)) {
         throw new IssueEditError('That article is not in this issue.')
       }
-      draft.itemIds = draft.itemIds.filter((id) => id !== edit.itemId)
+      // Removing a linkpost removes what it brought in: the pieces are only
+      // here because it named them, and orphaning them under whatever article
+      // happens to precede them would print a lie.
+      const orphans = new Set(
+        state.items.filter((i) => i.linkpostParentId === edit.itemId).map((i) => i.id),
+      )
+      draft.itemIds = draft.itemIds.filter((id) => id !== edit.itemId && !orphans.has(id))
       return draft
     }
     case 'add': {
@@ -271,13 +307,46 @@ export function applyIssueAction(
           `"${item.title ?? item.url}" is ${item.state}, not waiting to be printed.`,
         )
       }
-      if (claimedItemIds(state, draft.number).has(edit.itemId)) {
+      const claimed = claimedItemIds(state, draft.number)
+      if (claimed.has(edit.itemId)) {
         throw new IssueEditError('That article already belongs to another issue.')
       }
       draft.itemIds.push(edit.itemId)
+
+      // A piece brings the linkpost that named it, because its opener says
+      // "Linkpost of X" and X has to be in the issue for that to be true.
+      const parentId = item.linkpostParentId
+      if (parentId && !draft.itemIds.includes(parentId)) {
+        const parent = state.items.find((i) => i.id === parentId)
+        if (!parent || parent.state !== 'laid_out' || claimed.has(parentId)) {
+          throw new IssueEditError(
+            `"${item.title ?? item.url}" is here because a linkpost pointed at it, and that linkpost is not available for this issue.`,
+          )
+        }
+        draft.itemIds.push(parentId)
+      }
+
+      // And a linkpost brings the pieces it named, as long as they are free.
+      for (const child of state.items) {
+        if (child.linkpostParentId !== edit.itemId) continue
+        if (child.state !== 'laid_out') continue
+        if (draft.itemIds.includes(child.id) || claimed.has(child.id)) continue
+        draft.itemIds.push(child.id)
+      }
+      draft.itemIds = normaliseOrder(state, draft.itemIds)
       return draft
     }
   }
+}
+
+/**
+ * The invariant, imposed on write: a linkpost's children sit directly behind
+ * it. Done here rather than defended in the editor so it holds however the
+ * order arrived — a drag, a stale page, or a script.
+ */
+function normaliseOrder(state: PressState, itemIds: string[]): string[] {
+  const byId = new Map(state.items.map((i) => [i.id, i]))
+  return orderWithLinkposts(itemIds, (id) => byId.get(id)?.linkpostParentId)
 }
 
 /**

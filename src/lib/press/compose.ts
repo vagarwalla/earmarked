@@ -162,15 +162,34 @@ export async function loadEntries(
 /** Rough capacity of one TOC page; only used to sanity-check the rendered count. */
 const TOC_ENTRIES_PER_PAGE = 18
 
+/**
+ * The byline/publication line, plus what the entry has to do with the entry
+ * above it. A linkpost says so; the pieces it named say whose they are, and are
+ * indented under it — which is the only place the reader sees the grouping
+ * before they reach the pages themselves.
+ */
+function tocMetaHtml(entry: TocEntry): string {
+  const parts: string[] = []
+  const meta = tocMeta(entry)
+  if (meta) parts.push(escapeHtml(meta))
+  if (entry.isLinkpost) parts.push('<span class="toc-flag">Linkpost</span>')
+  else if (entry.linkpostOf) {
+    parts.push(`<span class="toc-via">via ${escapeHtml(entry.linkpostOf)}</span>`)
+  }
+  return parts.join('<span class="sep">·</span>')
+}
+
 export function buildTocSection(issueName: string, issueNumber: number, toc: TocEntry[]): string {
   const rows = toc
-    .map(
-      (e) => `      <li class="toc-entry">
+    .map((e) => {
+      const classes = ['toc-entry']
+      if (e.linkpostOf) classes.push('toc-entry--child')
+      return `      <li class="${classes.join(' ')}">
         <span class="toc-title">${escapeHtml(e.title)}</span>
-        <span class="toc-meta">${escapeHtml(tocMeta(e))}</span>
+        <span class="toc-meta">${tocMetaHtml(e)}</span>
         <span class="toc-page">${e.startPage}</span>
-      </li>`,
-    )
+      </li>`
+    })
     .join('\n')
 
   return `    <section class="toc" id="toc">
@@ -201,6 +220,8 @@ export function computeToc(entries: ComposeEntry[], pageCounts: number[], frontP
       sourceName: entry.kind === 'article' ? entry.article.sourceName : entry.item.source_name,
       startPage: page,
       pageCount,
+      isLinkpost: entry.kind === 'article' ? Boolean(entry.article.linkpost) : entry.item.is_linkpost,
+      linkpostOf: entry.kind === 'article' ? (entry.article.linkpostOf?.title ?? null) : null,
     })
     page += pageCount
   })

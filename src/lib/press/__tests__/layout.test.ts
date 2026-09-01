@@ -547,6 +547,122 @@ describe('footnotes in the layout', () => {
   })
 })
 
+// ── Linkposts ────────────────────────────────────────────────────────────────
+
+describe('linkposts on the page', () => {
+  const base: Article = {
+    title: 'Monthly Roundup #14',
+    byline: 'Zvi Mowshowitz',
+    sourceName: 'Don\u2019t Worry About the Vase',
+    url: 'https://thezvi.substack.com/p/roundup-14',
+    publishedAt: '2026-08-01T00:00:00Z',
+    dek: null,
+    lead: null,
+    blocks: [{ type: 'para', html: 'Everything worth reading this month.' }],
+  }
+
+  const roundup = (targets: { url: string; anchor: string; note: string | null }[]): Article => ({
+    ...base,
+    linkpost: { kind: 'roundup', reason: 'a monthly links roundup', targets },
+  })
+
+  const child = (): Article => ({
+    ...base,
+    title: 'On sincerity',
+    linkpost: undefined,
+    linkpostOf: {
+      title: 'Monthly Roundup #14',
+      url: 'https://thezvi.substack.com/p/roundup-14',
+      anchor: 'On sincerity',
+    },
+  })
+
+  it('flags a linkpost above its title and says how many follow', () => {
+    const html = buildArticleHtml(
+      roundup([
+        { url: 'https://a.test/1', anchor: 'On sincerity', note: 'an essay on honesty' },
+        { url: 'https://b.test/2', anchor: 'A second essay', note: null },
+      ]),
+      { issueNumber: 1, startPage: 1 },
+    )
+    expect(html).toContain('class="flag"')
+    expect(html).toContain('Linkpost \u00b7 2 pieces follow')
+    // Above the title, so the relationship is read before the piece is.
+    expect(html.indexOf('class="flag"')).toBeLessThan(html.indexOf('article-title'))
+  })
+
+  it('says which linkpost brought a piece in', () => {
+    const html = buildArticleHtml(child(), { issueNumber: 1, startPage: 1 })
+    expect(html).toContain('flag--via')
+    expect(html).toContain('Linkpost of')
+    expect(html).toContain('Monthly Roundup #14')
+  })
+
+  it('lists what the linkpost named, after the body and before the source line', () => {
+    const html = buildArticleHtml(
+      roundup([{ url: 'https://a.test/one', anchor: 'On sincerity', note: 'an essay on honesty' }]),
+      { issueNumber: 1, startPage: 1 },
+    )
+    expect(html).toContain('class="linked"')
+    expect(html).toContain('Linked here')
+    expect(html).toContain('On sincerity')
+    expect(html).toContain('an essay on honesty')
+    expect(html.indexOf('linked-list')).toBeLessThan(html.indexOf('article-source'))
+  })
+
+  it('prints addresses without a scheme, like every other address in the magazine', () => {
+    const html = buildArticleHtml(
+      roundup([{ url: 'https://www.a.test/one/', anchor: 'On sincerity', note: null }]),
+      { issueNumber: 1, startPage: 1 },
+    )
+    expect(html).toContain('a.test/one')
+    expect(html).not.toMatch(/https?:/i)
+  })
+
+  it('escapes an anchor and a note exactly as it escapes a title', () => {
+    const html = buildArticleHtml(
+      roundup([
+        { url: 'https://a.test/1', anchor: '<script>alert(1)</script>', note: '"quoted" & <b>bold</b>' },
+      ]),
+      { issueNumber: 1, startPage: 1 },
+    )
+    expect(html).not.toContain('<script>')
+    expect(html).toContain('&lt;script&gt;')
+    expect(html).toContain('&quot;quoted&quot;')
+  })
+
+  it('emits nothing at all for an ordinary article', () => {
+    const html = buildArticleHtml(base, { issueNumber: 1, startPage: 1 })
+    expect(html).not.toContain('class="flag"')
+    expect(html).not.toContain('class="linked"')
+  })
+
+  it('emits no list for a linkpost whose pointers all turned out to be noise', () => {
+    const html = buildArticleHtml(roundup([]), { issueNumber: 1, startPage: 1 })
+    // Still a linkpost, so still flagged — but with nothing to list.
+    expect(html).toContain('class="flag"')
+    expect(html).toContain('Linkpost')
+    expect(html).not.toContain('class="linked"')
+  })
+
+  it('loads an extraction stored before linkposts existed', () => {
+    const legacy = { ...base } as Article
+    delete (legacy as { linkpost?: unknown }).linkpost
+    delete (legacy as { linkpostOf?: unknown }).linkpostOf
+    const html = buildArticleHtml(legacy, { issueNumber: 1, startPage: 1 })
+    expect(html).toContain('article-title')
+    expect(html).not.toContain('class="flag"')
+  })
+
+  it('keeps the stylesheet fetching nothing', () => {
+    const css = pressCss()
+    expect(css).toContain('.flag')
+    expect(css).toContain('.linked')
+    expect(css).not.toMatch(/url\(/)
+    expect(css).not.toMatch(/https?:/i)
+  })
+})
+
 describe('the folio on opener pages', () => {
   it('holds the page number inside the trim where the opener zeroes its margins', () => {
     // A full-bleed opener has margin: 0 on the sides, which would otherwise put

@@ -17,37 +17,10 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { safeFetchText } from '../src/lib/press/fetch'
 import { parseHtml } from '../src/lib/press/extract'
 import { normalizeUrl } from '../src/lib/press/db'
+// One definition of "what counts as chrome": the linkpost classifier filters
+// the same links for a different purpose, and the two must not drift apart.
+import { isChrome } from '../src/lib/press/linkpost'
 import { parseUrlList } from './press-compile'
-
-/** Hosts that are navigation, subscription plumbing, or sharing — never the point. */
-const CHROME_HOSTS = [
-  'substack.com',
-  'substackcdn.com',
-  'twitter.com',
-  'x.com',
-  'facebook.com',
-  'linkedin.com',
-  'reddit.com',
-  'mail.google.com',
-  't.co',
-]
-
-const CHROME_PATHS = [
-  /\/subscribe\b/i,
-  /\/unsubscribe\b/i,
-  /\/account\b/i,
-  /\/comments?\b/i,
-  /\/share\b/i,
-  /\/refer\b/i,
-  /\/archive\b/i,
-  /\/about\b/i,
-  /\/p\/[^/]+\/comments/i,
-]
-
-const CHROME_TEXT = [
-  /^\s*(share|tweet|subscribe|unsubscribe|comment|like|restack|read more|continue reading|view in browser)\s*$/i,
-  /^\s*$/,
-]
 
 export interface HarvestedLink {
   url: string
@@ -55,22 +28,6 @@ export interface HarvestedLink {
   /** Which saved article it was found in. */
   foundIn: string
   host: string
-}
-
-export function isChrome(url: string, text: string, sourceHost: string): boolean {
-  let parsed: URL
-  try {
-    parsed = new URL(url)
-  } catch {
-    return true
-  }
-  const host = parsed.hostname.replace(/^www\./, '')
-  // A link back into the publication you are already reading is navigation.
-  if (host === sourceHost) return true
-  if (CHROME_HOSTS.some((h) => host === h || host.endsWith(`.${h}`))) return true
-  if (CHROME_PATHS.some((re) => re.test(parsed.pathname))) return true
-  if (CHROME_TEXT.some((re) => re.test(text))) return true
-  return false
 }
 
 /**
