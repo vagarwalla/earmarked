@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  press — keep the website and this machine in step, unattended.
+
+  Rendering an issue is minutes of headless Chromium, so it can only happen
+  here; reordering happens on earmarked.vaidehiagarwalla.com. `press:sync`
+  closes that loop, and this runs it on a timer so neither side has to be
+  driven by hand.
+
+  Every half hour: pull the running order from the site, poll Raindrop for new
+  reading, rebuild if anything moved, push the result back. A quiet run is one
+  Raindrop call and a few queries; a run with an edit is a few minutes of
+  Chromium. Runs are serialised by .press/build.lock, so an overlap is safe.
+
+  RunAtLoad also fires it on login and, because launchd defers missed
+  StartInterval firings, once on wake — which is what you want on a laptop.
+
+  Install:  bash infra/press-sync/install.sh
+  Remove:   launchctl bootout gui/$UID/com.vaidehi.press-sync
+  Logs:     .press/sync.log
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.vaidehi.press-sync</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>--env-file=.env.local</string>
+    <string>./node_modules/.bin/tsx</string>
+    <string>scripts/press-sync.ts</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <!-- Half-hourly. Reading arrives over days; there is nothing to gain from
+       polling Raindrop harder, and each run may cost a full render. -->
+  <key>StartInterval</key>
+  <integer>1800</integer>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- launchd starts with a bare PATH; tsx and node both live under ~/.local. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__NODEDIR__:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>__REPO__/.press/sync.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO__/.press/sync.log</string>
+
+  <!-- A failing sync must not become a restart loop; wait for the next tick. -->
+  <key>KeepAlive</key>
+  <false/>
+</dict>
+</plist>

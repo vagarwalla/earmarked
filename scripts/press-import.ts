@@ -190,6 +190,26 @@ async function main(): Promise<void> {
     }
     if (Object.keys(paths).length) await db.from('press_issues').update(paths).eq('id', issueId)
 
+    // What the PDFs were actually rendered from (012). Without this the site
+    // cannot tell a current issue from a stale one, and would keep offering to
+    // rebuild something that is already correct. meta.json holds local ids;
+    // press_items rows are matched on raindrop_id, which is the same id.
+    if (meta?.articles?.length) {
+      const { data: rows } = await db
+        .from('press_items')
+        .select('id,raindrop_id')
+        .eq('issue_id', issueId)
+      const idByLocal = new Map(
+        ((rows ?? []) as { id: string; raindrop_id: string | null }[]).map((r) => [r.raindrop_id, r.id]),
+      )
+      const builtOrder = meta.articles
+        .map((a) => idByLocal.get(a.id))
+        .filter((id): id is string => Boolean(id))
+      if (builtOrder.length === meta.articles.length) {
+        await db.from('press_issues').update({ built_order: builtOrder }).eq('id', issueId)
+      }
+    }
+
     say(`issue ${number}: "${row.name ?? '(unnamed)'}" ${row.page_total}pp -> ${issueId}`)
   }
 

@@ -11,7 +11,8 @@
     "test:watch": "vitest",
     "bench:optimizer": "BENCH=1 vitest run src/lib/optimizer/__bench__/optimizer.bench.test.ts",
     "db:apply": "node --env-file=.env.local ./node_modules/.bin/tsx scripts/db-apply.ts",
-    "press:import": "node --env-file=.env.local ./node_modules/.bin/tsx scripts/press-import.ts"
+    "press:import": "node --env-file=.env.local ./node_modules/.bin/tsx scripts/press-import.ts",
+    "press:sync": "node --env-file=.env.local ./node_modules/.bin/tsx scripts/press-sync.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
