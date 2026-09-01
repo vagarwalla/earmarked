@@ -483,7 +483,17 @@ export type ActionKind = 'approve' | 'skip' | 'drop' | 'preview'
 
 export interface ActionToken {
   token_hash: string
+  /** The issue this link is about; for a bundle, the first of them. */
   issue_id: string
+  /**
+   * Every issue the link acts on, `issue_id` included.
+   *
+   * A bundle is approved by ONE link covering several issues, and a token that
+   * could only name one of them would either need a link per issue — several
+   * chances to buy half a parcel — or would leave the rest unrecorded. Expiry
+   * matches on this array, so re-composing any member invalidates the link.
+   */
+  issue_ids: string[]
   action: ActionKind
   item_id: string | null
   expires_at: string

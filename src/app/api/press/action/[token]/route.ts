@@ -4,12 +4,16 @@
  * POST only. Every link in the approval email points at the confirmation page,
  * which posts here; a GET on this route is a 405 by omission, so a mail
  * scanner following links can neither place an order nor spend a token.
+ *
+ * One token, one act — including when that act is a bundle of several issues.
+ * The token names every issue it covers, so the single-use property covers the
+ * whole parcel rather than each issue in it.
  */
 
 import { NextResponse } from 'next/server'
 import { claimToken } from '@/lib/press/approval'
 import { getIssue, skipIssue, updateItem, recordEvent } from '@/lib/press/db'
-import { approveIssueById } from '@/lib/press/order'
+import { approveBundleByIds, approveIssueById } from '@/lib/press/order'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -29,6 +33,24 @@ export async function POST(_request: Request, context: { params: Promise<{ token
 
   switch (action.action) {
     case 'approve': {
+      // One link, several issues: a bundle is one Lulu job bought in one act.
+      // Older tokens predate the column and carry only the scalar issue.
+      const issueIds = action.issue_ids?.length ? action.issue_ids : [action.issue_id]
+
+      if (issueIds.length > 1) {
+        const result = await approveBundleByIds(issueIds)
+        // 200 once the job exists, even if a line of it was refused, and the
+        // per-issue verdicts are in the body.
+        //
+        // A bundle has no single verdict. Lulu validates each interior
+        // separately, so "issue 3 is printing and issue 4 was refused" is an
+        // ordinary outcome — and answering it with 409 would tell the reader
+        // nothing happened, when in fact money was spent and a book is on its
+        // way. 409 is kept for the case it actually describes: nothing was
+        // sent at all.
+        return NextResponse.json(result, { status: result.jobId ? 200 : 409 })
+      }
+
       // approveIssueById, not performApproval: it derives `reorder` from the
       // issue's own state. performApproval defaults it to false, which makes
       // idempotencyKeyFor return the *first* order's key — so an extra copy of

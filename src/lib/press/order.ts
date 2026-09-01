@@ -350,6 +350,47 @@ export async function performBundledApproval(
   }
 }
 
+/**
+ * Re-read the issues and drive one bundled approval. Used by the confirm link.
+ *
+ * `reorder` is one flag for the whole job, and it is true only when EVERY
+ * issue has already been printed. A mixed bundle — a fresh issue alongside
+ * another copy of a shipped one — is not a reorder: the fresh issue's state
+ * machine has to advance, and `press_place_order` already decides that per
+ * issue from the issue's own state. Setting it on the strength of one member
+ * would give the fresh issue a `-copy-` key, so a re-drive would order it
+ * twice instead of collapsing onto the first attempt.
+ *
+ * A member that no longer exists refuses the bundle rather than ordering the
+ * rest of it: the reader approved a parcel, not whatever is left of one.
+ */
+export async function approveBundleByIds(
+  issueIds: string[],
+  deps: OrderDeps = {},
+): Promise<BundleOutcome> {
+  const issues: PressIssue[] = []
+  for (const id of issueIds) {
+    const issue = await getIssue(id, deps.db)
+    if (!issue) {
+      return {
+        ok: false,
+        bundleKey: '',
+        issues: issueIds.map(() => ({
+          ok: false,
+          action: 'approve' as const,
+          status: 'not-composed' as const,
+          detail: 'one of these issues no longer exists',
+        })),
+      }
+    }
+    issues.push(issue)
+  }
+
+  const reorder =
+    deps.reorder ?? issues.every((i) => i.state === 'shipped' || i.state === 'ordered')
+  return performBundledApproval(issues, { ...deps, reorder })
+}
+
 /** Re-read the issue and drive its approval. Used by the confirm link. */
 export async function approveIssueById(
   issueId: string,

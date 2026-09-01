@@ -291,4 +291,33 @@ export function orderBlockers(
   return { blockers, pages }
 }
 
+/**
+ * Why the bundle cannot be ordered — every issue's reasons, as one list.
+ *
+ * The all-or-nothing rule is stated here rather than left to the caller: a
+ * bundle is one Lulu job, a job cannot be placed half-way, and the reader
+ * asked for these issues in one parcel. So *any* issue's blocker blocks the
+ * whole bundle, and the answer to "issue 4 is not built" is never to quietly
+ * order issue 3 alone.
+ *
+ * Two presentational rules, both of which exist to keep the list readable
+ * rather than merely complete:
+ *
+ *  - One issue reads exactly as it does today, unprefixed. A bundle of one is
+ *    still an order of one issue and should not suddenly say "Issue 3:".
+ *  - A reason every issue shares is a fact about the setup, not about any
+ *    issue — no address, ordering switched off — and is stated once. Repeating
+ *    "Ordering is off" three times says nothing three times.
+ */
+export function bundleBlockers(issues: { number: number; blockers: string[] }[]): string[] {
+  if (issues.length === 0) return ['Select at least one issue to order.']
+  if (issues.length === 1) return issues[0].blockers
+
+  const shared = issues[0].blockers.filter((b) => issues.every((i) => i.blockers.includes(b)))
+  return [
+    ...shared,
+    ...issues.flatMap((i) => i.blockers.filter((b) => !shared.includes(b)).map((b) => `Issue ${i.number}: ${b}`)),
+  ]
+}
+
 export { getIssue, itemsForIssue }
