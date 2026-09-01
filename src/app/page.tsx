@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Plus, ShoppingCart } from 'lucide-react'
+import { Newspaper, Plus, ShoppingCart } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { CreateCartDialog } from '@/components/CreateCartDialog'
 import { ThemeToggle } from '@/components/ThemeToggle'
@@ -49,6 +49,14 @@ export default function HomePage() {
             <span className="text-xl font-semibold">Earmarked</span>
           </div>
           <div className="flex items-center gap-2">
+            {/* Saved reading, laid out for print. Its own page, password-gated
+                in the middleware — this is just the way in. */}
+            <Link href="/press">
+              <Button variant="outline">
+                <Newspaper className="h-4 w-4 mr-2" />
+                Press
+              </Button>
+            </Link>
             <ThemeToggle />
             <Button onClick={() => setOpen(true)}>
               <Plus className="h-4 w-4 mr-2" />
