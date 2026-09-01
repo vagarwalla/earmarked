@@ -33,7 +33,7 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core'
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { Lock, LockOpen, Plus, Sparkles } from 'lucide-react'
+import { Lock, LockOpen, Package, Plus, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { readJson } from './readJson'
 import { ArticleRow, articleLabel } from './ArticleRow'
@@ -91,6 +91,19 @@ export const STATE_LABEL: Record<string, string> = {
   shipped: 'shipped',
   rejected: 'rejected',
   skipped: 'declined',
+}
+
+/**
+ * Which issues can be ticked for a bundle — the same two states that offer an
+ * Order button on the issue itself.
+ *
+ * The real gate is `orderBlockers`, which needs the address, the built files
+ * and the open orders, and so can only run on the server. This is the cheap
+ * half: it keeps a draft out of a parcel, and the dialog refuses the bundle
+ * with a reason for everything else.
+ */
+function orderable(state: string): boolean {
+  return state === 'closed' || state === 'shipped'
 }
 
 const RAIL_FILTERS = ['all', 'draft', 'locked', 'printed'] as const
@@ -156,7 +169,23 @@ export function Workbench(props: Props) {
   const [note, setNote] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [dragging, setDragging] = useState<PoolItem | null>(null)
-  const [ordering, setOrdering] = useState(false)
+  /**
+   * The issues the order dialog is about, or null when it is closed.
+   *
+   * A list rather than a number even for one issue: the dialog, the route and
+   * `performBundledApproval` all take a bundle of one down the same path as a
+   * bundle of three, and a second single-issue path here is the one that would
+   * drift out of step with them.
+   */
+  const [ordering, setOrdering] = useState<number[] | null>(null)
+  /**
+   * Ticked in the rail, waiting to be ordered together.
+   *
+   * Kept here rather than in the dialog because the selection is made across
+   * the rail, over several issues, before the dialog exists — and because
+   * closing the dialog should not throw away a selection someone assembled.
+   */
+  const [bundle, setBundle] = useState<number[]>([])
 
   const issue = useMemo(
     () => issues.find((i) => i.number === selected) ?? null,
@@ -421,12 +450,30 @@ export function Workbench(props: Props) {
           </div>
           <ul className="space-y-0.5">
             {railIssues.map((i) => (
-              <li key={i.number}>
+              <li key={i.number} className="flex items-center gap-1.5">
+                {/* Outside the row button, not inside it: a checkbox nested in
+                    a button is neither valid nor clickable on its own, and
+                    ticking an issue must not also select it for editing. */}
+                {orderable(i.state) ? (
+                  <input
+                    type="checkbox"
+                    className="shrink-0"
+                    checked={bundle.includes(i.number)}
+                    onChange={(e) =>
+                      setBundle((b) =>
+                        e.target.checked ? [...b, i.number].sort((x, y) => x - y) : b.filter((n) => n !== i.number),
+                      )
+                    }
+                    aria-label={`Order issue ${i.number} with others`}
+                  />
+                ) : (
+                  <span className="w-3.5 shrink-0" />
+                )}
                 <button
                   type="button"
                   onClick={() => setSelected(i.number)}
                   aria-current={i.number === selected}
-                  className={`flex w-full items-baseline gap-1.5 rounded-md px-2 py-1.5 text-left text-xs ${
+                  className={`flex min-w-0 flex-1 items-baseline gap-1.5 rounded-md px-2 py-1.5 text-left text-xs ${
                     i.number === selected ? 'bg-accent' : 'hover:bg-accent/50'
                   }`}
                 >
@@ -443,6 +490,28 @@ export function Workbench(props: Props) {
               </li>
             )}
           </ul>
+
+          {/* The bundling gesture, and the only place it is offered. Two
+              issues in one Lulu job pay for one parcel instead of two, and
+              the dialog says how much that is before anything is sent. */}
+          {bundle.length > 0 && (
+            <div className="mt-2 rounded-md border p-2">
+              <p className="text-muted-foreground text-xs">
+                {bundle.length === 1
+                  ? `Issue ${bundle[0]} selected. Tick another to share one parcel.`
+                  : `${bundle.map((n) => `#${n}`).join(', ')} — one job, one shipping charge.`}
+              </p>
+              <div className="mt-1.5 flex gap-2">
+                <Button size="xs" onClick={() => setOrdering(bundle)}>
+                  <Package data-icon="inline-start" />
+                  Order {bundle.length === 1 ? 'it' : `these ${bundle.length}`}
+                </Button>
+                <Button size="xs" variant="ghost" onClick={() => setBundle([])}>
+                  Clear
+                </Button>
+              </div>
+            </div>
+          )}
         </aside>
 
         {/* ── The issue ────────────────────────────────────────────── */}
@@ -458,7 +527,7 @@ export function Workbench(props: Props) {
               onNote={setNote}
               onRefresh={refresh}
               onAutoFill={autoFill}
-              onOrder={() => setOrdering(true)}
+              onOrder={() => setOrdering([issue.number])}
               poolCount={pool.length}
             />
           ) : (
@@ -526,10 +595,10 @@ export function Workbench(props: Props) {
         )}
       </DragOverlay>
 
-      {ordering && issue && (
+      {ordering && (
         <OrderDialog
-          issueNumber={issue.number}
-          onClose={() => setOrdering(false)}
+          issueNumbers={ordering}
+          onClose={() => setOrdering(null)}
           onError={setError}
           onNote={setNote}
         />

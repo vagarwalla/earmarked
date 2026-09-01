@@ -9,6 +9,7 @@
 
 import { describe, it, expect, vi } from 'vitest'
 import { quoteBundle } from '../bundle'
+import { groupByBundle, type OrderWithIssue } from '../orders'
 import { bundleBlockers, orderBlockers } from '../workbench'
 import { bundleApprovalHtml, bundleApprovalSubject } from '../approval'
 import type { QuoteLine, ShippingAddress } from '../lulu'
@@ -303,5 +304,68 @@ describe('the bundle approval email', () => {
     expect(bundleApprovalSubject({ ...bundleEmail, issues: [bundleEmail.issues[0]] })).toBe(
       'press — Issue 3: Winter Light (100 pages)',
     )
+  })
+})
+
+// ── The orders panel ─────────────────────────────────────────────────────────
+
+function order(over: Partial<OrderWithIssue> = {}): OrderWithIssue {
+  return {
+    id: 'ord1',
+    issue_id: 'iss1',
+    lulu_job_id: 'job_1',
+    idempotency_key: 'press-issue-iss1',
+    status: 'IN_PRODUCTION',
+    line_item_status: 'CREATED',
+    message: null,
+    quantity: 1,
+    cost_cents: 1088,
+    currency: 'USD',
+    tracking_urls: [],
+    ship_to: null,
+    ordered_by: null,
+    bundle_key: null,
+    line_index: 0,
+    placed_at: '2026-09-01T00:00:00Z',
+    shipped_at: null,
+    updated_at: '2026-09-01T00:00:00Z',
+    issue_number: 3,
+    issue_name: 'Winter Light',
+    ...over,
+  }
+}
+
+describe('groupByBundle', () => {
+  it('shows the rows of one job as one job, and totals what it charged', () => {
+    const groups = groupByBundle([
+      order({ id: 'a', bundle_key: 'press-bundle-iss1+iss2', issue_number: 3, cost_cents: 1088 }),
+      order({ id: 'b', bundle_key: 'press-bundle-iss1+iss2', issue_number: 4, cost_cents: 1184 }),
+    ])
+    expect(groups).toHaveLength(1)
+    expect(groups[0].orders.map((o) => o.issue_number)).toEqual([3, 4])
+    // What was actually charged — not half of it, twice.
+    expect(groups[0].totalCents).toBe(2272)
+  })
+
+  /** Every order placed before bundling existed. It is one issue, one job. */
+  it('leaves an unbundled row as its own job', () => {
+    const groups = groupByBundle([order({ id: 'a' }), order({ id: 'b', issue_number: 4 })])
+    expect(groups).toHaveLength(2)
+    expect(groups.every((g) => g.orders.length === 1)).toBe(true)
+  })
+
+  it('keeps the newest-first order the panel was given', () => {
+    const groups = groupByBundle([
+      order({ id: 'a', issue_number: 9 }),
+      order({ id: 'b', bundle_key: 'k', issue_number: 4 }),
+      order({ id: 'c', issue_number: 8 }),
+      order({ id: 'd', bundle_key: 'k', issue_number: 3 }),
+    ])
+    expect(groups.map((g) => g.orders[0].issue_number)).toEqual([9, 4, 8])
+  })
+
+  it('reports an unpriced job as unpriced rather than free', () => {
+    const groups = groupByBundle([order({ id: 'a', bundle_key: 'k', cost_cents: null, currency: null })])
+    expect(groups[0].totalCents).toBeNull()
   })
 })

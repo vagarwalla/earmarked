@@ -271,6 +271,60 @@ export async function refreshOrders(
   return { refreshed, errors }
 }
 
+/** The orders that went to Lulu in one job, and what that job cost. */
+export interface OrderGroup {
+  /** Stable list key: the bundle's key, or the row's own id where it has none. */
+  key: string
+  bundleKey: string | null
+  orders: OrderWithIssue[]
+  /** Every row's share summed — the job's cost, which is what was charged. */
+  totalCents: number | null
+  currency: string | null
+}
+
+/**
+ * Gather the rows that share a Lulu job.
+ *
+ * An order stays one row per issue, because everything downstream of it is per
+ * issue — but the *charge* is per job, and a panel that only ever showed rows
+ * would report a bundle as two orders of about half the price each and leave
+ * the reader to guess that one parcel is coming. The grouping is presentation
+ * over the same rows, not a second source of truth.
+ *
+ * A row with no bundle key is its own group: that is every order placed before
+ * bundling existed, and it is exactly what it looks like — one issue, one job.
+ * First-appearance order is preserved, so the panel stays newest-first.
+ */
+export function groupByBundle(orders: OrderWithIssue[]): OrderGroup[] {
+  const groups: OrderGroup[] = []
+  const byKey = new Map<string, OrderGroup>()
+
+  for (const order of orders) {
+    const existing = order.bundle_key ? byKey.get(order.bundle_key) : undefined
+    if (existing) {
+      existing.orders.push(order)
+      continue
+    }
+    const group: OrderGroup = {
+      key: order.bundle_key ?? order.id,
+      bundleKey: order.bundle_key,
+      orders: [order],
+      totalCents: null,
+      currency: null,
+    }
+    if (order.bundle_key) byKey.set(order.bundle_key, group)
+    groups.push(group)
+  }
+
+  for (const group of groups) {
+    const known = group.orders.filter((o) => o.cost_cents !== null)
+    // Null rather than zero where nothing was priced: zero reads as free.
+    group.totalCents = known.length ? known.reduce((n, o) => n + (o.cost_cents as number), 0) : null
+    group.currency = group.orders.find((o) => o.currency)?.currency ?? null
+  }
+  return groups
+}
+
 /** Money, the way the panel and the dialog both want it. */
 export function formatMoney(cents: number | null, currency: string | null): string {
   if (cents === null) return '—'
