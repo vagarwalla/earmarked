@@ -128,10 +128,17 @@ const SIGNPOST = new RegExp(
   'i',
 )
 
+/**
+ * A promise of pointers rather than an argument, e.g. "the best things I read
+ * in July". It reads as a subtitle but it is just as often the whole title —
+ * "Interesting things I read or thought about in June" is a monthly link
+ * roundup, and checking only the subtitle let every one of them through.
+ */
+const POINTERS = /\b(things|pieces|essays|posts)\s+i\s+(read|enjoyed)\b/i
+
 export function isSignpost(title: string, subtitle?: string | null): boolean {
   if (SIGNPOST.test(title ?? '')) return true
-  // A subtitle that only promises pointers, e.g. "the best things I read in July".
-  return /\b(things|pieces|essays|posts)\s+i\s+(read|enjoyed)\b/i.test(subtitle ?? '')
+  return POINTERS.test(title ?? '') || POINTERS.test(subtitle ?? '')
 }
 
 // ── Selection ────────────────────────────────────────────────────────────────

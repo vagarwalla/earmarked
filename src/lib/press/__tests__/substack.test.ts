@@ -60,6 +60,16 @@ describe('isSignpost', () => {
   it('catches a pointer promised in the subtitle', () => {
     expect(isSignpost('July', 'the best things I read this month')).toBe(true)
   })
+
+  // Critical Maas publishes these monthly and they run to 6,000 words, so
+  // neither the length floor nor the rest of the signpost list stops them.
+  it('catches a pointer promised in the title, with no subtitle to help', () => {
+    expect(isSignpost('Interesting things I read or thought about in June 2026')).toBe(true)
+  })
+
+  it('does not mistake an essay about reading for a list of links', () => {
+    expect(isSignpost('What I learned reading the whole Soviet archive')).toBe(false)
+  })
 })
 
 describe('selectPosts', () => {
