@@ -43,6 +43,7 @@ import {
 import { extractFromUrl, ExtractionError } from '../src/lib/press/extract'
 import { fetchAndStoreImage, type CandidateImage, type StoredImage } from '../src/lib/press/images'
 import { nameIssue } from '../src/lib/press/naming'
+import { detectArticleLanguage, translateArticle } from '../src/lib/press/translate'
 import type { Article, PressItem, TocEntry } from '../src/lib/press/types'
 
 // ── Arguments ────────────────────────────────────────────────────────────────
@@ -53,6 +54,7 @@ interface Options {
   issueName: string | null
   issueNumber: number
   htmlOnly: boolean
+  translate: boolean
 }
 
 function parseArgs(argv: string[]): Options {
@@ -62,7 +64,7 @@ function parseArgs(argv: string[]): Options {
     return i === -1 ? null : (argv[i + 1] ?? null)
   }
   if (positional.length === 0) {
-    throw new Error('usage: npx tsx scripts/press-compile.ts <urls.txt> [--out DIR] [--name NAME] [--number N] [--html-only]')
+    throw new Error('usage: npx tsx scripts/press-compile.ts <urls.txt> [--out DIR] [--name NAME] [--number N] [--html-only] [--no-translate]')
   }
   return {
     urlFile: positional[0],
@@ -70,6 +72,7 @@ function parseArgs(argv: string[]): Options {
     issueName: flag('name'),
     issueNumber: Number.parseInt(flag('number') ?? '1', 10) || 1,
     htmlOnly: argv.includes('--html-only'),
+    translate: !argv.includes('--no-translate'),
   }
 }
 
@@ -118,6 +121,28 @@ function localStore(outDir: string) {
   return { store, load, flushImages, files }
 }
 
+/**
+ * Translate an article that did not arrive in English.
+ *
+ * Detection is a cheap call per article and it answers "English" for almost
+ * all of them, which is the cost of not having to hand-label a URL list. When
+ * the language cannot be established the piece is left exactly as extracted —
+ * an uncertain detection must not start a translation.
+ */
+async function translateIfForeign(
+  article: Article,
+  apiKey: string | null,
+  label: string,
+): Promise<Article> {
+  if (!apiKey) return article
+
+  const language = await detectArticleLanguage({ article, apiKey })
+  if (!language || /^english$/i.test(language)) return article
+
+  console.log(`${label} … translating from the ${language}`)
+  return translateArticle({ article, sourceLanguage: language, apiKey })
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -127,6 +152,7 @@ async function main(): Promise<void> {
 
   await mkdir(opts.outDir, { recursive: true })
   const storage = localStore(opts.outDir)
+  const apiKey = process.env.ANTHROPIC_API_KEY ?? null
 
   console.log(`press: compiling ${urls.length} article${urls.length === 1 ? '' : 's'}\n`)
 
@@ -156,9 +182,17 @@ async function main(): Promise<void> {
           }) as never,
         },
       })
-      articles.push({ url, article })
-      const images = articleImages(article).length + (article.lead ? 1 : 0)
-      console.log(`${label} ✓ ${article.title}  (${rung}, ${images} image${images === 1 ? '' : 's'})`)
+      // Translation happens here, before anything measures or names the
+      // issue, so the rest of the pipeline never sees a language it cannot
+      // set. A failure throws into the catch below and the piece is reported
+      // as a failure rather than printed in a language nobody can read.
+      const translated = opts.translate
+        ? await translateIfForeign(article, apiKey, label)
+        : article
+
+      articles.push({ url, article: translated })
+      const images = articleImages(translated).length + (translated.lead ? 1 : 0)
+      console.log(`${label} ✓ ${translated.title}  (${rung}, ${images} image${images === 1 ? '' : 's'})`)
     } catch (err) {
       const reason = err instanceof ExtractionError ? `${err.message} [tried: ${err.attempted.join(' → ')}]` : (err as Error).message
       failures.push({ url, reason })
@@ -206,7 +240,7 @@ async function main(): Promise<void> {
     (await nameIssue({
       issueNumber: opts.issueNumber,
       toc: computeToc(entries, pageCounts, 0),
-      apiKey: process.env.ANTHROPIC_API_KEY ?? null,
+      apiKey,
     }))
 
   // Front matter, then the numbers it produces.

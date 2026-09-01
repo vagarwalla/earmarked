@@ -402,6 +402,15 @@ figcaption {
   border-bottom-color: var(--rule);
 }
 
+/* A translation credit is disclosure, not an announcement — the essay is the
+   thing on the page, and how it got into English is a footnote to that. Set
+   like a linkpost's child: soft ink, no emphasis. */
+.flag--translated {
+  color: var(--ink-soft);
+  font-weight: 400;
+  border-bottom-color: var(--rule);
+}
+
 /* The parent's title inside the flag is a title, so it is not letterspaced
    into unreadability along with the label. */
 .flag-source {

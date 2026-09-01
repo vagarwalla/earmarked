@@ -300,6 +300,19 @@ export interface ArticleImage {
   orientation: 'portrait' | 'landscape' | 'square'
 }
 
+/**
+ * What was done to an article that did not arrive in English. Recorded on the
+ * article rather than inferred at print time, because by then the only
+ * evidence left is that the text reads as English.
+ */
+export interface TranslationProvenance {
+  /** English name of the language translated from, e.g. "Russian". */
+  sourceLanguage: string
+  model: string
+  /** ISO-8601, UTC. */
+  translatedAt: string
+}
+
 export type ArticleBlock =
   | { type: 'heading'; level: 2 | 3; text: string }
   | { type: 'para'; html: string }
@@ -378,6 +391,12 @@ export interface Article {
   linkpost?: LinkpostMarker
   /** Present when a linkpost is why this piece is in the issue. */
   linkpostOf?: LinkpostOrigin
+  /**
+   * Present when this piece was not written in English. Optional for the same
+   * reason the footnotes are: extractions stored before translation existed
+   * must keep loading.
+   */
+  translation?: TranslationProvenance
 }
 
 // ── Layout (U4) ──────────────────────────────────────────────────────────────

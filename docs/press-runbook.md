@@ -236,6 +236,47 @@ in unit tests — look at the PDF.
 
 ---
 
+## Translation
+
+Some of the best essays in the reading list are not in English, and the
+English-language web only ever carries the fraction someone else chose to
+translate — Eurozine is a good source precisely because it does that work for
+Russian, German and Polish journals. press does it itself instead, so a
+Hungarian essay is a candidate for an issue on the same terms as an English one.
+
+`press-compile` detects the language of every article it extracts and
+translates the ones that are not English, **before** anything measures a page
+count or names the issue. Nothing downstream knows a translation happened,
+except the opener, which says `Translated from the Russian` above the title —
+a reader is owed that before the first paragraph rather than after the last,
+and no human has checked the English.
+
+```
+npx tsx scripts/press-compile.ts urls.txt                 # translate as needed
+npx tsx scripts/press-compile.ts urls.txt --no-translate   # leave everything as found
+```
+
+Detection costs a Haiku call per article and answers "English" for nearly all
+of them; that is the price of not hand-labelling a URL list. Translation itself
+uses Opus — it is the one place in press where the model's output *is* the
+product rather than a label on it.
+
+Two things are deliberate and worth not undoing:
+
+- **Only text is sent to the model.** The article is flattened into a list of
+  strings, translated, and put back in the same slots. Block structure, image
+  paths and footnote numbering are never in the request, so they cannot move.
+  Bylines and publication names are not translated either — a byline is a real
+  person's name.
+- **A partial translation is a failure, not a result.** Everything else in
+  press degrades gracefully; this throws. Half a translation prints as English
+  until it abruptly is not, and a reader cannot tell that from an essay quoting
+  its sources in the original. A piece that fails to translate is reported as a
+  failure and left out of the issue.
+
+If a chunk comes back cut off by the output limit, pass a smaller `chunkChars`
+to `translateArticle` rather than raising `max_tokens`.
+
 ## Linkposts
 
 Some of what lands in `hw` is not a piece of writing but a set of pointers at

@@ -416,6 +416,14 @@ function flagHtml(article: Article): string {
       ? `<p class="flag flag--via">Linkpost of <span class="flag-source">${escapeHtml(title)}</span></p>`
       : '<p class="flag flag--via">Linked from a linkpost</p>'
   }
+  // A reader owed this before the first paragraph, not after the last one: it
+  // is the answer to "why does this read slightly oddly", and it is also the
+  // honest disclosure that no human checked the English.
+  if (article.translation) {
+    return `<p class="flag flag--translated">Translated from the ${escapeHtml(
+      article.translation.sourceLanguage,
+    )}</p>`
+  }
   return ''
 }
 

@@ -598,6 +598,27 @@ describe('linkposts on the page', () => {
     expect(html).toContain('Monthly Roundup #14')
   })
 
+  it('credits a translation above the title, where a reader needs it', () => {
+    const html = buildArticleHtml(
+      article({
+        translation: {
+          sourceLanguage: 'Russian',
+          model: 'claude-opus-5',
+          translatedAt: '2026-09-01T00:00:00.000Z',
+        },
+      }),
+      { issueNumber: 1, startPage: 1 },
+    )
+    expect(html).toContain('flag--translated')
+    expect(html).toContain('Translated from the Russian')
+    expect(html.indexOf('flag--translated')).toBeLessThan(html.indexOf('article-title'))
+  })
+
+  it('says nothing about translation on a piece written in English', () => {
+    const html = buildArticleHtml(article(), { issueNumber: 1, startPage: 1 })
+    expect(html).not.toContain('Translated from')
+  })
+
   it('lists what the linkpost named, after the body and before the source line', () => {
     const html = buildArticleHtml(
       roundup([{ url: 'https://a.test/one', anchor: 'On sincerity', note: 'an essay on honesty' }]),
