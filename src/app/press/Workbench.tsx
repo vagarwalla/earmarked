@@ -406,11 +406,13 @@ export function Workbench(props: Props) {
   /**
    * The ticked issues that are still orderable.
    *
-   * Read through the current issues rather than trusted as stored: once the
-   * emailed link is followed the issue moves to `approved` and its checkbox
-   * goes, and a bar still offering to order it would be offering something the
-   * server now refuses. Stale numbers fall out silently rather than needing a
-   * cleanup pass on every re-seed.
+   * The checkbox shows `bundle` directly, because a checkbox should say what
+   * was ticked. What may not use it raw is the order bar: once the emailed
+   * link is followed an issue moves to `approved`, its checkbox stops being
+   * rendered, and the number it left behind in `bundle` would otherwise still
+   * be counted in "Order these 2" and handed to `setOrdering` — offering to
+   * spend money on something the server now refuses. Derived rather than
+   * cleaned up on re-seed, so a stale number falls out on its own.
    */
   const selection = bundle.filter((n) =>
     issues.some((i) => i.number === n && orderable(i.state)),
@@ -471,7 +473,7 @@ export function Workbench(props: Props) {
                   <input
                     type="checkbox"
                     className="shrink-0"
-                    checked={selection.includes(i.number)}
+                    checked={bundle.includes(i.number)}
                     onChange={(e) =>
                       setBundle((b) =>
                         e.target.checked ? [...b, i.number].sort((x, y) => x - y) : b.filter((n) => n !== i.number),
