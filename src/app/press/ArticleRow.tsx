@@ -5,8 +5,9 @@
  *
  * The same row in the issue and in the pool, because it is the same thing in
  * both: an issue is an arrangement of the pool, not a different kind of
- * container. What changes between them is the affordance — a number and a grip
- * in the issue, a delete in the pool — and not the article.
+ * container. What changes between them is the affordance — a number, a grip and
+ * a way back to the pool in the issue, a delete in the pool — and not the
+ * article.
  */
 
 import { useSortable } from '@dnd-kit/sortable'

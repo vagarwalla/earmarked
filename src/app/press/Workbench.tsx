@@ -5,7 +5,8 @@
  *
  * Three panels and one drag context spanning two of them. An article dragged
  * from the pool into the issue, or out of the issue back to the pool, is the
- * same gesture in both directions, and both end in one call that states the
+ * same gesture in both directions; the button on an issue row is that second
+ * direction without the dragging. All of them end in one call that states the
  * issue's complete contents — because one drag can add, reorder and displace
  * all at once, and sending that as three requests would leave the issue in a
  * shape nobody asked for if the second one failed.
@@ -33,7 +34,7 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core'
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { Lock, LockOpen, Package, Plus, Sparkles } from 'lucide-react'
+import { ArrowRight, Lock, LockOpen, Package, Plus, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { readJson } from './readJson'
 import { ArticleRow, articleLabel } from './ArticleRow'
@@ -289,6 +290,27 @@ export function Workbench(props: Props) {
     [setIssueContents],
   )
 
+  /**
+   * Take an article out of the issue and put it back in the pool.
+   *
+   * The one edit behind two gestures — dragging the row onto the pool, and the
+   * button on the row for when the pool is not on screen or the list is long
+   * enough that dragging to it is a chore. Nothing is destroyed: the article
+   * returns to where it came from, and deleting it stays a separate decision
+   * made in the pool.
+   */
+  const returnToPool = useCallback(
+    (from: WorkbenchIssue, itemId: string) => {
+      const entry = from.contents.find((e) => e.id === itemId)
+      if (!entry) return
+      const next = from.contents.filter((e) => e.id !== itemId)
+      setIssueContents(from.number, next)
+      setPool((p) => [entry, ...p])
+      void commit(from.number, next.map((e) => e.id))
+    },
+    [commit, setIssueContents],
+  )
+
   const onDragStart = (event: DragStartEvent) => {
     const id = String(event.active.id)
     setDragging(pool.find((p) => p.id === id) ?? issue?.contents.find((c) => c.id === id) ?? null)
@@ -331,14 +353,9 @@ export function Workbench(props: Props) {
     const fromIssue = contents.findIndex((e) => e.id === activeId)
     const fromPool = pool.find((p) => p.id === activeId)
 
-    // Out of the issue and back to the pool. Nothing is destroyed — the
-    // article returns to where it came from, and deleting it is a separate
-    // decision made there.
+    // Out of the issue and back to the pool.
     if (fromIssue !== -1 && target === 'pool') {
-      const next = contents.filter((e) => e.id !== activeId)
-      setIssueContents(issue.number, next)
-      setPool((p) => [contents[fromIssue], ...p])
-      void commit(issue.number, next.map((e) => e.id))
+      returnToPool(issue, activeId)
       return
     }
 
@@ -542,6 +559,7 @@ export function Workbench(props: Props) {
               onNote={setNote}
               onRefresh={refresh}
               onAutoFill={autoFill}
+              onRemove={(itemId) => returnToPool(issue, itemId)}
               onOrder={() => setOrdering([issue.number])}
               poolCount={pool.length}
             />
@@ -633,6 +651,7 @@ function IssuePanel({
   onNote,
   onRefresh,
   onAutoFill,
+  onRemove,
   onOrder,
   poolCount,
   packageId,
@@ -645,6 +664,8 @@ function IssuePanel({
   onNote: (m: string | null) => void
   onRefresh: () => void
   onAutoFill: () => void
+  /** Send one article back to the pool, by id. */
+  onRemove: (itemId: string) => void
   onOrder: () => void
   poolCount: number
   packageId: string
@@ -817,7 +838,31 @@ function IssuePanel({
         <SortableContext id="issue" items={issue.contents.map((e) => e.id)} strategy={verticalListSortingStrategy}>
           <ol className="divide-y">
             {issue.contents.map((entry, i) => (
-              <ArticleRow key={entry.id} item={entry} index={i + 1} draggable={editable} />
+              <ArticleRow
+                key={entry.id}
+                item={entry}
+                index={i + 1}
+                draggable={editable}
+                trailing={
+                  // Not the pool's `×`: that one deletes for good, and the same
+                  // glyph doing two different things on one screen is how a
+                  // mis-click becomes a loss. This points at the pool, which is
+                  // both where the article goes and where the panel sits.
+                  editable ? (
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      disabled={locked}
+                      onClick={() => onRemove(entry.id)}
+                      aria-label={`Remove ${entry.title} from issue ${issue.number}`}
+                      title="Back to the pool"
+                      className="text-muted-foreground hover:text-foreground self-center"
+                    >
+                      <ArrowRight />
+                    </Button>
+                  ) : undefined
+                }
+              />
             ))}
             {issue.contents.length === 0 && (
               <li className="text-muted-foreground px-4 py-10 text-center text-sm">
