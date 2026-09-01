@@ -17,7 +17,7 @@ function article(over: Partial<Article> = {}): Article {
     publishedAt: null,
     dek: null,
     lead: null,
-    blocks: [{ type: 'paragraph', html: 'Some prose.' } as Article['blocks'][number]],
+    blocks: [{ type: 'para', html: 'Some prose.' }],
     ...over,
   }
 }

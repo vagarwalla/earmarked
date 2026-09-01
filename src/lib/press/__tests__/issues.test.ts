@@ -11,6 +11,7 @@ import {
   findDraft,
   readyItems,
   selectForIssue,
+  type IssueAction,
   type IssueDraft,
   type PressState,
   type StateItem,
@@ -209,11 +210,12 @@ describe('applyIssueAction', () => {
   it('refuses every edit to an issue that has been printed', () => {
     const { s, draft } = fixture()
     draft.state = 'ordered'
-    for (const edit of [
+    const edits: IssueAction[] = [
       { action: 'reorder', itemIds: ['b', 'a'] },
       { action: 'remove', itemId: 'a' },
       { action: 'add', itemId: 'c' },
-    ] as const) {
+    ]
+    for (const edit of edits) {
       expect(() => applyIssueAction(s, draft, edit)).toThrow(/has been printed/)
     }
     expect(draft.itemIds).toEqual(['a', 'b'])
