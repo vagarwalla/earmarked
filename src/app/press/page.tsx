@@ -105,6 +105,7 @@ export default async function PressPage() {
       </header>
 
       <Workbench
+        packageId={loadSettings().luluPackageId}
         issues={issues}
         pool={pool.map(toPoolItem)}
         failed={failed.map(toPoolItem)}

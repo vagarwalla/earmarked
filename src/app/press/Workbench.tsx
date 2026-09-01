@@ -41,6 +41,7 @@ import { PoolPanel } from './PoolPanel'
 import { OrdersPanel } from './OrdersPanel'
 import { SettingsPanel, type SettingsProps } from './SettingsPanel'
 import { OrderDialog } from './OrderDialog'
+import { PrintSpec } from './PrintSpec'
 import type { OrderWithIssue } from '@/lib/press/orders'
 
 export interface PoolItem {
@@ -77,6 +78,8 @@ interface Props {
   orders: OrderWithIssue[] | null
   settings: SettingsProps
   threshold: number
+  /** Lulu POD package id, decoded for the print-spec panel. */
+  packageId: string
 }
 
 /** `open` and `closed` are the schema's words; these are the reader's. */
@@ -446,6 +449,7 @@ export function Workbench(props: Props) {
         <section className="min-w-0">
           {issue ? (
             <IssuePanel
+              packageId={props.packageId}
               issue={issue}
               threshold={props.threshold}
               busy={busy}
@@ -547,6 +551,7 @@ function IssuePanel({
   onAutoFill,
   onOrder,
   poolCount,
+  packageId,
 }: {
   issue: WorkbenchIssue
   threshold: number
@@ -558,6 +563,7 @@ function IssuePanel({
   onAutoFill: () => void
   onOrder: () => void
   poolCount: number
+  packageId: string
 }) {
   const [working, setWorking] = useState<string | null>(null)
   const { setNodeRef, isOver } = useDroppable({ id: 'issue', disabled: !editable })
@@ -697,6 +703,8 @@ function IssuePanel({
           )}
         </div>
       </div>
+
+      <PrintSpec packageId={packageId} pageCount={issue.pageTotal} />
 
       {issue.state === 'rejected' && (
         <p className="border-destructive/50 text-destructive mb-3 border-l-2 py-1 pl-3 text-xs">
