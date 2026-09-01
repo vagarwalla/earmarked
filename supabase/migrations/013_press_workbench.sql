@@ -203,7 +203,12 @@ BEGIN
   -- an article claimed by another draft cannot be in two issues at once.
   UPDATE press_items i
      SET issue_id = p_issue_id,
-         position = o.ord,
+         -- WITH ORDINALITY counts from 1; position is 0-based (010, and the
+         -- comment on the column says so). Off by one here would not reorder
+         -- anything wrongly — the sort is relative — but it would quietly make
+         -- the column disagree with its own documentation, and with the
+         -- positions press-import wrote.
+         position = o.ord - 1,
          state = 'in_issue',
          updated_at = now()
     FROM unnest(p_item_ids) WITH ORDINALITY AS o(item_id, ord)
