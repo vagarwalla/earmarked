@@ -66,6 +66,14 @@ interface EditResponse {
   error?: string
 }
 
+/** What GET /order answers with: the price, and whether pressing order is real. */
+interface PrintQuote {
+  quote: string
+  pageCount: number
+  sandbox: boolean
+  liveOrderingEnabled: boolean
+}
+
 type Action =
   | { action: 'reorder'; itemIds: string[] }
   | { action: 'remove'; itemId: string }
@@ -166,6 +174,9 @@ export function IssueEditor(props: EditorProps) {
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState<string | null>(null)
   const [building, setBuilding] = useState(false)
+  const [quoting, setQuoting] = useState(false)
+  const [ordering, setOrdering] = useState(false)
+  const [quote, setQuote] = useState<PrintQuote | null>(null)
   const [, startTransition] = useTransition()
 
   // The order the server last agreed to, so a rejected drag can be put back.
@@ -268,6 +279,53 @@ export function IssueEditor(props: EditorProps) {
     }
   }
 
+  // ── Printing ───────────────────────────────────────────────────────────────
+
+  const quoteForPrint = async () => {
+    setQuoting(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/press/issue/${props.issueNumber}/order`)
+      const body = (await res.json()) as PrintQuote & { error?: string }
+      if (!res.ok) {
+        setError(body.error ?? 'Could not get a quote.')
+        return
+      }
+      setQuote(body)
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setQuoting(false)
+    }
+  }
+
+  const placeOrder = async () => {
+    setOrdering(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/press/issue/${props.issueNumber}/order`, { method: 'POST' })
+      const body = (await res.json()) as {
+        jobId?: string
+        status?: string
+        sandbox?: boolean
+        error?: string
+      }
+      if (!res.ok) {
+        setError(body.error ?? 'The order did not go through.')
+        return
+      }
+      setQuote(null)
+      setProgress(
+        `${body.sandbox ? 'Test order' : 'Ordered'} — Lulu job ${body.jobId} (${body.status})`,
+      )
+      startTransition(() => router.refresh())
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setOrdering(false)
+    }
+  }
+
   const locked = busy || building
 
   return (
@@ -282,10 +340,48 @@ export function IssueEditor(props: EditorProps) {
             </span>
           )}
         </p>
-        <Button size="sm" variant={dirty ? 'default' : 'outline'} disabled={locked || contents.length === 0} onClick={rebuild}>
-          {building ? 'Rebuilding…' : dirty ? 'Rebuild' : 'Rebuild anyway'}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant={dirty ? 'default' : 'outline'} disabled={locked || contents.length === 0} onClick={rebuild}>
+            {building ? 'Rebuilding…' : dirty ? 'Rebuild' : 'Rebuild anyway'}
+          </Button>
+          {/* Printing an edited issue would bind the *previous* PDF, so this
+              stays shut until a rebuild has caught the contents up. */}
+          <Button
+            size="sm"
+            variant={dirty ? 'outline' : 'default'}
+            disabled={locked || dirty || contents.length === 0}
+            onClick={quoteForPrint}
+            title={dirty ? 'Rebuild first — the PDF does not match these contents' : undefined}
+          >
+            {quoting ? 'Getting a quote…' : 'Print…'}
+          </Button>
+        </div>
       </div>
+
+      {/* The quote is always shown before anything is ordered, and ordering is
+          a second, separate press. */}
+      {quote && (
+        <div className="mb-3 rounded-lg border p-3 text-xs">
+          <p className="text-foreground">
+            {quote.quote} · {quote.pageCount} pages
+          </p>
+          <p className="text-muted-foreground mt-1">
+            {quote.sandbox
+              ? 'Sandbox — this places a test order with Lulu and prints nothing.'
+              : quote.liveOrderingEnabled
+                ? 'This orders a real printed copy and charges the card on file.'
+                : 'Live ordering is switched off (PRESS_ORDER_ENABLED).'}
+          </p>
+          <div className="mt-2 flex gap-2">
+            <Button size="xs" disabled={ordering} onClick={placeOrder}>
+              {ordering ? 'Ordering…' : quote.sandbox ? 'Place test order' : 'Order a copy'}
+            </Button>
+            <Button size="xs" variant="ghost" disabled={ordering} onClick={() => setQuote(null)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
 
       {dirty && props.built && (
         <p className="border-muted-foreground/30 text-muted-foreground mb-3 border-l-2 py-1 pl-3 text-xs">
