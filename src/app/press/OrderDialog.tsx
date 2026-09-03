@@ -52,6 +52,8 @@ interface Preview {
   sandbox: boolean
   shipTo: ShippingAddress | null
   approveAt: string | null
+  /** Resend is configured, so the link can be posted rather than handed over. */
+  canEmail: boolean
 }
 
 const money = (cents: number | null, currency: string) =>
@@ -72,6 +74,14 @@ export function OrderDialog({
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
+  /**
+   * The approval link, when there was no mailer to carry it.
+   *
+   * Held rather than followed: this dialog priced the parcel, and opening the
+   * confirm page for you would collapse the two acts into the one click the
+   * whole flow is built to avoid.
+   */
+  const [approveUrl, setApproveUrl] = useState<string | null>(null)
 
   // The identity of the selection, not the array — a new array of the same
   // issues must not re-price the bundle, which is N+1 calls to Lulu.
@@ -106,9 +116,14 @@ export function OrderDialog({
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ issues: issueNumbers }),
       })
-      const body = await readJson<{ sentTo: string }>(res)
+      const body = await readJson<{ sentTo: string | null; approveUrl: string | null }>(res)
       if (!res.ok) {
-        setFailure(body.error ?? 'Could not send the approval email.')
+        setFailure(body.error ?? 'Could not prepare the approval.')
+        return
+      }
+      if (body.approveUrl) {
+        // Nowhere to post it, so it stays here and the dialog stays open.
+        setApproveUrl(body.approveUrl)
         return
       }
       onNote(
@@ -255,19 +270,46 @@ export function OrderDialog({
             </p>
 
             <p className="text-muted-foreground mt-3 text-xs">
-              This sends {bundled ? 'one email covering all of them' : 'an email'}. Nothing is ordered
-              until you follow the link in it.
+              {preview.canEmail
+                ? `This sends ${bundled ? 'one email covering all of them' : 'an email'}. Nothing is ordered until you follow the link in it.`
+                : 'No mailer is configured here, so this gives you the approval link instead. Nothing is ordered until you open it and confirm.'}
             </p>
           </>
         )}
 
+        {approveUrl && (
+          <div className="mt-4 rounded-md border p-3">
+            <p className="text-sm font-medium">Your approval link is ready.</p>
+            <p className="text-muted-foreground mt-1 text-xs">
+              It is single-use and expires. Opening it shows the price once more and asks you to
+              confirm — that is the click that places the order.
+            </p>
+            <a
+              href={approveUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="bg-foreground text-background mt-3 inline-flex h-9 items-center rounded-md px-3 text-sm font-medium"
+            >
+              Open the approval page →
+            </a>
+          </div>
+        )}
+
         <div className="mt-5 flex justify-end gap-2">
           <Button size="lg" variant="outline" onClick={onClose}>
-            Cancel
+            {approveUrl ? 'Done' : 'Cancel'}
           </Button>
-          <Button size="lg" disabled={!ready || sending} onClick={() => void send()}>
-            {sending ? 'Sending…' : 'Send approval →'}
-          </Button>
+          {!approveUrl && (
+            <Button size="lg" disabled={!ready || sending} onClick={() => void send()}>
+              {sending
+                ? preview?.canEmail
+                  ? 'Sending…'
+                  : 'Preparing…'
+                : preview?.canEmail
+                  ? 'Send approval →'
+                  : 'Get the approval link →'}
+            </Button>
+          )}
         </div>
       </div>
     </div>

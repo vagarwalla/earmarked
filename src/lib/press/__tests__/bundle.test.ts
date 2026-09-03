@@ -163,31 +163,10 @@ const ready = {
   minPages: 32,
   hasAddress: true,
   hasEmail: true,
-  canSendMail: true,
   openOrder: false,
   orderingEnabled: true,
 }
 const items: PressItem[] = []
-
-describe('orderBlockers', () => {
-  /**
-   * The regression this is here for: `hasEmail` is the address the approval
-   * goes to, and it was standing in for the mailer as well. On a machine with
-   * a `mail_to` row and no Resend key the issue reported ready, the dialog
-   * offered the button, and pressing it threw out of `sendMail` — the one
-   * failure the whole blocker list exists to prevent.
-   */
-  it('refuses when the mailer cannot send, even with an address to send to', () => {
-    const { blockers } = orderBlockers(issue(), items, { ...ready, canSendMail: false })
-    expect(blockers).toEqual([
-      'The approval email cannot be sent: RESEND_API_KEY and PRESS_MAIL_FROM are unset in this environment.',
-    ])
-  })
-
-  it('says nothing about the mailer once it is configured', () => {
-    expect(orderBlockers(issue(), items, ready).blockers).toEqual([])
-  })
-})
 
 describe('bundleBlockers', () => {
   it('reads exactly like a single order when there is one issue', () => {
