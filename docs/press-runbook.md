@@ -81,6 +81,26 @@ ever receive one.
 Nobody but the owner gets `can_order` — ordering bills the one Lulu account on
 file, so a friend's finish line is the PDFs.
 
+### What a friend gets instead of an order button
+
+On a locked issue, where the owner sees **Order a copy**, an account without
+`can_order` sees **Ready for a printer**: the interior and the cover as two
+downloadable PDFs, and the print spec — trim, binding, paper, spine width for
+this page count — decoded from the same POD package id an order would use. It
+is what V uploads by hand when the API is not involved.
+
+The button is *absent*, not disabled with a tooltip: a button that exists and
+refuses is a support question. And it is not only absent — `/api/press/order`
+and `/api/press/issue/<n>/order` both call `orderingAccount()` before they read
+anything, because a button the workbench does not render is not a check, and
+these are the routes where being wrong costs a real parcel.
+
+Two gates and they mean different things. `PRESS_ORDER_ENABLED` is V's own
+safety catch on a button that spends money and she can turn it back on;
+`can_order` is not how a friend's press works at all, and telling them to set
+an environment variable would be telling them to fix something that is not
+broken.
+
 ### Supabase project settings this depends on
 
 | Setting | Value | Why |

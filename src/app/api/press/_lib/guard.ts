@@ -9,7 +9,13 @@
 
 import { NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { NotInvitedError, NotSignedInError, currentOwnerId } from '@/lib/press/accounts'
+import {
+  NotInvitedError,
+  NotSignedInError,
+  currentAccount,
+  currentOwnerId,
+  type PressAccount,
+} from '@/lib/press/accounts'
 import { pressDb } from '@/lib/press/db'
 import { pressUiEnabled } from '@/lib/press/local'
 import { WorkbenchError } from '@/lib/press/workbench'
@@ -36,6 +42,9 @@ export function asResponse(err: unknown): NextResponse {
     return NextResponse.json({ error: err.message }, { status: 401 })
   }
   if (err instanceof NotInvitedError) {
+    return NextResponse.json({ error: err.message }, { status: 403 })
+  }
+  if (err instanceof CannotOrderError) {
     return NextResponse.json({ error: err.message }, { status: 403 })
   }
   if (err instanceof WorkbenchError) {
@@ -73,4 +82,31 @@ export function issueNumber(raw: string): number | null {
  */
 export async function ownerDb(): Promise<SupabaseClient> {
   return pressDb(await currentOwnerId())
+}
+
+/**
+ * The account, refused unless it may spend money.
+ *
+ * Ordering bills the one Lulu account on file, so `can_order` is false for
+ * everybody who is not its owner. The workbench does not render the button for
+ * them — but a button that is not rendered is not a check, and these are the
+ * four routes where being wrong costs a real parcel.
+ *
+ * Returns the account rather than a boolean because every caller needs it
+ * anyway, and a helper that answered yes-or-no would mean asking twice.
+ */
+export async function orderingAccount(): Promise<PressAccount> {
+  const account = await currentAccount()
+  if (!account.can_order) throw new CannotOrderError()
+  return account
+}
+
+/** This account has no printer of its own. Distinct from not being signed in. */
+export class CannotOrderError extends Error {
+  constructor() {
+    super(
+      'This press cannot place orders — ordering bills one Lulu account. ' +
+        'Download the interior and cover PDFs and take them to a printer.',
+    )
+  }
 }
