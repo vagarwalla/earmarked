@@ -112,6 +112,36 @@ not yet measured. It exists because a paste of ten links otherwise leaves the
 pool looking untouched for a couple of minutes, and a pool that looks untouched
 is a paste somebody makes twice.
 
+### Sharing an issue
+
+A built issue has a switch in the workbench: **Share this issue**. Shared means
+anyone with the link, and there is deliberately no second setting for "listed
+on my shelf" — `/press/by/<handle>` is a page anyone can open, so an issue
+listed there is an issue anyone can read, and pretending otherwise would be a
+privacy control that does not do what it says.
+
+| URL | What it is |
+|---|---|
+| `/press/by/<handle>` | Somebody's shared issues, newest first |
+| `/press/i/<handle>/<n>` | One issue: the contents, and the PDFs |
+
+Both are outside the middleware's matcher, because the whole point is that they
+open without a session.
+
+Read-only is not enforced by hiding buttons. It falls out of the ownership
+scoping: every editing route resolves its issue through the *caller's* own
+scoped client, so a stranger POSTing to `/api/press/issue/3/lock` gets a 404
+for an issue that plainly exists — which is the correct answer. What
+`src/lib/press/shared.ts` decides is only what a reader is shown, and what it
+returns is a projection with no ids in it.
+
+PDF links are signed and last an hour. They are downloadable: anything shared
+can be reprinted by whoever has the link.
+
+An issue that has never been built cannot be shared — the route refuses it and
+the switch is not rendered. A shared draft would be a page offering a PDF that
+does not exist, and a reader cannot tell that from a broken link.
+
 ---
 
 ## Configuration

@@ -250,6 +250,9 @@ export interface PressIssue {
   archive_collection_id: string | null
   /** press_items.id in the order the stored PDFs were rendered from; null = never built. */
   built_order: string[] | null
+  /** 'shared' means anyone with the link can read it at /press/i/<handle>/<n>. */
+  visibility: 'private' | 'shared'
+  shared_at: string | null
   rejection_reason: string | null
   opened_at: string
   closed_at: string | null

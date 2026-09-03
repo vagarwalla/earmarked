@@ -79,8 +79,9 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // The workbench, but not /press/sign-in, /press/auth/* or
-    // /press/confirm/[token] beneath it.
+    // The workbench, but not /press/sign-in, /press/auth/*,
+    // /press/confirm/[token], or the two public reading pages
+    // (/press/by/<handle> and /press/i/<handle>/<n>) beneath it.
     '/press',
     '/api/press/issue/:path*',
     '/api/press/file/:path*',
