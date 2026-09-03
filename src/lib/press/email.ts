@@ -217,7 +217,7 @@ export function newsletterHtmlPath(itemId: string): string {
 // ── Ingestion ────────────────────────────────────────────────────────────────
 
 export interface IngestOptions {
-  db?: SupabaseClient
+  db: SupabaseClient
   settings?: PressSettings
   /** Injected in tests; built from settings otherwise. */
   raindrop?: RaindropClient
@@ -246,7 +246,7 @@ function toBytes(raw: string | Uint8Array | ArrayBuffer): Uint8Array {
  */
 export async function ingestEmail(
   raw: string | Uint8Array | ArrayBuffer,
-  options: IngestOptions = {},
+  options: IngestOptions,
 ): Promise<IngestResult> {
   const settings = options.settings ?? loadSettings()
   const db = options.db
@@ -291,7 +291,7 @@ export async function ingestEmail(
 async function ingestNewsletter(
   mail: Email,
   rawEmailPath: string,
-  db?: SupabaseClient,
+  db: SupabaseClient,
 ): Promise<PressItem[]> {
   const html = mail.html ?? (mail.text ? `<pre>${mail.text}</pre>` : '')
   const item = await insertItem(
@@ -324,7 +324,7 @@ async function ingestNewsletter(
  * failure between the two leaves an item with a page count and no fragment,
  * which the next compose reports rather than printing blank pages.
  */
-async function ingestPdfs(mail: Email, rawEmailPath: string, db?: SupabaseClient): Promise<PressItem[]> {
+async function ingestPdfs(mail: Email, rawEmailPath: string, db: SupabaseClient): Promise<PressItem[]> {
   const items: PressItem[] = []
 
   for (const attachment of pdfAttachments(mail)) {
@@ -376,7 +376,7 @@ async function ingestLinks(
   rawEmailPath: string,
   settings: PressSettings,
   client: RaindropClient | undefined,
-  db?: SupabaseClient,
+  db: SupabaseClient,
 ): Promise<PressItem[]> {
   const raindrop =
     client ?? (settings.raindropToken ? createRaindropClient({ token: settings.raindropToken }) : null)

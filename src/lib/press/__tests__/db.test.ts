@@ -198,7 +198,9 @@ describe('insertItem', () => {
     expect(from).toHaveBeenCalledWith('press_items')
     expect(table.upsert).toHaveBeenCalledWith(
       expect.objectContaining({ url_key: 'example.com/a' }),
-      expect.objectContaining({ onConflict: 'url_key', ignoreDuplicates: true }),
+      // Per owner since 018. Globally unique was the bug that made a friend's
+      // paste of a link V had already saved vanish without a word.
+      expect.objectContaining({ onConflict: 'owner_id,url_key', ignoreDuplicates: true }),
     )
   })
 
@@ -277,7 +279,9 @@ describe('cursors', () => {
     await setCursor('raindrop', '12345', client)
     expect(table.upsert).toHaveBeenCalledWith(
       expect.objectContaining({ source: 'raindrop', cursor: '12345' }),
-      { onConflict: 'source' },
+      // (owner_id, source) is the primary key since 018, and `onConflict`
+      // names columns rather than values, so it has to say both.
+      { onConflict: 'owner_id,source' },
     )
   })
 })

@@ -31,7 +31,7 @@ import { localItems, mirrorOrder, publishBuild } from '@/lib/press/handoff'
 import { issueByNumber } from '@/lib/press/workbench'
 import { reviewSource } from '@/lib/press/review'
 import { loadEffectiveSettings } from '@/lib/press/settings-db'
-import { NOT_FOUND, asResponse, issueNumber, pressUiEnabled } from '../../../_lib/guard'
+import { NOT_FOUND, asResponse, issueNumber, ownerDb, pressUiEnabled } from '../../../_lib/guard'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -54,7 +54,11 @@ export async function POST(
   if (number === null) return NextResponse.json({ error: 'bad issue' }, { status: 400 })
 
   try {
-    const issue = await issueByNumber(number)
+    const db = await ownerDb()
+    // Scoped, so an issue number that belongs to somebody else is a 404 rather
+    // than a refusal — which is the honest answer: for this caller there is no
+    // issue 3.
+    const issue = await issueByNumber(number, db)
     if (!issue) return NextResponse.json({ error: 'no such issue' }, { status: 404 })
     // Only a draft. A locked issue's PDFs are what its contents were frozen
     // against and what an order hands Lulu; re-rendering over them from a
@@ -67,7 +71,7 @@ export async function POST(
       )
     }
 
-    const items = await itemsForIssue(issue.id)
+    const items = await itemsForIssue(issue.id, db)
     if (items.length === 0) {
       return NextResponse.json({ error: 'An empty issue has nothing to render.' }, { status: 409 })
     }
@@ -78,7 +82,7 @@ export async function POST(
     // here is the same refusal in the same place.
     if (reviewSource() === 'supabase') {
       try {
-        const job = await enqueueCompose(issue.id, 'rebuild')
+        const job = await enqueueCompose(issue.id, 'rebuild', db)
         return NextResponse.json({ job }, { status: 202 })
       } catch (err) {
         if (err instanceof JobError) {
@@ -105,7 +109,7 @@ export async function POST(
     // Imported here rather than at module scope so the Chromium-adjacent
     // packages are only ever loaded on a machine that can use them.
     const { BuildBusyError, BuildError, buildIssue, withBuildLock } = await import('@/lib/press/build')
-    const settings = await loadEffectiveSettings()
+    const settings = await loadEffectiveSettings(db)
 
     const encoder = new TextEncoder()
     const stream = new ReadableStream<Uint8Array>({
@@ -144,11 +148,15 @@ export async function POST(
           // way, and "Build failed" about a build that succeeded sends you
           // looking at the renderer instead of at Storage.
           try {
-            await publishBuild(issue, {
-              name: result.name,
-              pageCount: result.pageCount,
-              itemIds: items.map((i) => i.id),
-            })
+            await publishBuild(
+              issue,
+              {
+                name: result.name,
+                pageCount: result.pageCount,
+                itemIds: items.map((i) => i.id),
+              },
+              db,
+            )
           } catch (err) {
             throw new BuildError(
               `Rebuilt here, but the website was not updated: ${(err as Error).message}`,

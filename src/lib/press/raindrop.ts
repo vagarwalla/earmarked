@@ -239,7 +239,7 @@ export interface PollResult {
 
 export interface PollOptions {
   client?: RaindropClient
-  db?: SupabaseClient
+  db: SupabaseClient
   collectionId?: string
   maxItems?: number
 }
@@ -251,7 +251,7 @@ export interface PollOptions {
  * moves forward past raindrops already handled, and the unique `url_key` in
  * `press_items`, which absorbs a re-drop of the same link from any door.
  */
-export async function pollRaindrops(options: PollOptions = {}): Promise<PollResult> {
+export async function pollRaindrops(options: PollOptions): Promise<PollResult> {
   const settings = loadSettings()
   const client = options.client ?? createRaindropClient({ token: settings.raindropToken })
   const collectionId = options.collectionId ?? settings.raindropCollectionId

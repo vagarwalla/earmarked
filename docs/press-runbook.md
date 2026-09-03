@@ -16,6 +16,46 @@ moment and restarted.
 
 ---
 
+## Accounts
+
+Since migration 018 press is multi-tenant. Every issue, article, order, job and
+settings row carries an `owner_id`, issue numbers count within an account, and
+the same URL saved by two people is two articles — before that it was one, and
+the second person's copy vanished without a word.
+
+Enforcement is the code, not RLS. Everything reaches these tables with the
+service-role key, which RLS does not apply to, so the rule is kept by
+`pressDb(owner)` in `src/lib/press/db.ts`: a client whose reads, updates and
+deletes already carry `owner_id = <owner>` and whose inserts already set it.
+Nothing has a default client, so getting hold of one means writing either
+`pressDb(owner)` or `pressDbAsService()` — and there are exactly four places
+the second is right, each named at its call site:
+
+- the Fly worker, which runs the pipeline for everybody;
+- `/api/press/action/[token]` and `/press/confirm/[token]`, where a signed
+  single-use token is the authority and nobody is signed in;
+- `/api/press/email-in`, authenticated by a shared secret;
+- looking an account up, which cannot itself be scoped to the account.
+
+RLS policies exist as a backstop and buy nothing today.
+
+### Inviting somebody
+
+Addresses are not in this repo — it is public, which is why 018 seeds the owner
+with no email at all.
+
+```bash
+npm run press:invite -- --owner you@example.com     # the owner's own address
+npm run press:invite -- alex@example.com alex "Alex Whitby"
+npm run press:invite -- --list
+```
+
+An invitation is a row that can exist before the person has ever signed in;
+their first magic link attaches their auth user to it. Nobody but the owner
+gets `can_order` — ordering bills the one Lulu account on file.
+
+---
+
 ## Configuration
 
 **This repo is public. Nothing below belongs in a file in it.** `.env*` is

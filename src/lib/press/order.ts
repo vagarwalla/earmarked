@@ -65,7 +65,7 @@ export function rowKeyFor(bundleKey: string, issue: PressIssue, bundled: boolean
 }
 
 export interface OrderDeps {
-  db?: SupabaseClient
+  db: SupabaseClient
   lulu?: LuluClient
   now?: Date
   /** A second copy of something already printed, rather than the print run. */
@@ -88,7 +88,7 @@ export { idempotencyKeyFor }
  */
 export async function performApproval(
   issue: PressIssue,
-  deps: OrderDeps = {},
+  deps: OrderDeps,
 ): Promise<ApprovalOutcome> {
   const bundle = await performBundledApproval([issue], deps)
   return bundle.issues[0]
@@ -114,7 +114,7 @@ export async function performApproval(
  */
 export async function performBundledApproval(
   issues: PressIssue[],
-  deps: OrderDeps = {},
+  deps: OrderDeps,
 ): Promise<BundleOutcome> {
   const db = deps.db
   const settings = await loadEffectiveSettings(db)
@@ -398,7 +398,7 @@ export async function performBundledApproval(
  */
 export async function approveBundleByIds(
   issueIds: string[],
-  deps: OrderDeps = {},
+  deps: OrderDeps,
 ): Promise<BundleOutcome> {
   const issues: PressIssue[] = []
   for (const id of issueIds) {
@@ -426,7 +426,7 @@ export async function approveBundleByIds(
 /** Re-read the issue and drive its approval. Used by the confirm link. */
 export async function approveIssueById(
   issueId: string,
-  deps: OrderDeps = {},
+  deps: OrderDeps,
 ): Promise<ApprovalOutcome> {
   const issue = await getIssue(issueId, deps.db)
   if (!issue) return { ok: false, action: 'approve', status: 'not-composed', detail: 'no such issue' }

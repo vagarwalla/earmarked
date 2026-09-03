@@ -23,8 +23,10 @@
 import { readFile, readdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { type SupabaseClient } from '@supabase/supabase-js'
 import { loadSettings } from '../src/lib/press/settings'
+import { OWNER_ACCOUNT_ID } from '../src/lib/press/accounts'
+import { pressDb } from '../src/lib/press/db'
 import { normalizeUrl, storagePath } from '../src/lib/press/db'
 import type { ItemState } from '../src/lib/press/types'
 
@@ -65,13 +67,11 @@ interface IssueMeta {
 const say = (line: string) => console.log(`${DRY ? '[dry] ' : ''}${line}`)
 
 function client(): SupabaseClient {
-  const { supabaseUrl, supabaseServiceKey } = loadSettings()
-  if (!supabaseUrl || !supabaseServiceKey) {
-    throw new Error('need NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY')
-  }
-  return createClient(supabaseUrl, supabaseServiceKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  })
+  // The owner's own client, not a raw one. These scripts are V's local tools
+  // acting for V, and since 018 an insert with no `owner_id` is refused by the
+  // column rather than landing unowned — so going through `pressDb` is both
+  // the scoping and the thing that makes the write work at all.
+  return pressDb(OWNER_ACCOUNT_ID)
 }
 
 /** Local states line up one-for-one now that 011 admits `skipped`. */

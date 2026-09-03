@@ -12,7 +12,7 @@
 
 import { NextResponse } from 'next/server'
 import { liveJobs } from '@/lib/press/jobs'
-import { NOT_FOUND, asResponse, pressUiEnabled } from '../_lib/guard'
+import { NOT_FOUND, asResponse, ownerDb, pressUiEnabled } from '../_lib/guard'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -20,7 +20,7 @@ export const dynamic = 'force-dynamic'
 export async function GET() {
   if (!pressUiEnabled()) return NOT_FOUND()
   try {
-    return NextResponse.json({ jobs: await liveJobs() }, { headers: { 'cache-control': 'no-store' } })
+    return NextResponse.json({ jobs: await liveJobs(await ownerDb()) }, { headers: { 'cache-control': 'no-store' } })
   } catch (err) {
     return asResponse(err)
   }

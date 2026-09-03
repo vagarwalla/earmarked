@@ -21,7 +21,8 @@
 
 import { notFound } from 'next/navigation'
 import { pressUiEnabled } from '@/lib/press/local'
-import { itemsForIssue } from '@/lib/press/db'
+import { currentAccount } from '@/lib/press/accounts'
+import { itemsForIssue, pressDb } from '@/lib/press/db'
 import { itemsInState, listIssueRows, poolItems } from '@/lib/press/workbench'
 import { loadEffectiveSettings, readSettingsRow, SETTINGS_DEFAULTS } from '@/lib/press/settings-db'
 import { listOrders, type OrderWithIssue } from '@/lib/press/orders'
@@ -69,14 +70,20 @@ function printCounts(orders: OrderWithIssue[] | null): Map<number, number> {
 export default async function PressPage() {
   if (!pressUiEnabled()) notFound()
 
-  const rows = await listIssueRows()
+  // Whose workbench this is. One account today; the moment sign-in lands this
+  // is the signed-in one and nothing below changes, because everything below
+  // already asks.
+  const account = await currentAccount()
+  const db = pressDb(account.id)
+
+  const rows = await listIssueRows(db)
 
   // Orders and the settings row live in tables migration 013 creates. Until it
   // is applied the rest of the workbench still works, and those two panels say
   // what is missing rather than taking the page down with them.
   let orders: OrderWithIssue[] | null = null
   try {
-    orders = await listOrders()
+    orders = await listOrders(db)
   } catch {
     orders = null
   }
@@ -84,7 +91,7 @@ export default async function PressPage() {
 
   const issues: WorkbenchIssue[] = []
   for (const row of rows) {
-    const items = await itemsForIssue(row.id)
+    const items = await itemsForIssue(row.id, db)
     const order = items.map((i) => i.id)
     issues.push({
       id: row.id,
@@ -108,14 +115,14 @@ export default async function PressPage() {
   }
 
   const [pool, failed, skipped, dropped] = await Promise.all([
-    poolItems(),
-    itemsInState('failed'),
-    itemsInState('skipped'),
-    itemsInState('dropped').catch(() => []),
+    poolItems(db),
+    itemsInState('failed', db),
+    itemsInState('skipped', db),
+    itemsInState('dropped', db).catch(() => []),
   ])
 
-  const settings = await loadEffectiveSettings()
-  const settingsRow = await readSettingsRow().catch(() => null)
+  const settings = await loadEffectiveSettings(db)
+  const settingsRow = await readSettingsRow(db).catch(() => null)
 
   const env = loadSettings()
 
@@ -133,7 +140,11 @@ export default async function PressPage() {
         // button (see SettingsPanel) — but not saying whether it is on meant
         // the order button looked ready on a workbench where no order could
         // ever be placed.
-        orderingEnabled={process.env.PRESS_ORDER_ENABLED === '1'}
+        // Two gates, and both have to be open. The environment flag is V's
+        // own safety catch on a button that spends money; `can_order` is the
+        // account's — false for everybody who is not her, because ordering
+        // bills the one Lulu account on file (plan §6).
+        orderingEnabled={process.env.PRESS_ORDER_ENABLED === '1' && account.can_order}
         issues={issues}
         pool={pool.map(toPoolItem)}
         failed={failed.map(toPoolItem)}

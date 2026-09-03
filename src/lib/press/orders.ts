@@ -18,7 +18,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { pressDb, recordEvent } from './db'
+import { recordEvent } from './db'
 import { loadEffectiveSettings } from './settings-db'
 import { createLuluClient, isShipped, lineFor, type LuluClient, type ShippingAddress } from './lulu'
 import type { PressIssue } from './types'
@@ -73,7 +73,7 @@ export const LULU_TERMINAL = ['SHIPPED', 'CANCELED', 'REJECTED'] as const
  * query rather than in a check above it so that a row which acquires a job id
  * between the read and the write is not released either.
  */
-export async function releaseOrder(orderId: string, db: SupabaseClient = pressDb()): Promise<boolean> {
+export async function releaseOrder(orderId: string, db: SupabaseClient): Promise<boolean> {
   const { data, error } = await db
     .from('press_orders')
     .update({ status: 'REJECTED', message: 'Released: Lulu never accepted this job.' })
@@ -138,9 +138,9 @@ export async function releaseOrder(orderId: string, db: SupabaseClient = pressDb
  */
 export async function cancelOrder(
   orderId: string,
-  deps: { db?: SupabaseClient; lulu?: LuluClient } = {},
+  deps: { db: SupabaseClient; lulu?: LuluClient },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const db = deps.db ?? pressDb()
+  const db = deps.db
 
   const { data: order, error } = await db
     .from('press_orders')
@@ -220,7 +220,7 @@ export async function placeOrder(
     /** Which line of that job. Zero for a job carrying one issue. */
     lineIndex?: number
   },
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<PressOrder> {
   const { data, error } = await db.rpc('press_place_order', {
     p_issue_id: opts.issueId,
@@ -240,7 +240,7 @@ export async function placeOrder(
 export async function updateOrder(
   orderId: string,
   patch: Partial<PressOrder>,
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<void> {
   const { error } = await db
     .from('press_orders')
@@ -251,7 +251,7 @@ export async function updateOrder(
 
 export async function ordersForIssue(
   issueId: string,
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<PressOrder[]> {
   const { data, error } = await db
     .from('press_orders')
@@ -265,7 +265,7 @@ export async function ordersForIssue(
 /** The other issues that went to Lulu in the same job as this one. */
 export async function ordersForBundle(
   bundleKey: string,
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<PressOrder[]> {
   const { data, error } = await db
     .from('press_orders')
@@ -277,7 +277,7 @@ export async function ordersForBundle(
 }
 
 /** Every order, newest first, with the issue it belongs to. */
-export async function listOrders(db: SupabaseClient = pressDb()): Promise<OrderWithIssue[]> {
+export async function listOrders(db: SupabaseClient): Promise<OrderWithIssue[]> {
   const { data, error } = await db
     .from('press_orders')
     .select('*, press_issues!inner(number,name)')
@@ -316,7 +316,7 @@ export function isPrintRun(order: Pick<PressOrder, 'idempotency_key' | 'issue_id
 }
 
 export async function refreshOrders(
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
   lulu?: LuluClient,
 ): Promise<{ refreshed: number; errors: string[] }> {
   const open = (await listOrders(db)).filter((o) => !isFinished(o) && o.lulu_job_id && o.lulu_job_id !== 'pending')

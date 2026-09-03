@@ -12,7 +12,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { composeIssue } from './compose'
-import { getIssue, itemsForIssue, pressDb, updateIssue } from './db'
+import { getIssue, itemsForIssue, updateIssue } from './db'
 import { failJob, finishJob, reportProgress } from './jobs'
 import { lockIssue } from './workbench'
 import type { JobResult, PressJob } from './types'
@@ -26,7 +26,7 @@ import type { JobResult, PressJob } from './types'
  */
 export async function runComposeJob(
   job: PressJob,
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<JobResult | null> {
   try {
     const issue = await getIssue(job.issue_id, db)

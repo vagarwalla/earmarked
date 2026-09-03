@@ -21,7 +21,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { pressDb, recordEvent } from './db'
+import { recordEvent } from './db'
 import { loadSettings, type PressSettings } from './settings'
 
 /** The `press_settings` row, exactly as the form edits it. */
@@ -60,7 +60,7 @@ export const SETTINGS_DEFAULTS: PressSettingsRow = {
 }
 
 export async function readSettingsRow(
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<PressSettingsRow | null> {
   const { data, error } = await db.from('press_settings').select('*').eq('id', true).maybeSingle()
   if (error) throw new Error(`press/settings: read: ${error.message}`)
@@ -69,7 +69,7 @@ export async function readSettingsRow(
 
 export async function writeSettingsRow(
   patch: Partial<PressSettingsRow>,
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<PressSettingsRow> {
   const { data, error } = await db
     .from('press_settings')
@@ -114,7 +114,7 @@ export function shippingFromRow(row: PressSettingsRow | null): PressSettings['sh
  * which is what it has today.
  */
 export async function loadEffectiveSettings(
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<PressSettings & { row: PressSettingsRow | null; copies: number }> {
   const base = loadSettings()
 

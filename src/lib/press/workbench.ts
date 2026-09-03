@@ -14,7 +14,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getIssue, itemsForIssue, pressDb, recordEvent, updateItem } from './db'
+import { getIssue, itemsForIssue, recordEvent, updateItem } from './db'
 import type { PressIssue, PressItem } from './types'
 
 /** A refusal the workbench should show the reader, not a bug. */
@@ -34,7 +34,7 @@ function rpcError(message: string, what: string): never {
 
 // ── Issues ───────────────────────────────────────────────────────────────────
 
-export async function listIssueRows(db: SupabaseClient = pressDb()): Promise<PressIssue[]> {
+export async function listIssueRows(db: SupabaseClient): Promise<PressIssue[]> {
   const { data, error } = await db
     .from('press_issues')
     .select('*')
@@ -45,7 +45,7 @@ export async function listIssueRows(db: SupabaseClient = pressDb()): Promise<Pre
 
 export async function issueByNumber(
   number: number,
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<PressIssue | null> {
   const { data, error } = await db
     .from('press_issues')
@@ -56,9 +56,16 @@ export async function issueByNumber(
   return (data as PressIssue) ?? null
 }
 
-/** Allocate the next number and open a draft. Several may be open at once. */
-export async function newIssue(db: SupabaseClient = pressDb()): Promise<PressIssue> {
-  const { data, error } = await db.rpc('press_new_issue')
+/**
+ * Allocate the next number and open a draft. Several may be open at once.
+ *
+ * The owner travels as an argument rather than being read off the scoped
+ * client, because this is an RPC: the proxy in `db.ts` scopes `from()` and
+ * leaves `rpc()` alone, and numbering within an account is the one thing this
+ * function is for since 018 — a friend's first issue is Issue 1.
+ */
+export async function newIssue(owner: string, db: SupabaseClient): Promise<PressIssue> {
+  const { data, error } = await db.rpc('press_new_issue', { p_owner_id: owner })
   if (error) rpcError(error.message, 'Creating an issue')
   return data as PressIssue
 }
@@ -67,7 +74,7 @@ export async function newIssue(db: SupabaseClient = pressDb()): Promise<PressIss
 export async function lockIssue(
   issueId: string,
   pageTotal: number,
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<PressIssue> {
   const { data, error } = await db.rpc('press_close_issue', {
     p_issue_id: issueId,
@@ -80,7 +87,7 @@ export async function lockIssue(
 /** Back to a draft, while no Lulu job has claimed it. */
 export async function unlockIssue(
   issueId: string,
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<PressIssue> {
   const { data, error } = await db.rpc('press_reopen_issue', { p_issue_id: issueId })
   if (error) rpcError(error.message, 'Unlocking')
@@ -91,7 +98,7 @@ export async function unlockIssue(
 export async function renameIssue(
   issueId: string,
   name: string,
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<void> {
   const { error } = await db
     .from('press_issues')
@@ -113,7 +120,7 @@ export async function renameIssue(
 export async function placeIssueOrder(
   issueId: string,
   itemIds: string[],
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<void> {
   const { error } = await db.rpc('press_set_issue_order', {
     p_issue_id: issueId,
@@ -130,7 +137,7 @@ export async function placeIssueOrder(
  * This is the definition the whole plan turns on. An article is in the pool
  * because nothing has placed it, not because a sweep has not reached it yet.
  */
-export async function poolItems(db: SupabaseClient = pressDb()): Promise<PressItem[]> {
+export async function poolItems(db: SupabaseClient): Promise<PressItem[]> {
   const { data, error } = await db
     .from('press_items')
     .select('*')
@@ -144,7 +151,7 @@ export async function poolItems(db: SupabaseClient = pressDb()): Promise<PressIt
 /** The piles that are not waiting: `failed`, `skipped`, `dropped`. */
 export async function itemsInState(
   state: PressItem['state'],
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<PressItem[]> {
   const { data, error } = await db
     .from('press_items')
@@ -161,7 +168,7 @@ export async function itemsInState(
  * The reason is cleared with the state: a stale "403 from the publisher" shown
  * against an article that is now queued for another go reads as a live fault.
  */
-export async function retryItem(itemId: string, db: SupabaseClient = pressDb()): Promise<void> {
+export async function retryItem(itemId: string, db: SupabaseClient): Promise<void> {
   const item = await requireItem(itemId, db)
   if (item.state !== 'failed') {
     throw new WorkbenchError(`That article is ${item.state}, not failed.`)
@@ -171,7 +178,7 @@ export async function retryItem(itemId: string, db: SupabaseClient = pressDb()):
 }
 
 /** Return a reference page to the pool. The call was always yours. */
-export async function unskipItem(itemId: string, db: SupabaseClient = pressDb()): Promise<void> {
+export async function unskipItem(itemId: string, db: SupabaseClient): Promise<void> {
   const item = await requireItem(itemId, db)
   if (item.state !== 'skipped') {
     throw new WorkbenchError(`That article is ${item.state}, not skipped.`)
@@ -198,7 +205,7 @@ export async function unskipItem(itemId: string, db: SupabaseClient = pressDb())
 export async function dropItem(
   itemId: string,
   archiveCollectionId: string | null,
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<PressItem> {
   const { data, error } = await db.rpc('press_drop_item', {
     p_item_id: itemId,

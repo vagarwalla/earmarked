@@ -178,6 +178,8 @@ export type ItemState =
 
 export interface PressItem {
   id: string
+  /** Whose reading this is — press_accounts.id. See migration 018. */
+  owner_id: string
   url: string | null
   url_key: string | null
   source: ItemSource
@@ -225,6 +227,8 @@ export type IssueState = 'open' | 'closed' | 'approved' | 'ordered' | 'shipped' 
 
 export interface PressIssue {
   id: string
+  /** Whose press this is — press_accounts.id. Issue numbers count within it. */
+  owner_id: string
   number: number
   state: IssueState
   name: string | null
@@ -544,6 +548,7 @@ export interface JobResult {
  */
 export interface PressJob {
   id: string
+  owner_id: string
   kind: 'compose'
   issue_id: string
   intent: JobIntent

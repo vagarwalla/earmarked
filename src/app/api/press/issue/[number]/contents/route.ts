@@ -21,7 +21,7 @@
 import { NextResponse } from 'next/server'
 import { itemsForIssue } from '@/lib/press/db'
 import { issueByNumber, placeIssueOrder, poolItems } from '@/lib/press/workbench'
-import { NOT_FOUND, asResponse, issueNumber, pressUiEnabled } from '../../../_lib/guard'
+import { NOT_FOUND, asResponse, issueNumber, ownerDb, pressUiEnabled } from '../../../_lib/guard'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -47,7 +47,8 @@ export async function POST(request: Request, context: { params: Promise<{ number
   }
 
   try {
-    const issue = await issueByNumber(number)
+    const db = await ownerDb()
+    const issue = await issueByNumber(number, db)
     if (!issue) return NextResponse.json({ error: 'no such issue' }, { status: 404 })
     if (issue.state !== 'open') {
       return NextResponse.json(
@@ -56,11 +57,15 @@ export async function POST(request: Request, context: { params: Promise<{ number
       )
     }
 
-    await placeIssueOrder(issue.id, itemIds as string[])
+    // The one call that hands Postgres a list of ids straight from a drag in
+    // the browser. `press_set_issue_order` checks that every one of them
+    // belongs to the same owner as the issue (018) — the scoped client cannot,
+    // because it scopes `from()` and this is an RPC.
+    await placeIssueOrder(issue.id, itemIds as string[], db)
 
     // Both lists come back. An article dragged out of the issue reappears in
     // the pool, and the panel would otherwise have to guess where it went.
-    const [contents, pool] = await Promise.all([itemsForIssue(issue.id), poolItems()])
+    const [contents, pool] = await Promise.all([itemsForIssue(issue.id, db), poolItems(db)])
     return NextResponse.json({
       contents: contents.map(summarise),
       pool: pool.map(summarise),

@@ -28,7 +28,7 @@
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { pressDb, putObject, storagePath, updateIssue } from './db'
+import { putObject, storagePath, updateIssue } from './db'
 import { withStateLock } from './issues'
 import type { PressItem } from './types'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -130,7 +130,7 @@ export async function mirrorOrder(number: number, localIds: string[]): Promise<v
 export async function publishBuild(
   issue: { id: string; number: number },
   result: { name: string; pageCount: number; itemIds: string[] },
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<void> {
   const dir = path.join(PRESS_ROOT, `issue-${issue.number}`)
   // `built_order` travels in the same statement as the paths it describes, and

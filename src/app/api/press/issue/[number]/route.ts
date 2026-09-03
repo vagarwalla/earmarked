@@ -24,12 +24,13 @@ import { listIssues, pendingItems, pressUiEnabled, readState } from '@/lib/press
 import {
   addItemToIssue,
   itemsForIssue,
-  pressDb,
   removeItemFromIssue,
   setIssueOrder,
 } from '@/lib/press/db'
 import { remoteLinkpostTitles, remoteListIssues, remotePendingItems } from '@/lib/press/remote'
 import { reviewSource } from '@/lib/press/review'
+import { ownerDb } from '../../_lib/guard'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { loadSettings } from '@/lib/press/settings'
 
 export const runtime = 'nodejs'
@@ -58,8 +59,12 @@ function parseAction(body: unknown): IssueAction | null {
  * waiting pool, and a printed issue is fixed. The page may have been open
  * since before someone else changed any of that.
  */
-async function applyRemote(number: number, edit: IssueAction, threshold: number) {
-  const db = pressDb()
+async function applyRemote(
+  number: number,
+  edit: IssueAction,
+  threshold: number,
+  db: SupabaseClient,
+) {
   const { data } = await db
     .from('press_issues')
     .select('id,state')
@@ -150,7 +155,7 @@ export async function POST(
   // Deployed, membership and order are columns rather than a JSON file, so the
   // edit is a handful of UPDATEs under Postgres' own guarantees instead of a
   // read-modify-write under a lock file.
-  if (reviewSource() === 'supabase') return applyRemote(number, edit, threshold)
+  if (reviewSource() === 'supabase') return applyRemote(number, edit, threshold, await ownerDb())
 
   // An issue built before the editor existed has no draft yet. Seed it from
   // the same resolution the page itself renders, so the first edit starts from

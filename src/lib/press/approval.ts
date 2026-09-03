@@ -69,7 +69,7 @@ function actionUrl(appUrl: string, token: string): string {
 export async function issueActionTokens(
   issueId: string,
   actions: { action: ActionKind; itemId?: string | null }[],
-  deps: { db?: SupabaseClient; settings?: PressSettings; now?: Date } = {},
+  deps: { db: SupabaseClient; settings?: PressSettings; now?: Date },
 ): Promise<IssuedToken[]> {
   const settings = deps.settings ?? loadSettings()
   const now = deps.now ?? new Date()
@@ -121,7 +121,7 @@ export async function issueActionTokens(
 export async function issueBundleTokens(
   issueIds: string[],
   actions: ActionKind[] = ['approve'],
-  deps: { db?: SupabaseClient; settings?: PressSettings; now?: Date } = {},
+  deps: { db: SupabaseClient; settings?: PressSettings; now?: Date },
 ): Promise<IssuedToken[]> {
   if (issueIds.length === 0) throw new Error('press/approval: a bundle token needs at least one issue')
 
@@ -166,7 +166,7 @@ export type TokenLookup =
  */
 export async function inspectToken(
   rawToken: string,
-  deps: { db?: SupabaseClient; now?: Date } = {},
+  deps: { db: SupabaseClient; now?: Date },
 ): Promise<TokenLookup> {
   const row = await peekActionToken(hashToken(rawToken), deps.db)
   if (!row) return { ok: false, reason: 'unknown' }
@@ -178,7 +178,7 @@ export async function inspectToken(
 /** Spend a token. Only the POST path calls this. */
 export async function claimToken(
   rawToken: string,
-  deps: { db?: SupabaseClient } = {},
+  deps: { db: SupabaseClient },
 ): Promise<TokenLookup> {
   const row = await consumeActionToken(hashToken(rawToken), deps.db)
   if (!row) {
@@ -407,13 +407,13 @@ export const RESEND_API = 'https://api.resend.com/emails'
 export interface MailerDeps {
   settings?: PressSettings
   fetchImpl?: typeof fetch
-  db?: SupabaseClient
+  db: SupabaseClient
 }
 
 /** One Resend call. Throws on failure so the caller can retry on the next tick. */
 export async function sendMail(
   message: { subject: string; html: string; text?: string },
-  deps: MailerDeps = {},
+  deps: MailerDeps,
 ): Promise<void> {
   // The row, not just the environment. The order route decides whether it can
   // send by reading `loadEffectiveSettings().mailTo` — the address the Settings
@@ -470,7 +470,7 @@ export async function sendBundleApprovalEmail(
    * so here, so the issue's `approval_sent_at` and its event still describe
    * what happened.
    */
-  deps: MailerDeps & { db?: SupabaseClient; now?: Date; deliver?: boolean } = {},
+  deps: MailerDeps & { db: SupabaseClient; now?: Date; deliver?: boolean },
 ): Promise<void> {
   if (deps.deliver !== false) {
     await sendMail({ subject: bundleApprovalSubject(input), html: bundleApprovalHtml(input) }, deps)
@@ -495,7 +495,7 @@ export async function sendBundleApprovalEmail(
 export async function sendApprovalEmail(
   issueId: string,
   input: ApprovalEmailInput,
-  deps: MailerDeps & { db?: SupabaseClient; now?: Date } = {},
+  deps: MailerDeps & { db: SupabaseClient; now?: Date },
 ): Promise<void> {
   await sendMail({ subject: approvalSubject(input), html: approvalHtml(input) }, deps)
   await updateIssue(issueId, { approval_sent_at: (deps.now ?? new Date()).toISOString() }, deps.db)

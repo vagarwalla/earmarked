@@ -17,7 +17,7 @@ import { NextResponse } from 'next/server'
 import { getItem, recordEvent } from '@/lib/press/db'
 import { dropItem, retryItem, unskipItem } from '@/lib/press/workbench'
 import { archiveRaindropElsewhere } from '@/lib/press/archive'
-import { NOT_FOUND, asResponse, pressUiEnabled } from '../../_lib/guard'
+import { NOT_FOUND, asResponse, ownerDb, pressUiEnabled } from '../../_lib/guard'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -32,8 +32,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
   const body = (await request.json().catch(() => null)) as { action?: string } | null
   try {
-    if (body?.action === 'retry') await retryItem(id)
-    else if (body?.action === 'unskip') await unskipItem(id)
+    const db = await ownerDb()
+    if (body?.action === 'retry') await retryItem(id, db)
+    else if (body?.action === 'unskip') await unskipItem(id, db)
     else return NextResponse.json({ error: 'bad request' }, { status: 400 })
     return NextResponse.json({ ok: true })
   } catch (err) {
@@ -60,7 +61,10 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
   if (!UUID.test(id)) return NextResponse.json({ error: 'bad item' }, { status: 400 })
 
   try {
-    const item = await getItem(id)
+    const db = await ownerDb()
+    // Somebody else's article is "No such article" here, which is both the
+    // safe answer and the true one: this caller cannot see it.
+    const item = await getItem(id, db)
     if (!item) return NextResponse.json({ error: 'No such article.' }, { status: 404 })
 
     // Refuse BEFORE touching Raindrop. press_drop_item enforces this too, and
@@ -90,7 +94,7 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
     // from being noticed and is reported below; a moved raindrop whose row was
     // never dropped is an article that has silently left your reading with
     // nothing recording why.
-    await dropItem(id, null)
+    await dropItem(id, null, db)
 
     let warning: string | null = null
     if (item.raindrop_id) {
@@ -98,7 +102,7 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
         const collectionId = await archiveRaindropElsewhere(item.raindrop_id)
         await recordEvent(
           { item_id: id, kind: 'item_archived_elsewhere', detail: { collectionId } },
-          undefined,
+          db,
         )
       } catch (err) {
         warning = `Deleted, but the raindrop stayed in hw: ${(err as Error).message}`

@@ -8,6 +8,9 @@
  */
 
 import { NextResponse } from 'next/server'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { currentOwnerId } from '@/lib/press/accounts'
+import { pressDb } from '@/lib/press/db'
 import { pressUiEnabled } from '@/lib/press/local'
 import { WorkbenchError } from '@/lib/press/workbench'
 
@@ -44,4 +47,20 @@ export function asResponse(err: unknown): NextResponse {
 /** Parse an issue number out of a route parameter. */
 export function issueNumber(raw: string): number | null {
   return /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : null
+}
+
+/**
+ * The database, as whoever is looking at the workbench.
+ *
+ * Every editing route starts with this. `pressDb` has no unscoped form and
+ * nothing here has a default client, so a route that skips this line does not
+ * compile — which is the whole of how one person's press stays out of
+ * another's (see src/lib/press/db.ts and migration 018).
+ *
+ * The exceptions are the routes that have no session to scope by: the approval
+ * links and the inbound email webhook, which authenticate with a signed token
+ * and a shared secret respectively and reach for `pressDbAsService()` by name.
+ */
+export async function ownerDb(): Promise<SupabaseClient> {
+  return pressDb(await currentOwnerId())
 }

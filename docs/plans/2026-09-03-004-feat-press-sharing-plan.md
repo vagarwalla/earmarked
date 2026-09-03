@@ -265,20 +265,31 @@ It is one model call per compose, so this can be revisited cheaply.
 
 ---
 
-## Schema: migration 017
+## Schema: migration 018
+
+(017 is the job queue from step 1; ownership is 018.)
 
 One migration, applied in this order, because the backfill has to sit between
 the column and its `NOT NULL`:
 
-1. `press_accounts (user_id PK → auth.users, handle UNIQUE, display_name,
-   can_order BOOLEAN DEFAULT FALSE, created_at)`; insert V's row.
+1. `press_accounts (id UUID PK, auth_user_id UNIQUE, email, handle UNIQUE,
+   display_name, can_order BOOLEAN DEFAULT FALSE, created_at)`; insert V's row
+   at a literal id so the backfill is deterministic. Ownership hangs off this
+   table rather than off `auth.users` directly, because an invitation has to
+   precede the person accepting it — and because it lets the schema become
+   multi-tenant before any sign-in exists. `email` is left NULL here and set
+   with `npm run press:invite`: this repo is public.
 2. `owner_id UUID REFERENCES auth.users(id)` — nullable — on `press_issues`,
    `press_items`, `press_events`, `press_orders`.
 3. Backfill all four to V's user id.
 4. `SET NOT NULL` on all four.
-5. Drop and rebuild `press_items_url_key_uniq` as `(owner_id, url_key) WHERE
-   url_key IS NOT NULL`; same for `press_issues_number_key` → `(owner_id,
-   number)`.
+5. Drop and rebuild `press_items_url_key_uniq` as `(owner_id, url_key)` —
+   **not partial**, unlike the index it replaces. `insertItem` upserts with
+   `onConflict`, PostgREST emits a bare `ON CONFLICT (…)` with no predicate,
+   and Postgres will not infer a partial index from one: it wants the WHERE
+   clause restated. The predicate bought nothing anyway, since a plain unique
+   index already treats NULLs as distinct. Same rebuild for
+   `press_issues_number_key` → `(owner_id, number)`.
 6. `press_settings`: add `owner_id`, backfill from the single row, drop the
    boolean PK, make `owner_id` the PK.
 7. `press_cursors`: add `owner_id`, backfill, PK becomes `(owner_id, source)`.
@@ -305,8 +316,11 @@ Each is a PR that lands on its own.
 1. **Compose on the worker.** `press_jobs`, the job loop, the "Make the PDF"
    button, the 501 deleted. No auth, no ownership — this is V's own missing
    feature and it is the prerequisite for a friend ever seeing a PDF.
-2. **SSRF guard on the extractor's fetch.** Small, and it must precede any
-   route that takes a URL from a stranger.
+2. ~~**SSRF guard on the extractor's fetch.**~~ **Already done.** Every
+   server-side fetch already goes through `src/lib/press/fetch.ts`, which
+   refuses non-http(s) schemes, resolves every host and rejects any non-public
+   address, re-checks each redirect hop, caps the body, and drops credentials
+   across origins. The plan asserted a gap that is not there.
 3. **Ownership.** Migration 017 steps 1–7 and 11, plus `pressDb(ownerId)` and
    the compile-error scoping. Everything still runs as V; nothing visible
    changes. The riskiest PR and the one worth reviewing hardest.
@@ -345,7 +359,7 @@ Each is a PR that lands on its own.
 |---|---|
 | The ownership migration touches every press query and V's live data | Its own PR; backfill and `NOT NULL` in one transaction; scoped client makes an unscoped query a type error rather than a silent leak |
 | Server-side scoping is a rule the code must remember | The unscoped client is deleted, not deprecated. RLS policies as a second layer |
-| Arbitrary-URL fetching on behalf of strangers | Private/loopback deny before the paste route ships; invite-only accounts; per-account daily cap |
+| Arbitrary-URL fetching on behalf of strangers | Already handled: `fetch.ts` resolves and refuses private, loopback and link-local addresses at every redirect hop. What is left is rate limiting — invite-only accounts and a per-account daily cap |
 | One 1GB Fly machine renders every account's issues | The job queue serialises by construction; at six friends this is a feature. Revisit if a queue ever backs up |
 | Two composers drift | Named as a known cost; retiring the local one is the follow-up |
 | Storage grows with every account's articles and PDFs | Not addressed here. Worth a size check before the invite list goes past a handful |
