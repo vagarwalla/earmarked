@@ -297,3 +297,57 @@ export function isLoopback(host: string | null): boolean {
   if (!host) return false
   return /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(host.trim())
 }
+
+
+// ── The owner's own way in ───────────────────────────────────────────────────
+
+/**
+ * The cookie that says "this browser is the owner's".
+ *
+ * A magic link is right for somebody signing in once and then having a session
+ * — and wrong for the person who owns the thing and just wants to open it. She
+ * had that before sign-in existed and still has it on a laptop
+ * (`runningLocally`), and this is the same thing for the deployed site: a
+ * secret she holds, exchanged once at `/press/enter?key=…` for a cookie that
+ * lasts, so the bookmark is the button.
+ *
+ * It is the old `PRESS_PASSWORD` in a better shape. That was HTTP Basic — a
+ * prompt on every fresh browser, one shared secret, and no way to say which
+ * account you were. This is the same single secret and the same trust, spent
+ * once and remembered, and it resolves to a *named* account rather than to
+ * "the reader", so everything downstream is scoped exactly as a session is.
+ *
+ * What it is not is a way to let anybody in. There is deliberately no button
+ * on the sign-in page: a button anybody can press is not a gate, and a door
+ * only she can open should not be advertised to people who cannot open it.
+ */
+export const OWNER_COOKIE = 'press_owner'
+
+/** A year. Rotating `PRESS_OWNER_KEY` invalidates every one of these at once. */
+export const OWNER_COOKIE_MAX_AGE = 365 * 24 * 60 * 60
+
+/** Unset means the door does not exist — not that it is unlocked. */
+export function ownerKey(): string | null {
+  const key = env('PRESS_OWNER_KEY')
+  // A short key is a typo or a placeholder, and treating it as a credential
+  // would be worse than having none. 32 characters is `openssl rand -hex 16`.
+  return key && key.length >= 32 ? key : null
+}
+
+/** Length-independent comparison, so a wrong guess leaks nothing by timing. */
+export function keysMatch(given: string, expected: string): boolean {
+  if (given.length !== expected.length) return false
+  let diff = 0
+  for (let i = 0; i < given.length; i++) {
+    diff |= given.charCodeAt(i) ^ expected.charCodeAt(i)
+  }
+  return diff === 0
+}
+
+/** Does this request carry the owner's key, as a cookie? */
+export async function hasOwnerCookie(): Promise<boolean> {
+  const expected = ownerKey()
+  if (!expected) return false
+  const given = (await cookies()).get(OWNER_COOKIE)?.value
+  return Boolean(given && keysMatch(given, expected))
+}

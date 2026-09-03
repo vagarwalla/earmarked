@@ -30,6 +30,10 @@
  * `currentAccount()` is what actually decides, and PRESS_REQUIRE_SIGN_IN=1
  * turns the laptop case off there.
  *
+ * The owner's cookie (see /press/enter) is let through here for the same
+ * reason: what it means is decided on the far side, where PRESS_OWNER_KEY can
+ * be read at runtime rather than at build time.
+ *
  * Deliberately NOT covered, exactly as before: /press/confirm/[token] and
  * /api/press/action/[token] carry their own signed one-time tokens and are
  * opened from an email on a phone, and /api/press/email-in authenticates with
@@ -40,7 +44,7 @@
 
 import { NextResponse, type NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
-import { isLoopback } from '@/lib/press/auth'
+import { OWNER_COOKIE, isLoopback } from '@/lib/press/auth'
 
 /** JSON for the API, a page for a person. Both say the same thing. */
 function refuse(request: NextRequest): NextResponse {
@@ -66,6 +70,13 @@ export async function middleware(request: NextRequest) {
   if (!process.env.VERCEL && isLoopback(request.headers.get('host'))) {
     return NextResponse.next()
   }
+
+  // A browser carrying the owner's cookie. Only that it is *present* — whether
+  // the value is right is checked by `currentAccount()`, which runs in Node and
+  // can read PRESS_OWNER_KEY at runtime. Letting a forged cookie past here
+  // costs nothing: every page and route still asks `currentAccount()`, and it
+  // answers a bad cookie exactly as it answers no cookie at all.
+  if (request.cookies.has(OWNER_COOKIE)) return NextResponse.next()
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY

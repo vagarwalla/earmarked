@@ -18,10 +18,10 @@
  * time and protects nothing.
  */
 
-import { headers } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { accountByEmail } from '@/lib/press/accounts'
-import { inviteOnly, sessionClient } from '@/lib/press/auth'
+import { OWNER_COOKIE, inviteOnly, sessionClient } from '@/lib/press/auth'
 
 export interface SignInState {
   error?: string
@@ -77,9 +77,16 @@ export async function requestLink(_prev: SignInState, form: FormData): Promise<S
   return { sent: email }
 }
 
-/** End the session and go back to the door. */
+/**
+ * End the session and go back to the door.
+ *
+ * The owner's cookie goes too. Without that, signing out on a browser that had
+ * been through /press/enter would land straight back on the workbench — not a
+ * bug anybody would enjoy diagnosing.
+ */
 export async function signOut(): Promise<void> {
   const supabase = await sessionClient()
   await supabase.auth.signOut()
+  ;(await cookies()).delete(OWNER_COOKIE)
   redirect('/press/sign-in')
 }

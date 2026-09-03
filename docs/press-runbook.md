@@ -63,6 +63,37 @@ with `-2` appended if that is taken.
   `/api/press/action/[token]` and `/api/press/email-in` carry their own
   credentials and stay outside the matcher.
 
+### The owner's own way in, deployed
+
+A magic link is right for somebody signing in once. It is wrong for the person
+who owns the thing and just wants to open it — and on the deployed site the
+laptop bypass below does not apply.
+
+So: `PRESS_OWNER_KEY`, a long random secret in the environment, exchanged once
+at `/press/enter?key=…` for a cookie that lasts a year. Bookmark that URL and
+it is a button — one click, straight into the workbench.
+
+```bash
+openssl rand -hex 24            # then set it as PRESS_OWNER_KEY
+```
+
+**The URL is a password.** Anybody holding it is the owner: every article,
+every order, the shipping address. It belongs in a bookmark and nowhere else —
+not in a message, not in a screenshot, not in this repo. It is the same bargain
+`PRESS_PASSWORD` made, which is why it is opt-in: with `PRESS_OWNER_KEY` unset
+the route does not work at all.
+
+- `/press/enter?leave=1` clears the cookie on this browser.
+- Changing `PRESS_OWNER_KEY` invalidates every browser holding it at once,
+  which is the whole of "sign out everywhere".
+- A wrong key and an unset key both 404, so probing the URL says nothing about
+  whether there is anything to find.
+- There is deliberately **no button on the sign-in page**. A button anybody can
+  press is not a gate, and a door only one person can open should not be
+  advertised to people who cannot open it.
+- Signing out clears this cookie too — otherwise it would put you straight
+  back on the workbench.
+
 ### On a laptop there is nothing to sign in to
 
 `/press` on localhost is the owner's, with no session and no link. This is how
@@ -237,6 +268,7 @@ these in Vercel, in `fly secrets`, and in a local `.env.local`.
 | `SUPABASE_SERVICE_ROLE_KEY` | **Service role** key. press tables have RLS on with no policies, so the anon key cannot read them at all — this is the only way in, and it must never reach the browser. |
 | `PRESS_STORAGE_BUCKET` | Defaults to `press` |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | The publishable key. Sign-in needs it, and the middleware refuses every request without it — deliberately, so a half-configured deployment is shut rather than open. |
+| `PRESS_OWNER_KEY` | Optional, ≥32 chars. The owner's one-click way into the deployed workbench: `/press/enter?key=…`, bookmarked. Treat the URL as a password. Unset means the route 404s. |
 
 ### Ingestion (worker)
 
