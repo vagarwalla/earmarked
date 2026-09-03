@@ -76,5 +76,9 @@ export const config = {
     '/api/press/item/:path*',
     '/api/press/settings',
     '/api/press/orders',
+    // The route that mints approval tokens and sends the mail that spends the
+    // money. It was the one missing, which is exactly what the note above said
+    // would happen.
+    '/api/press/order',
   ],
 }

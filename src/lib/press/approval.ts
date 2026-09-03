@@ -26,6 +26,7 @@ import {
   recordEvent,
 } from './db'
 import { loadSettings, type PressSettings } from './settings'
+import { loadEffectiveSettings } from './settings-db'
 import { formatQuote } from './lulu'
 import { formatMoney } from './orders'
 import type { ActionKind, ActionToken, PrintQuote, TocEntry } from './types'
@@ -406,6 +407,7 @@ export const RESEND_API = 'https://api.resend.com/emails'
 export interface MailerDeps {
   settings?: PressSettings
   fetchImpl?: typeof fetch
+  db?: SupabaseClient
 }
 
 /** One Resend call. Throws on failure so the caller can retry on the next tick. */
@@ -413,7 +415,13 @@ export async function sendMail(
   message: { subject: string; html: string; text?: string },
   deps: MailerDeps = {},
 ): Promise<void> {
-  const settings = deps.settings ?? loadSettings()
+  // The row, not just the environment. The order route decides whether it can
+  // send by reading `loadEffectiveSettings().mailTo` — the address the Settings
+  // form writes — so reading the env-only copy here made the dialog say the
+  // approval was ready to go and then throw on the address it had just shown.
+  // Defaulting at the bottom means no caller has to remember; the weekly digest
+  // was reading the wrong copy too.
+  const settings = deps.settings ?? (await loadEffectiveSettings(deps.db))
   const doFetch = deps.fetchImpl ?? fetch
 
   if (!settings.resendApiKey || !settings.mailFrom || !settings.mailTo) {
