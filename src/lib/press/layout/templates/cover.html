@@ -3,20 +3,28 @@
   <head>
     <meta charset="utf-8" />
     <title>{{ISSUE_NAME}}</title>
-    <!-- Self-contained: the cover is a single spread with its own page box,
-         and like every other press document it references nothing remote.
+    <!-- Self-contained: the cover is a single spread with its own page box, and
+         like every other press document it references nothing remote. The one
+         file it may reference is a photograph the renderer has already written
+         into images/ beside this HTML.
 
          Geometry comes in from compose.ts as points, already derived from the
          Lulu spec in types.ts. Nothing here recomputes a dimension; the panels
          are sized by the grid and everything else is positioned relative to
          them, so a thicker issue only moves the fold.
 
-         The cover art is drawn in CSS — gradients and plain boxes — rather
-         than placed as an image. Lulu wants 300 PPI on the cover, which is
-         ~2100x3000px for one 7x10 panel; the article art extraction pulls down
-         is 424-1320px wide and would print visibly soft. CSS has no resolution
-         to be wrong: Chromium rasterises it at whatever the PDF is written at.
-         So the cover can be as colourful as it likes, just not photographic. -->
+         The art is drawn in CSS — gradients, hard stops, screens of dots and
+         lines — rather than placed as an image. Lulu wants 300 PPI on the
+         cover, which is ~2100x3000px for one 7x10 panel; the article art
+         extraction pulls down is 424-1320px wide and would print visibly soft.
+         CSS has no resolution to be wrong at: Chromium rasterises it at
+         whatever the PDF is written at. A photograph is the one thing that
+         cannot be drawn, so a cover takes one only when the file is big enough
+         to hold up (cover-art.ts, `plateFor`), and prints it under the same
+         screen the drawings carry.
+
+         What varies per issue — ground, palette, figure, layout, screen — all
+         arrives as tokens. Everything below is the frame those sit in. -->
     <style>
       @page {
         size: {{COVER_WIDTH}}pt {{COVER_HEIGHT}}pt;
@@ -25,24 +33,23 @@
 
       html, body { margin: 0; padding: 0; }
 
-      body {
-        width: {{COVER_WIDTH}}pt;
-        height: {{COVER_HEIGHT}}pt;
-        display: grid;
-        /* back | spine | front. The bleed is absorbed by the outer edges:
-           each side panel is one trim width plus one bleed. */
-        grid-template-columns: {{PANEL_WIDTH}}pt {{SPINE_WIDTH}}pt {{PANEL_WIDTH}}pt;
-        background: var(--bg);
-        color: var(--fg);
-        font-family: var(--serif);
-        -webkit-font-smoothing: antialiased;
-      }
-
       :root {
-        /* Deep warm ink rather than a flat black: on a gloss laminate a true
-           #000 shows every fingerprint and reads cheap. */
-        --ink: #14161a;
-        --paper: #f4f1ea;
+        /* This issue's ground and ink. Every other colour on the spread is one
+           of these two at some opacity, or one of the palette colours in the
+           art — nothing is hard-coded warm or cool, because the ground is as
+           likely to be charcoal as cream. */
+        --ground: {{GROUND}};
+        --ink: {{INK}};
+        --ink-rgb: {{INK_RGB}};
+        --ink-soft: rgba({{INK_RGB}}, 0.56);
+        --ink-faint: rgba({{INK_RGB}}, 0.20);
+        --accent: {{ACCENT}};
+
+        /* Type reversed out of full-bleed art is not the ink on the ground: the
+           art underneath can be any colour, so it gets its own near-white and
+           a scrim to sit on. */
+        --reverse: #F7F3EC;
+        --scrim: rgba(12, 12, 14, 0.62);
 
         --serif: Georgia, "Iowan Old Style", "Palatino Linotype", Palatino,
           "Liberation Serif", "DejaVu Serif", serif;
@@ -50,18 +57,17 @@
           "DejaVu Sans", sans-serif;
       }
 
-      /* Ink on paper, so the colour in the art is the only colour on the
-         spread and does not have to fight a coloured ground. The soft/faint
-         steps are written out rather than derived, because colour-mix() is not
-         safe to assume in the render browser. The accent is this issue's first
-         palette colour, so the rules and the spine numeral belong to the same
-         set as the art. */
       body {
-        --bg: var(--paper);
-        --fg: var(--ink);
-        --fg-soft: rgba(20, 22, 26, 0.56);
-        --fg-faint: rgba(20, 22, 26, 0.18);
-        --accent: {{ACCENT}};
+        width: {{COVER_WIDTH}}pt;
+        height: {{COVER_HEIGHT}}pt;
+        display: grid;
+        /* back | spine | front. The bleed is absorbed by the outer edges:
+           each side panel is one trim width plus one bleed. */
+        grid-template-columns: {{PANEL_WIDTH}}pt {{SPINE_WIDTH}}pt {{PANEL_WIDTH}}pt;
+        background: var(--ground);
+        color: var(--ink);
+        font-family: var(--serif);
+        -webkit-font-smoothing: antialiased;
       }
 
       /* Content is held inside Lulu's cover safety margin on every edge. The
@@ -86,49 +92,131 @@
         font-size: 7.5pt;
         letter-spacing: 0.28em;
         text-transform: uppercase;
-        color: var(--fg-soft);
+        color: var(--ink-soft);
         margin: 0;
         display: flex;
         justify-content: space-between;
       }
 
-      .hair { border: 0; border-top: 0.5pt solid var(--fg-faint); margin: 0; }
+      .hair { border: 0; border-top: 0.5pt solid var(--ink-faint); margin: 0; }
 
       .head { flex: 0 0 auto; }
       .head .hair { margin-top: 9pt; }
 
-      /* ── Cover art ──
-         The art bleeds off the outer edge on purpose, so the panel's safety
-         padding does not apply to it: it is positioned against the trim.
-         Everything textual still sits inside the margin. */
+      /* ── The art ──
+         One box, whatever is in it: the figure and its screen are background
+         layers, and a photograph is an image element underneath them. Where the
+         box sits, and which edges it bleeds off, is the layout's business. */
       .art {
-        flex: 1 1 auto;
         position: relative;
-        margin: 22pt 0 24pt;
-        min-height: 150pt;
         overflow: hidden;
+        isolation: isolate;
       }
-      /* Bleeds past the panel padding to the media edge on the outside. */
-      .art--bleed {
-        margin-right: -{{SAFETY_OUTER}}pt;
-        margin-left: -{{SAFETY_INNER}}pt;
+      .art-screen {
+        position: absolute;
+        inset: 0;
+        background-image: {{ART_LAYERS}};
+        background-size: {{ART_SIZES}};
+        background-position: {{ART_POSITIONS}};
+        background-repeat: {{ART_REPEATS}};
+      }
+      /* Held to the box and cropped from the middle, so the crop is the
+         picture's centre rather than its top-left corner. Mildly desaturated:
+         a web photograph at print size is more saturated than the flat inks
+         beside it on the shelf. */
+      .plate {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: 50% 50%;
+        filter: saturate(0.92) contrast(1.04);
       }
 
-      /* The figure itself: a stack of hard-edged gradient layers, composed in
-         compose.ts. Every issue gets a different one of seven motifs, drawn
-         with its own numbers, in its own rotation of the palette — different
-         covers, one series. The layers are all the box has, so whatever they
-         leave transparent prints as paper. */
-      .art-figure {
-        background-image: {{ART_LAYERS}};
-        background-repeat: no-repeat;
-        background-size: 100% 100%;
+      /* ── Layouts ──
+         Five ways to place art and title. The figure inside is only half of
+         why two issues look unalike; this is the other half. */
+
+      /* 1. plate — the art held between the head rule and the title, bleeding
+            off the outer edge. The frame the press started in. */
+      .layout-plate .art {
+        flex: 1 1 auto;
+        margin: 22pt -{{SAFETY_OUTER}}pt 24pt -{{SAFETY_INNER}}pt;
+        min-height: 150pt;
+      }
+
+      /* 2. full — art to all four trim edges, and every piece of type gathered
+            at the foot and reversed out of it. Gathered, because the art up at
+            the head is whatever the figure put there: a light quadrant under a
+            reversed eyebrow is unreadable, and no scrim heavy enough to fix
+            that leaves the cover looking anything but grey. One block of type
+            over one scrim is both legible and better looking. */
+      .layout-full { justify-content: flex-end; }
+      .layout-full .art {
+        position: absolute;
+        inset: 0;
+        margin: 0;
+        z-index: 0;
+      }
+      .layout-full .head,
+      .layout-full .theme { position: relative; z-index: 2; }
+      .layout-full .head { order: 2; }
+      .layout-full .head .hair { margin: 9pt 0 16pt; }
+      .layout-full .theme { order: 3; }
+      .layout-full .eyebrow { color: var(--reverse); }
+      .layout-full .hair { border-top-color: rgba(247, 243, 236, 0.42); }
+      .layout-full .theme-name { color: var(--reverse); }
+      /* The accent rule would be a second horizontal above the title, a few
+         points under the head's — one is enough. */
+      .layout-full .accent-rule { display: none; }
+      .layout-full .scrim {
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        background: linear-gradient(
+          to top,
+          var(--scrim) 0,
+          rgba(12, 12, 14, 0.44) 22%,
+          transparent 52%
+        );
+      }
+
+      /* 3. banner — the art across the head of the panel, bleeding off three
+            edges; the type stands alone on the ground below it. */
+      .layout-banner .art {
+        order: 1;
+        flex: 0 0 54%;
+        margin: -{{SAFETY_TOP}}pt -{{SAFETY_OUTER}}pt 26pt -{{SAFETY_INNER}}pt;
+      }
+      .layout-banner .head { order: 2; }
+      .layout-banner .head .hair { margin: 0 0 14pt; }
+      .layout-banner .theme { order: 3; margin-top: auto; }
+
+      /* 4. frame — the art matted, touching no edge. Small type under it: the
+            plate is the object, and the mat is what says so. */
+      .layout-frame .art {
+        flex: 1 1 auto;
+        margin: 30pt 22pt 26pt 22pt;
+        min-height: 150pt;
+      }
+      .layout-frame .theme-name { font-size: 30pt; line-height: 1.1; }
+      .layout-frame .theme-name--long { font-size: 25pt; }
+      .layout-frame .theme-name--verylong { font-size: 21pt; }
+      .layout-frame .accent-rule { width: 38pt; margin-bottom: 14pt; }
+
+      /* 5. foot — title up under the eyebrow, art filling everything beneath
+            it and running off the foot of the panel. */
+      .layout-foot .theme { order: 1; margin: 26pt 0 22pt; }
+      .layout-foot .art {
+        order: 2;
+        flex: 1 1 auto;
+        margin: 0 -{{SAFETY_OUTER}}pt -{{SAFETY_TOP}}pt -{{SAFETY_INNER}}pt;
+        min-height: 150pt;
       }
 
       /* ── Front type ── */
 
-      /* With the credit and the foot gone, the title is the only type below
-         the art and carries the whole lower third. Set at display size. */
       .theme { flex: 0 0 auto; }
       .theme-name {
         font-size: 46pt;
@@ -149,6 +237,7 @@
         width: 54pt;
         margin: 0 0 20pt;
       }
+      .layout-full .accent-rule { border-top-color: var(--reverse); }
 
       /* ── Spine ── */
 
@@ -185,7 +274,7 @@
       .spine-text {
         letter-spacing: 0.18em;
         text-transform: uppercase;
-        color: var(--fg);
+        color: var(--ink);
         order: 2;
         max-height: 68%;
         overflow: hidden;
@@ -235,6 +324,18 @@
         top: -0.08em;
       }
 
+      /* Whose photograph is on the front. Only printed when there is one, and
+         set small enough to be a note rather than a caption. */
+      .credit {
+        flex: 0 0 auto;
+        font-family: var(--sans);
+        font-size: 6.5pt;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--ink-soft);
+        margin: 0 0 7pt;
+      }
+
       /* The run is placed on the optical centre of the panel, the same way the
          front's title block is: a text block centred by measurement sits low.
          Without this the titles hang off the head rule with the whole lower
@@ -253,18 +354,20 @@
       <div class="lead-space"></div>
       <p class="contents {{CONTENTS_CLASS}}">{{BACK_LIST}}</p>
       <div class="trail-space"></div>
+      {{CREDIT}}
       <div class="palette-band">{{PALETTE_BAND}}</div>
     </section>
 
     <section class="spine">{{SPINE_CONTENT}}</section>
 
-    <section class="panel front">
+    <section class="panel front layout-{{LAYOUT}}" data-motif="{{MOTIF}}" data-screen="{{SCREEN}}">
       <div class="head">
         <p class="eyebrow"><span>Issue {{ISSUE_NUMBER}}</span><span>{{DATE_RANGE}}</span></p>
         <hr class="hair" />
       </div>
 
-      <div class="art art--bleed art-figure" data-motif="{{ART_MOTIF}}"></div>
+      <div class="art">{{PLATE_IMG}}<div class="art-screen"></div></div>
+      {{SCRIM}}
 
       <div class="theme">
         <hr class="accent-rule" />

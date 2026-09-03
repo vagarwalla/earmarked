@@ -24,6 +24,7 @@ import {
 } from './layout/render'
 import {
   buildCoverHtml,
+  coverPlateFor,
   issueDateline,
   buildTocSection,
   computeToc,
@@ -215,6 +216,9 @@ export async function buildIssue(opts: BuildOptions): Promise<BuildResult> {
       issueName: name,
       issueNumber: number,
       pageCount,
+      // Every image is already in the map the renders share, so a plate costs
+      // nothing extra here.
+      plate: coverPlateFor(entries)?.plate ?? null,
       // The month the issue was made up. Deliberately not the span its
       // contents were published over — see `issueDateline`.
       dateRange: issueDateline(),

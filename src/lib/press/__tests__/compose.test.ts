@@ -8,12 +8,8 @@ import {
   buildTocSection,
   buildCoverHtml,
   contentsClass,
-  COVER_PALETTE,
-  COVER_MOTIFS,
-  coverArt,
-  motifFor,
+  coverDesign,
   issueDateline,
-  paletteFor,
   mergePdfs,
   padToEven,
   preflightInterior,
@@ -337,77 +333,87 @@ describe('buildCoverHtml', () => {
   })
 
   it('draws the art in CSS, with no image reference of any kind', () => {
-    // Lulu wants 300 PPI on a cover; extracted article art is web-sized. The
-    // art has to be resolution-free, which means gradients rather than <img>.
+    // Lulu wants 300 PPI on a cover; extracted article art is web-sized. A
+    // drawn cover has no resolution to be wrong at, so unless the issue has a
+    // photograph big enough to print (see the plate test below), it is drawn.
     const html = buildCoverHtml({ ...base, pageCount: 100 })
     expect(html).toMatch(/(?:radial|linear|conic)-gradient\(/)
     expect(html).not.toContain('<img')
     expect(html).not.toMatch(/url\(/)
   })
 
-  it('rotates the palette per issue so consecutive covers differ', () => {
-    expect(paletteFor(1)[0]).not.toBe(paletteFor(2)[0])
-    // Deterministic, and it wraps rather than running off the end.
-    expect(paletteFor(1)).toEqual(paletteFor(1))
-    expect(paletteFor(COVER_PALETTE.length + 1)).toEqual(paletteFor(1))
-    expect(new Set(paletteFor(3))).toEqual(new Set(COVER_PALETTE))
-    // A number below the first issue must not index off the front.
-    expect(paletteFor(0).every((c) => COVER_PALETTE.includes(c as never))).toBe(true)
-  })
-
-  it('draws every issue a different figure, and never two alike in a row', () => {
-    // Two issues side by side on a shelf must not look like a reprint of each
-    // other: the motif steps with the number, so neighbours never share one.
+  it('gives each issue its own ground, palette, figure, layout and screen', () => {
+    // The complaint this answers: covers that were one drawing in six colours.
+    // Two issues in a row must not share any of the five.
+    const shape = (n: number) => {
+      const html = buildCoverHtml({ ...base, issueNumber: n, pageCount: 100 })
+      return {
+        ground: /--ground: (#[0-9A-Fa-f]{6})/.exec(html)?.[1],
+        accent: /--accent: (#[0-9A-Fa-f]{6})/.exec(html)?.[1],
+        motif: /data-motif="([a-z]+)"/.exec(html)?.[1],
+        screen: /data-screen="([a-z]+)"/.exec(html)?.[1],
+        layout: /class="panel front layout-([a-z]+)"/.exec(html)?.[1],
+      }
+    }
     for (let n = 1; n <= 24; n++) {
-      expect(motifFor(n)).not.toBe(motifFor(n + 1))
-    }
-    // Seven motifs against six palette rotations: the pairing repeats only
-    // after 42 issues, and every motif gets used.
-    const pairs = new Set<string>()
-    for (let n = 1; n <= 42; n++) pairs.add(`${motifFor(n)}/${paletteFor(n)[0]}`)
-    expect(pairs.size).toBe(42)
-    expect(new Set(Array.from({ length: 42 }, (_, i) => motifFor(i + 1)))).toEqual(
-      new Set(COVER_MOTIFS),
-    )
-    // A number below the first issue must not index off the front.
-    expect(COVER_MOTIFS).toContain(motifFor(0))
-  })
-
-  it('draws two issues on the same motif with different numbers', () => {
-    // 1 and 43 come round to the same figure and the same colours; what is
-    // left to tell them apart is the issue's name driving the dials.
-    expect(motifFor(1)).toBe(motifFor(43))
-    expect(paletteFor(1)).toEqual(paletteFor(43))
-    expect(coverArt(1, 'Winter Light').layers).not.toBe(coverArt(43, 'Salt and Ash').layers)
-    // Same issue, same cover: re-composing must not redraw it.
-    expect(coverArt(7, 'Winter Light')).toEqual(coverArt(7, 'Winter Light'))
-    // The name alone changes the drawing.
-    expect(coverArt(7, 'Winter Light').layers).not.toBe(coverArt(7, 'Salt and Ash').layers)
-  })
-
-  it('draws each motif from the issue palette, in hard stops, off nothing remote', () => {
-    for (let n = 1; n <= COVER_MOTIFS.length; n++) {
-      const art = coverArt(n, `Issue ${n}`)
-      const colors = paletteFor(n)
-      expect(art.layers).toMatch(/(?:radial|linear|conic)-gradient\(/)
-      // Balanced parens, so a layer cannot swallow the declaration after it.
-      expect(art.layers.split('(').length).toBe(art.layers.split(')').length)
-      // Every colour it uses is one of this issue's, the paper, or the paper
-      // showing through: nothing invents a colour outside the series.
-      const used = art.layers.match(/#[0-9A-Fa-f]{3,8}/g) ?? []
-      expect(used.every((c) => colors.includes(c))).toBe(true)
-      expect(used.length).toBeGreaterThan(0)
-      expect(art.layers).not.toMatch(/url\(|https?:|@import/)
-      // No NaN or undefined leaking out of a dial into a stop position.
-      expect(art.layers).not.toMatch(/NaN|undefined/)
+      const a = shape(n)
+      const b = shape(n + 1)
+      expect(Object.values(a).every(Boolean)).toBe(true)
+      for (const key of Object.keys(a) as (keyof typeof a)[]) {
+        expect(`${key}: ${a[key]}`).not.toBe(`${key}: ${b[key]}`)
+      }
     }
   })
 
-  it("puts the issue's figure on the front panel", () => {
+  it('prints the design it was handed, layers and tile sizes together', () => {
     const html = buildCoverHtml({ ...base, pageCount: 100 })
-    const art = coverArt(base.issueNumber, base.issueName)
-    expect(html).toContain(`background-image: ${art.layers};`)
-    expect(html).toContain(`data-motif="${art.motif}"`)
+    const design = coverDesign(base.issueNumber, base.issueName)
+    expect(html).toContain(`background-image: ${design.layers};`)
+    // A screen tiles; a figure fills. The two lists have to line up or the
+    // texture prints at the wrong pitch.
+    expect(html).toContain(`background-size: ${design.sizes};`)
+    expect(html).toContain(`data-motif="${design.motif}"`)
+    expect(html).toContain(`layout-${design.layout}`)
+  })
+
+  it('reverses the title out of a scrim only where the art runs full bleed', () => {
+    // Type over a figure has to sit on something, or a light title lands on a
+    // marigold field. Every other layout puts the title on the ground.
+    const layoutOf = (n: number) => coverDesign(n, base.issueName).layout
+    const full = Array.from({ length: 12 }, (_, i) => i + 1).find((n) => layoutOf(n) === 'full')
+    const plate = Array.from({ length: 12 }, (_, i) => i + 1).find((n) => layoutOf(n) === 'plate')
+    expect(buildCoverHtml({ ...base, issueNumber: full, pageCount: 100 })).toContain('class="scrim"')
+    expect(buildCoverHtml({ ...base, issueNumber: plate, pageCount: 100 })).not.toContain('class="scrim"')
+  })
+
+  it('prints a photograph when the issue has one that can hold up, and credits it', () => {
+    const html = buildCoverHtml({
+      ...base,
+      pageCount: 100,
+      plate: { file: 'lead-9f8e7d6c5b4a.jpg', credit: 'The Paris Review' },
+    })
+    // Referenced out of the directory the renderer writes images into — a
+    // local file, never a URL.
+    expect(html).toContain('<img class="plate" src="images/lead-9f8e7d6c5b4a.jpg"')
+    expect(html).not.toMatch(/https?:\/\//)
+    // Credited on the back, where a cover can say whose picture it is without
+    // turning the front into a caption.
+    expect(html).toContain('Cover: The Paris Review')
+    // And a picture is never printed bare: it carries the same screen the
+    // drawings do, which is what makes a web-sized photograph read as a plate.
+    expect(html).toMatch(/background-image: [^;]*gradient/)
+  })
+
+  it('escapes a plate filename and credit rather than trusting them', () => {
+    // Both arrive from an emailed article: the file name is derived from an
+    // untrusted storage path, the credit from the publication's own metadata.
+    const html = buildCoverHtml({
+      ...base,
+      pageCount: 100,
+      plate: { file: 'x" onerror="alert(1)', credit: '<script>x</script>' },
+    })
+    expect(html).not.toContain('onerror="alert(1)"')
+    expect(html).not.toContain('<script>')
   })
 
   it('prints spine text only once the spine can hold it', () => {

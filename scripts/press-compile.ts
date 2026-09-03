@@ -33,6 +33,7 @@ import {
 } from '../src/lib/press/layout/render'
 import {
   buildCoverHtml,
+  coverPlateFor,
   buildTocSection,
   computeToc,
   mergePdfs,
@@ -282,6 +283,10 @@ async function main(): Promise<void> {
     pageCount,
     dateRange: dateRange(articles.map((a) => a.article.publishedAt)),
     toc,
+    // A photograph, if the issue has one big enough to print at 7 inches;
+    // otherwise the cover is drawn. Its bytes are already in the render's
+    // image directory, alongside the interior's.
+    plate: coverPlateFor(entries)?.plate ?? null,
   })
   const cover = await render(coverHtml)
 
