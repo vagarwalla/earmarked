@@ -106,6 +106,12 @@ export default async function PressPage() {
 
       <Workbench
         packageId={loadSettings().luluPackageId}
+        // Read-only, and deliberately so. The flag lives in the environment
+        // precisely so it cannot be flipped from the screen that presses the
+        // button (see SettingsPanel) — but not saying whether it is on meant
+        // the order button looked ready on a workbench where no order could
+        // ever be placed.
+        orderingEnabled={process.env.PRESS_ORDER_ENABLED === '1'}
         issues={issues}
         pool={pool.map(toPoolItem)}
         failed={failed.map(toPoolItem)}

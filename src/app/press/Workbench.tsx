@@ -48,6 +48,7 @@ import { OrdersPanel } from './OrdersPanel'
 import { SettingsPanel, type SettingsProps } from './SettingsPanel'
 import { OrderDialog } from './OrderDialog'
 import { PrintSpec } from './PrintSpec'
+import { PRINT_SPEC } from '@/lib/press/types'
 import type { OrderWithIssue } from '@/lib/press/orders'
 
 export interface PoolItem {
@@ -86,6 +87,8 @@ interface Props {
   threshold: number
   /** Lulu POD package id, decoded for the print-spec panel. */
   packageId: string
+  /** PRESS_ORDER_ENABLED. Shown, never set, from here. */
+  orderingEnabled: boolean
 }
 
 /** `open` and `closed` are the schema's words; these are the reader's. */
@@ -680,13 +683,13 @@ export function Workbench(props: Props) {
           {issue ? (
             <IssuePanel
               issue={issue}
-              threshold={props.threshold}
               editable={editable}
               locked={locked}
               working={working?.message ?? null}
               onRemove={(itemId) => returnToPool(issue, itemId)}
               onLock={() => void stream('lock', `/api/press/issue/${issue.number}/lock`, { action: 'lock' })}
               onOrder={() => setOrdering([issue.number])}
+              orderingEnabled={props.orderingEnabled}
             />
           ) : (
             <p className="text-muted-foreground rounded-lg border border-dashed p-10 text-center text-sm">
@@ -754,11 +757,15 @@ export function Workbench(props: Props) {
                       void stream('lock', `/api/press/issue/${issue.number}/lock`, { action: 'lock' })
                     }
                     onUnlock={() => void unlock(issue.number)}
-                    onOrder={() => setOrdering([issue.number])}
                   />
                   {/* The built count is the true one; while the draft has moved
                       since, its measured pages are the better guess at how
                       thick this will come out. */}
+                  <PageMeter
+                    pages={issue.pages}
+                    threshold={props.threshold}
+                    printed={['approved', 'ordered', 'shipped'].includes(issue.state)}
+                  />
                   <PrintSpec
                     packageId={props.packageId}
                     pageCount={issue.dirty || !issue.built ? issue.pages : issue.pageTotal}
@@ -801,16 +808,15 @@ export function Workbench(props: Props) {
 
 function IssuePanel({
   issue,
-  threshold,
   editable,
   locked,
   working,
   onRemove,
   onLock,
   onOrder,
+  orderingEnabled,
 }: {
   issue: WorkbenchIssue
-  threshold: number
   editable: boolean
   /** An edit or a build is in flight; a second one would race it. */
   locked: boolean
@@ -823,11 +829,10 @@ function IssuePanel({
   onLock: () => void
   /** Open the order dialog on this issue alone. */
   onOrder: () => void
+  /** PRESS_ORDER_ENABLED, so the card can say when nothing can be ordered. */
+  orderingEnabled: boolean
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: 'issue', disabled: !editable })
-  const printed = ['approved', 'ordered', 'shipped'].includes(issue.state)
-
-  const empty = issue.contents.length === 0
 
   return (
     <div>
@@ -845,33 +850,15 @@ function IssuePanel({
           </p>
         </div>
 
-        {/* Ordering, on the issue itself.
-            It lived only at the foot of the right-hand column, which is fine
-            at full width and useless below `lg`, where the three columns
-            stack and that column lands under the pool. The single action this
-            whole screen is for should not need a scroll to find, so it sits
-            beside the issue's name as well.
-            A draft has nothing to order yet, so the same slot carries the step
-            that makes it orderable — and says so, rather than showing a dead
-            button with no explanation. */}
-        {orderable(issue.state) ? (
-          <Button className="shrink-0" disabled={locked} onClick={onOrder}>
-            <Package data-icon="inline-start" />
-            {issue.state === 'shipped' ? 'Order another copy' : 'Order a copy'}
-          </Button>
-        ) : editable ? (
-          <Button
-            className="shrink-0"
-            variant="outline"
-            disabled={locked || empty}
-            onClick={onLock}
-            title={empty ? 'Nothing to print yet' : 'Freezes the contents — then you can order a printed copy'}
-          >
-            <Lock data-icon="inline-start" />
-            Lock to order
-          </Button>
-        ) : null}
       </div>
+
+      <OrderCta
+        issue={issue}
+        locked={locked}
+        orderingEnabled={orderingEnabled}
+        onLock={onLock}
+        onOrder={onOrder}
+      />
 
       {issue.state === 'rejected' && (
         <p className="border-destructive/50 text-destructive mb-3 border-l-2 py-1 pl-3 text-xs">
@@ -933,18 +920,165 @@ function IssuePanel({
         </SortableContext>
       </div>
 
-      <div className="mt-3 flex items-center gap-3">
-        <div className="bg-muted h-1.5 flex-1 overflow-hidden rounded-full">
-          <div
-            className="bg-foreground h-full rounded-full transition-[width]"
-            style={{ width: `${Math.min(100, (issue.pages / threshold) * 100)}%` }}
-          />
-        </div>
-        <p className="text-muted-foreground shrink-0 text-xs tabular-nums">
-          {issue.pages} / {threshold} pages
+    </div>
+  )
+}
+
+// ── How full the issue is ────────────────────────────────────────────────────
+
+/**
+ * The page meter, in the column that reports on the issue rather than under
+ * the articles it measures.
+ *
+ * It sat at the foot of the middle panel, which meant it moved further down
+ * the page with every article added — so the number that tells you whether to
+ * add another was hardest to see exactly when the issue was nearly full. Up
+ * here it is beside the print spec and the page count that spec is computed
+ * from, which is the same question asked three ways.
+ */
+function PageMeter({
+  pages,
+  threshold,
+  printed,
+}: {
+  pages: number
+  threshold: number
+  /** Already at the printer, so the threshold is history rather than a target. */
+  printed: boolean
+}) {
+  return (
+    <div className="mt-3 rounded-lg border p-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-muted-foreground text-xs">Length</span>
+        <span className="text-xs tabular-nums">
+          {pages} / {threshold} pages
           {printed && ' · printed'}
-        </p>
+        </span>
       </div>
+      <div className="bg-muted mt-2 h-1.5 overflow-hidden rounded-full">
+        <div
+          className="bg-foreground h-full rounded-full transition-[width]"
+          style={{ width: `${Math.min(100, (pages / threshold) * 100)}%` }}
+        />
+      </div>
+    </div>
+  )
+}
+
+// ── The one action the workbench is for ──────────────────────────────────────
+
+/**
+ * Ordering, stated as a step rather than hidden as a button.
+ *
+ * The order button used to be the last control in the right-hand column,
+ * which below `lg` stacks under the pool — and it only existed at all once an
+ * issue was locked, so a workbench of drafts had no order button anywhere and
+ * nothing saying what would produce one. Both of those read as "you cannot
+ * order from here", which was wrong in the first case and unexplained in the
+ * second.
+ *
+ * So: always present, directly under the issue's name, and when it cannot go
+ * ahead it says why in the same place. The reasons are the client-side half of
+ * `orderBlockers` — the three an issue carries on its face. The dialog remains
+ * the authority and still checks the address, the email and the orders already
+ * in flight, which only the server can see.
+ */
+function OrderCta({
+  issue,
+  locked,
+  orderingEnabled,
+  onLock,
+  onOrder,
+}: {
+  issue: WorkbenchIssue
+  locked: boolean
+  orderingEnabled: boolean
+  onLock: () => void
+  onOrder: () => void
+}) {
+  // The built count where there is one: it is the number Lulu will bind.
+  const pages = issue.built && !issue.dirty ? issue.pageTotal : issue.pages
+  const reasons: string[] = []
+
+  if (pages < PRINT_SPEC.minPages) {
+    reasons.push(
+      `Lulu will not perfect-bind under ${PRINT_SPEC.minPages} pages, and this is ${pages}. ` +
+        `Drag ${PRINT_SPEC.minPages - pages} more pages in from the pool.`,
+    )
+  }
+  if (!orderingEnabled) {
+    reasons.push(
+      'Ordering is switched off. PRESS_ORDER_ENABLED=1 in the environment is what allows a real order, and it is not settable from this screen.',
+    )
+  }
+
+  const blocked = reasons.length > 0
+
+  // A draft is not blocked, it is unfinished: locking is the next step and it
+  // is a different button, so it does not belong in the list above.
+  if (issue.state === 'open') {
+    return (
+      <div className="bg-muted/40 mb-4 rounded-lg border p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium">Order a printed copy</p>
+            <p className="text-muted-foreground mt-0.5 text-xs">
+              Lock it first. Locking freezes the contents and builds the PDF that gets printed —
+              you can unlock again afterwards.
+            </p>
+          </div>
+          {/* Not disabled by `blocked`: locking is worth doing for the PDF
+              alone, and a Lock here that is dead while the identical Lock in
+              the right-hand column works would be the worse confusion. The
+              reasons below say what still stands between this and an order. */}
+          <Button
+            size="lg"
+            className="shrink-0"
+            disabled={locked || issue.contents.length === 0}
+            onClick={onLock}
+          >
+            <Lock data-icon="inline-start" />
+            Lock for printing
+          </Button>
+        </div>
+        {blocked && <Reasons reasons={reasons} heading="Before it can be ordered:" />}
+      </div>
+    )
+  }
+
+  if (!orderable(issue.state)) return null
+
+  return (
+    <div className="bg-muted/40 mb-4 rounded-lg border p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-medium">
+            {issue.state === 'shipped' ? 'Order another copy' : 'Order a printed copy'}
+          </p>
+          <p className="text-muted-foreground mt-0.5 text-xs">
+            The next screen prices it and sends an approval email. Nothing is ordered until you
+            follow the link in that email.
+          </p>
+        </div>
+        <Button size="lg" className="shrink-0" disabled={locked || blocked} onClick={onOrder}>
+          <Package data-icon="inline-start" />
+          {issue.state === 'shipped' ? 'Order another copy' : 'Order a copy'}
+        </Button>
+      </div>
+      {blocked && <Reasons reasons={reasons} />}
+    </div>
+  )
+}
+
+function Reasons({ reasons, heading }: { reasons: string[]; heading?: string }) {
+  return (
+    <div className="mt-3 border-t pt-3">
+      {heading && <p className="text-muted-foreground mb-1 text-xs font-medium">{heading}</p>}
+      <ul className="text-muted-foreground space-y-1 text-xs">
+        {reasons.map((r) => (
+          <li key={r}>{r}</li>
+        ))}
+      </ul>
     </div>
   )
 }
@@ -970,7 +1104,6 @@ function IssueActions({
   onRebuild,
   onLock,
   onUnlock,
-  onOrder,
 }: {
   issue: WorkbenchIssue
   editable: boolean
@@ -982,7 +1115,6 @@ function IssueActions({
   onRebuild: () => void
   onLock: () => void
   onUnlock: () => void
-  onOrder: () => void
 }) {
   const empty = issue.contents.length === 0
 
@@ -1024,23 +1156,14 @@ function IssueActions({
         </>
       )}
 
+      {/* Ordering is not here any more: it is the card at the top of the issue,
+          where it is one button in one place rather than the last control in
+          the column that stacks last. What stays is its opposite — the way
+          back out of a locked issue. */}
       {issue.state === 'closed' && (
-        <>
-          <Button className="w-full justify-start" disabled={locked} onClick={onOrder}>
-            <Package data-icon="inline-start" />
-            Order a copy
-          </Button>
-          <Button variant="outline" className="w-full justify-start" disabled={locked} onClick={onUnlock}>
-            <LockOpen data-icon="inline-start" />
-            {working?.what === 'unlock' ? 'Unlocking…' : 'Unlock to edit'}
-          </Button>
-        </>
-      )}
-
-      {issue.state === 'shipped' && (
-        <Button variant="outline" className="w-full justify-start" disabled={locked} onClick={onOrder}>
-          <Package data-icon="inline-start" />
-          Order another copy
+        <Button variant="outline" className="w-full justify-start" disabled={locked} onClick={onUnlock}>
+          <LockOpen data-icon="inline-start" />
+          {working?.what === 'unlock' ? 'Unlocking…' : 'Unlock to edit'}
         </Button>
       )}
 
