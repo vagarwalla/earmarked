@@ -41,12 +41,19 @@ RLS policies exist as a backstop and buy nothing today.
 
 ### Signing in
 
-Supabase Auth, magic link, invite only. `PRESS_PASSWORD` and the HTTP Basic
+Supabase Auth, magic link, **open**. `PRESS_PASSWORD` and the HTTP Basic
 middleware are gone: one shared password could not say which account you were,
 and that is the only question the workbench now asks.
 
-- `/press/sign-in` takes an address, checks it against `press_accounts` **before
-  asking Supabase to send anything**, and mails a link.
+Anybody who can read mail at an address can have a press. Following the link
+makes the account if there is not one already, and it starts empty — their own
+pool, their own issue numbers from 1, nothing of anybody else's. The handle
+comes from the address: `alex.whitby+reading@example.com` becomes `alex-whitby`,
+with `-2` appended if that is taken.
+
+- `/press/sign-in` takes an address and mails a link. The account is made on the
+  far side, when the link is followed, so an address typed by mistake leaves
+  nothing behind.
 - `/press/auth/callback` exchanges the code, attaches the Supabase user to the
   invitation, and refuses — signing back out — if there is no invitation.
 - `src/middleware.ts` refuses everything else without a session: a redirect for
@@ -95,13 +102,11 @@ npm run press:invite -- alex@example.com alex "Alex Whitby"
 npm run press:invite -- --list
 ```
 
-An invitation is two rows written together: the `press_accounts` row, and the
-Supabase Auth user it will be signed in as. Creating the auth user here rather
-than at first sign-in is what lets the project run with **signups disabled** —
-the anon key is in the page, so with signups on, anybody holding it could ask
-GoTrue for a magic link to an address of their choosing and have this project
-send it. With them off, only an address that has been through this command can
-ever receive one.
+Not required any more — anybody can sign in and get a press. It is still worth
+running when you want somebody to have a *particular* handle: it writes the row
+first, and their first sign-in claims it instead of deriving one from their
+address. It also creates the Supabase user, which is what `PRESS_INVITE_ONLY`
+mode needs.
 
 Nobody but the owner gets `can_order` — ordering bills the one Lulu account on
 file, so a friend's finish line is the PDFs.
@@ -126,11 +131,40 @@ safety catch on a button that spends money and she can turn it back on;
 an environment variable would be telling them to fix something that is not
 broken.
 
+### Closing the door again
+
+`PRESS_INVITE_ONLY=1` puts it back to the `press_accounts` list: the sign-in
+form checks the address before Supabase is asked to send anything, and an
+unknown one is refused. Read at runtime — as `process.env['PRESS_INVITE_ONLY']`,
+because Next inlines the dotted form at build time in server chunks.
+
+If it ever needs closing for real, turn signups off in the Supabase project as
+well. The anon key is in the page, so `PRESS_INVITE_ONLY` alone stops the form
+but not somebody sending the same request straight to GoTrue — they would get a
+Supabase user and no press, which is harmless but is still this project sending
+mail on their say-so.
+
+### What an open door actually costs
+
+An account is somebody who can make the one Fly machine render a hundred pages
+and make this app fetch arbitrary URLs on its own network. The controls are:
+
+| | |
+|---|---|
+| Fetching | `fetch.ts` resolves every redirect hop and refuses private, loopback and link-local addresses |
+| Volume | Fifty links a paste, two hundred a day, **per account** (`paste.ts`) |
+| Money | `can_order` is false for everybody but the owner, and is not a parameter anywhere — no sign-in can reach it |
+| Renders | One job per issue, one at a time, on one machine — a queue rather than a stampede |
+| Sign-up rate | Supabase's built-in mailer sends only a couple of links an hour, project-wide. That throttles abuse and it also throttles **you** — several friends signing up the same evening will hit it. Configure SMTP if that happens |
+
+What is *not* controlled is storage: every account's articles and PDFs live in
+one bucket. Worth a size check before this goes past a handful of people.
+
 ### Supabase project settings this depends on
 
 | Setting | Value | Why |
 |---|---|---|
-| Auth → signups | **disabled** | See above. `press:invite` creates users, so nothing legitimate needs it |
+| Auth → signups | **enabled** | A first sign-in has to be able to create a Supabase user. `PRESS_INVITE_ONLY` is the app-level door |
 | Auth → redirect URLs | `…/press/auth/callback` for localhost, the production domain, and `https://*-<team>.vercel.app` | Supabase only honours redirects on this list; without it a magic link goes nowhere but `site_url` |
 | Auth → email | built-in sender | Rate limited to a couple an hour. Fine at this size; configure SMTP if "too many links requested" ever becomes routine |
 

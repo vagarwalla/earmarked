@@ -16,7 +16,8 @@ export const dynamic = 'force-dynamic'
 const REFUSALS: Record<string, string> = {
   'no-code': 'That link was missing its code. Ask for a fresh one.',
   'link-expired': 'That link has expired or was already used. Ask for a fresh one.',
-  'not-invited': 'That address is not on the list for this press.',
+  'not-invited':
+    'That address is not on the list for this press. Ask whoever runs it for an invite.',
 }
 
 export default async function SignInPage({
@@ -42,8 +43,8 @@ export default async function SignInPage({
         <ThemeToggle />
       </div>
       <p className="text-muted-foreground mb-6 text-sm">
-        Saved reading, laid out for print. Invite only — sign in with the address you were
-        invited at and a link will arrive.
+        Saved reading, laid out for print. Put in an email and a link will arrive; following it
+        gives you a press of your own — your own reading, your own issues, nobody else&rsquo;s.
       </p>
       {refusal && (
         <p className="text-destructive mb-4 text-sm" role="alert">
