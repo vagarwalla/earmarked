@@ -247,6 +247,10 @@ export async function performBundledApproval(
       address: settings.shipping,
       externalId: bundleKey,
       idempotencyKey: bundleKey,
+      // Guaranteed by `orderBlockers`, which refuses an order with no address
+      // to send the approval to. Lulu wants the person who placed the job, and
+      // that is the same person.
+      contactEmail: settings.mailTo,
     })
 
     const outcomes: ApprovalOutcome[] = []
