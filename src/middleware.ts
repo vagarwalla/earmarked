@@ -1,89 +1,99 @@
 /**
- * press — a password on the review UI.
+ * press — the door, and keeping the session behind it fresh.
  *
- * /press lists what V has been reading and lets anyone reorder her next issue,
- * so it stayed local-only. Putting it behind a tunnel to view it from
- * elsewhere makes it internet-reachable, and an obscure URL is not a password.
+ * This was HTTP Basic with a single shared `PRESS_PASSWORD`, and its own
+ * comment said "the user half is ignored; there is one reader". That was true
+ * for as long as there was one reader. It is a Supabase session now: sign-in
+ * is a magic link (see src/lib/press/auth.ts), the invitation is a
+ * `press_accounts` row, and which account you are is what every page and route
+ * scopes its database client to.
  *
- * HTTP Basic, deliberately: no session store, no cookie, no dependency, and
- * every client — browser, curl, the streaming rebuild fetch — already speaks
- * it. One env var is the whole configuration.
+ * Two jobs, and both have to happen here:
  *
- *   PRESS_PASSWORD unset  → open (localhost stays frictionless)
- *   PRESS_PASSWORD set    → required on /press and the editing APIs
+ *   Refresh. A Supabase access token is short-lived, and a Server Component
+ *   cannot write cookies — so if nothing refreshed on the way in, a session
+ *   would expire mid-visit and the page would have no way to say so. Every
+ *   request through here gets `getUser()` called on it, which rotates the
+ *   cookie when it needs rotating.
  *
- * Deliberately NOT covered: /press/confirm/[token] and /api/press/action/
- * [token] carry their own signed one-time tokens and are opened from an email
- * on a phone, and /api/press/email-in authenticates with a webhook secret.
- * Demanding a password there would break the approval loop.
+ *   Refuse. No session means the sign-in page for anything you look at, and a
+ *   401 for anything a script calls. Which account you are is *not* decided
+ *   here: that is `currentAccount()`, server-side, on the far side of this,
+ *   because the answer needs the service-role key and belongs next to the
+ *   query it scopes.
+ *
+ * Deliberately NOT covered, exactly as before: /press/confirm/[token] and
+ * /api/press/action/[token] carry their own signed one-time tokens and are
+ * opened from an email on a phone, and /api/press/email-in authenticates with
+ * a webhook secret. Demanding a session there would break the approval loop.
+ * /press/sign-in and /press/auth/callback are where a session comes from, so
+ * requiring one to reach them is a redirect loop.
  */
 
 import { NextResponse, type NextRequest } from 'next/server'
+import { createServerClient } from '@supabase/ssr'
 
-/** Length-independent comparison, so a wrong guess leaks nothing by timing. */
-function secretsMatch(given: string, expected: string): boolean {
-  if (given.length !== expected.length) return false
-  let diff = 0
-  for (let i = 0; i < given.length; i++) {
-    diff |= given.charCodeAt(i) ^ expected.charCodeAt(i)
+/** JSON for the API, a page for a person. Both say the same thing. */
+function refuse(request: NextRequest): NextResponse {
+  if (request.nextUrl.pathname.startsWith('/api/')) {
+    return NextResponse.json({ error: 'Sign in to use press.' }, { status: 401 })
   }
-  return diff === 0
+  const url = new URL('/press/sign-in', request.url)
+  return NextResponse.redirect(url)
 }
 
-function unauthorized(): NextResponse {
-  return new NextResponse('Authentication required.', {
-    status: 401,
-    headers: {
-      // Prompts the browser; `curl -u` and fetch credentials both satisfy it.
-      'WWW-Authenticate': 'Basic realm="press", charset="UTF-8"',
-      'cache-control': 'no-store',
+export async function middleware(request: NextRequest) {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+  // Fail closed. An unconfigured deployment used to mean "open, by design"
+  // — `PRESS_PASSWORD` unset was the frictionless local default — and that
+  // default is wrong now that the pages behind it belong to several people.
+  if (!url || !anonKey) return refuse(request)
+
+  // The response the refreshed cookies are written onto. Built before the
+  // call, because `setAll` fires during it.
+  let response = NextResponse.next({ request })
+
+  const supabase = createServerClient(url, anonKey, {
+    cookies: {
+      getAll: () => request.cookies.getAll(),
+      setAll(written) {
+        for (const { name, value } of written) request.cookies.set(name, value)
+        response = NextResponse.next({ request })
+        for (const { name, value, options } of written) response.cookies.set(name, value, options)
+      },
     },
   })
-}
 
-export function middleware(request: NextRequest) {
-  const password = process.env.PRESS_PASSWORD
-  if (!password) return NextResponse.next()
+  // getUser, not getSession: the cookie is whatever the browser sent, and only
+  // this asks the server whether the token inside it is real. It is also what
+  // does the refreshing.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
 
-  const header = request.headers.get('authorization')
-  if (!header?.startsWith('Basic ')) return unauthorized()
-
-  let decoded: string
-  try {
-    decoded = atob(header.slice('Basic '.length))
-  } catch {
-    return unauthorized()
-  }
-
-  // "user:pass" — the user half is ignored; there is one reader.
-  const supplied = decoded.slice(decoded.indexOf(':') + 1)
-  if (!secretsMatch(supplied, password)) return unauthorized()
-
-  return NextResponse.next()
+  if (!user) return refuse(request)
+  return response
 }
 
 export const config = {
   matcher: [
-    // The review page itself, but not /press/confirm/[token] beneath it.
+    // The workbench, but not /press/sign-in, /press/auth/* or
+    // /press/confirm/[token] beneath it.
     '/press',
     '/api/press/issue/:path*',
     '/api/press/file/:path*',
-    // The workbench's own routes. A pool you can delete from, an address you
-    // can change and a button that spends money all need the same password the
-    // page does — and a matcher that lists routes one by one is a matcher that
-    // will one day be missing one, so every new /api/press/* route belongs
-    // here unless it is deliberately public like action/ and email-in/.
+    // A pool you can delete from, an address you can change and a button that
+    // spends money all need the same session the page does — and a matcher
+    // that lists routes one by one is a matcher that will one day be missing
+    // one, so every new /api/press/* route belongs here unless it is
+    // deliberately public like action/ and email-in/.
     '/api/press/item/:path*',
-    // The renderer's queue: asking for a compose spends four minutes of the
-    // worker's only machine, and what it reports back is the running order of
-    // an issue by another name.
     '/api/press/job',
     '/api/press/job/:path*',
     '/api/press/settings',
     '/api/press/orders',
-    // The route that mints approval tokens and sends the mail that spends the
-    // money. It was the one missing, which is exactly what the note above said
-    // would happen.
     '/api/press/order',
   ],
 }

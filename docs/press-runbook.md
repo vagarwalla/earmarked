@@ -39,6 +39,26 @@ the second is right, each named at its call site:
 
 RLS policies exist as a backstop and buy nothing today.
 
+### Signing in
+
+Supabase Auth, magic link, invite only. `PRESS_PASSWORD` and the HTTP Basic
+middleware are gone: one shared password could not say which account you were,
+and that is the only question the workbench now asks.
+
+- `/press/sign-in` takes an address, checks it against `press_accounts` **before
+  asking Supabase to send anything**, and mails a link.
+- `/press/auth/callback` exchanges the code, attaches the Supabase user to the
+  invitation, and refuses — signing back out — if there is no invitation.
+- `src/middleware.ts` refuses everything else without a session: a redirect for
+  a page, a 401 for an API route. It fails *closed* if the Supabase keys are
+  missing, which is the opposite of what `PRESS_PASSWORD` did.
+- The approval loop is untouched: `/press/confirm/[token]`,
+  `/api/press/action/[token]` and `/api/press/email-in` carry their own
+  credentials and stay outside the matcher.
+
+`NEXT_PUBLIC_SUPABASE_ANON_KEY` is now required wherever the app runs — the
+session client uses it, and without it the middleware refuses every request.
+
 ### Inviting somebody
 
 Addresses are not in this repo — it is public, which is why 018 seeds the owner
@@ -50,9 +70,24 @@ npm run press:invite -- alex@example.com alex "Alex Whitby"
 npm run press:invite -- --list
 ```
 
-An invitation is a row that can exist before the person has ever signed in;
-their first magic link attaches their auth user to it. Nobody but the owner
-gets `can_order` — ordering bills the one Lulu account on file.
+An invitation is two rows written together: the `press_accounts` row, and the
+Supabase Auth user it will be signed in as. Creating the auth user here rather
+than at first sign-in is what lets the project run with **signups disabled** —
+the anon key is in the page, so with signups on, anybody holding it could ask
+GoTrue for a magic link to an address of their choosing and have this project
+send it. With them off, only an address that has been through this command can
+ever receive one.
+
+Nobody but the owner gets `can_order` — ordering bills the one Lulu account on
+file, so a friend's finish line is the PDFs.
+
+### Supabase project settings this depends on
+
+| Setting | Value | Why |
+|---|---|---|
+| Auth → signups | **disabled** | See above. `press:invite` creates users, so nothing legitimate needs it |
+| Auth → redirect URLs | `…/press/auth/callback` for localhost, the production domain, and `https://*-<team>.vercel.app` | Supabase only honours redirects on this list; without it a magic link goes nowhere but `site_url` |
+| Auth → email | built-in sender | Rate limited to a couple an hour. Fine at this size; configure SMTP if "too many links requested" ever becomes routine |
 
 ---
 
@@ -69,6 +104,7 @@ these in Vercel, in `fly secrets`, and in a local `.env.local`.
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL (already set for earmarked) |
 | `SUPABASE_SERVICE_ROLE_KEY` | **Service role** key. press tables have RLS on with no policies, so the anon key cannot read them at all — this is the only way in, and it must never reach the browser. |
 | `PRESS_STORAGE_BUCKET` | Defaults to `press` |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | The publishable key. Sign-in needs it, and the middleware refuses every request without it — deliberately, so a half-configured deployment is shut rather than open. |
 
 ### Ingestion (worker)
 

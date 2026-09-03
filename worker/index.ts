@@ -43,7 +43,7 @@ import {
   updateItem,
   updateIssue,
 } from '../src/lib/press/db'
-import { currentOwnerId } from '../src/lib/press/accounts'
+import { ownerAccount } from '../src/lib/press/accounts'
 import { loadSettings, missingSettings } from '../src/lib/press/settings'
 import { pollRaindrops } from '../src/lib/press/raindrop'
 import { extractFromUrl, extractFromNewsletterHtml, ExtractionError } from '../src/lib/press/extract'
@@ -337,7 +337,7 @@ export async function runPoll(): Promise<void> {
   // in is one person's reading. Scoped, unlike everything else in this file:
   // a service client here would insert items with no owner and the NOT NULL
   // would refuse them, which is the constraint doing exactly its job.
-  const result = await pollRaindrops({ db: pressDb(await currentOwnerId()) })
+  const result = await pollRaindrops({ db: pressDb((await ownerAccount()).id) })
   log('polled', { scanned: result.scanned, ingested: result.ingested.length })
   log('extracted', { count: await extractQueued() })
   log('laid_out', { count: await layoutExtracted() })
