@@ -309,14 +309,25 @@ export function isReorder(state: string): boolean {
 /**
  * The blockers that still stand for another copy of an already-printed issue.
  *
- * A shipped issue is not "unlocked" or "already ordered" — it is done, and
- * ordering another copy of it is a supported thing to want. Everything else
- * (no address, not built, ordering switched off) applies exactly as before.
+ * A shipped issue is not "unlocked" — it is done, and ordering another copy of
+ * it is a supported thing to want. Everything else (no address, not built,
+ * ordering switched off) applies exactly as before.
+ *
+ * What this must NOT strip is "an order for this issue is already in
+ * progress", and it used to. `isReorder` counts `ordered` as well as
+ * `shipped`, and an `ordered` issue is not a printed one — it is one whose job
+ * is in flight, and in the case that found this, one whose job was sitting
+ * UNPAID and had printed nothing. Stripping the blocker there reported an
+ * issue with a live unpaid job as ready to order, and buying it would have
+ * been a second copy and a second parcel rather than the thing anyone wanted.
+ *
+ * Dropping the strip costs a genuine reorder nothing: a shipped issue's orders
+ * are all finished, so `openOrder` is false and the blocker was never in the
+ * list to be removed. The filter only ever fired in the case it should have
+ * refused.
  */
 export function reorderBlockers(blockers: string[]): string[] {
-  return blockers.filter(
-    (b) => !b.startsWith('Lock the issue') && !b.startsWith('An order for this issue'),
-  )
+  return blockers.filter((b) => !b.startsWith('Lock the issue'))
 }
 
 /**
