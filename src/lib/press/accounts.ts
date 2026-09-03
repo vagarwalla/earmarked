@@ -129,7 +129,7 @@ export async function currentAccount(): Promise<PressAccount> {
   // Imported here rather than at the top: `auth.ts` reaches for `next/headers`,
   // which does not exist in the worker or in a script, and both of those call
   // `ownerAccount` from this file.
-  const { signedInUser, attachAccount, runningLocally } = await import('./auth')
+  const { signedInUser, attachAccount, runningLocally, hasOwnerCookie } = await import('./auth')
 
   const user = await signedInUser()
   if (user) {
@@ -142,6 +142,11 @@ export async function currentAccount(): Promise<PressAccount> {
   // this far needed `.env.local`, which holds the service-role key — every
   // account's everything, session or no session. See `runningLocally`.
   if (await runningLocally()) return ownerAccount()
+
+  // A browser that has been through /press/enter with the key. The same trust
+  // as the laptop case and the same answer, deployed — so the bookmark opens
+  // the workbench rather than a form.
+  if (await hasOwnerCookie()) return ownerAccount()
 
   throw new NotSignedInError()
 }
