@@ -35,6 +35,7 @@ import {
   BLEED_PT,
   MEDIA_HEIGHT_PT,
   MEDIA_WIDTH_PT,
+  TRIM_WIDTH_PT,
   type Article,
   type ArticleBlock,
   type ArticleImage,
@@ -59,6 +60,66 @@ export const TRIM_MARGIN_PT = {
 
 /** Bottom margin reserved on full-bleed opener pages, so the folio still fits. */
 const OPENER_FOOT_PT = 34
+
+// ── Plate geometry ───────────────────────────────────────────────────────────
+// Everything about how big a photograph is allowed to print. The rule is one
+// sentence long: *never enlarge a plate past the resolution it actually has*.
+// A 424px Substack thumbnail stretched across the 384pt measure prints at 79
+// PPI, which on Lulu's coated stock is a visibly blocky picture. So the width
+// is capped by the pixels, and a small image simply prints small.
+
+/**
+ * Gutter between the two body columns. Stated in press.css as `--column-gap`;
+ * repeated here because the placement arithmetic needs it, and kept honest by
+ * a test in layout.test.ts that reads the value back out of the stylesheet.
+ */
+export const COLUMN_GAP_PT = 18
+
+/** Width of the text block: the trim less both typographic margins. */
+export const MEASURE_PT = TRIM_WIDTH_PT - TRIM_MARGIN_PT.outer - TRIM_MARGIN_PT.inner
+
+/** Width of one body column. */
+export const COLUMN_PT = (MEASURE_PT - COLUMN_GAP_PT) / 2
+
+/**
+ * The softest a plate may print. Lulu asks for 300 PPI and that is what a
+ * photograph wants, but holding out for it would leave most of the web's
+ * illustrations unprintable — a 700px chart is still worth having on the page
+ * at 3.3 inches wide. 150 PPI is the point below which halftone dots become
+ * visible as squares at reading distance, so it is the floor, not the target.
+ */
+export const MIN_PRINT_PPI = 150
+
+/** Tallest a plate may stand in a column, so caption and text still fit under it. */
+const MAX_PLATE_HEIGHT_PT = 470
+
+/**
+ * The widest this image may print without falling under `MIN_PRINT_PPI`.
+ * `Infinity` when extraction could not measure it — an unmeasurable image is
+ * given the benefit of the doubt rather than shrunk to nothing.
+ */
+export function maxPrintWidthPt(image: ArticleImage): number {
+  if (!image.width || image.width <= 0) return Number.POSITIVE_INFINITY
+  return (image.width / MIN_PRINT_PPI) * 72
+}
+
+/**
+ * How wide to actually set this plate: the narrowest of what it is allowed to
+ * be (its own resolution), what it is offered (the column or the measure), and
+ * what will fit the page vertically once its own aspect ratio is applied.
+ */
+export function plateWidthPt(
+  image: ArticleImage,
+  containerPt: number,
+  maxHeightPt = MAX_PLATE_HEIGHT_PT,
+): number {
+  let width = Math.min(containerPt, maxPrintWidthPt(image))
+  if (image.width && image.height) {
+    const tallest = (maxHeightPt * image.width) / image.height
+    width = Math.min(width, tallest)
+  }
+  return Math.round(width * 10) / 10
+}
 
 /** Name of the stylesheet as written next to the generated HTML. */
 export const CSS_FILENAME = 'press.css'
@@ -201,9 +262,56 @@ export function articleImages(article: Article): ArticleImage[] {
   return out
 }
 
-/** A landscape plate is wide enough to run across both columns. */
+/**
+ * Whether this plate may run across both columns.
+ *
+ * Orientation alone is not enough. Spanning the measure asks an image for
+ * 384pt of width, and a landscape thumbnail that only has 424 pixels would be
+ * enlarged to 79 PPI to get there. So a plate spans when it is landscape *and*
+ * it owns the pixels for the full measure; otherwise it stays in its column,
+ * where 183pt is a width most web images can actually carry.
+ */
 export function isWideFigure(image: ArticleImage): boolean {
-  return image.orientation === 'landscape'
+  if (image.orientation === 'portrait') return false
+  return maxPrintWidthPt(image) >= MEASURE_PT
+}
+
+/**
+ * Body characters an article needs *per figure* before its plates are allowed
+ * to span the measure.
+ *
+ * A spanning figure is not just wide, it is a break in the two-column flow:
+ * text before it stops, the plate sits alone, text after it starts again, and
+ * the next spanner that will not fit pushes everything to a new page. One or
+ * two of those in an essay is a design; fifty-six of them in a talk transcript
+ * is half the issue set in one column with the other left blank — which is
+ * exactly what Issue 9's Superintelligence piece did over 51 pages.
+ *
+ * A page of this magazine holds roughly 3,900 characters, so an article with
+ * less than a page of prose between plates is a slide deck, and a slide deck
+ * reads better with its slides inside the columns.
+ */
+const SPANNING_NEEDS_CHARS_PER_FIGURE = 3000
+
+/** Printable characters in the body — what a reader actually reads. */
+function bodyChars(article: Article): number {
+  return article.blocks.reduce((n, b) => {
+    if (b.type === 'para' || b.type === 'quote') return n + b.html.replace(/<[^>]*>/g, '').length
+    if (b.type === 'heading') return n + b.text.length
+    if (b.type === 'list') return n + b.items.join(' ').replace(/<[^>]*>/g, '').length
+    return n
+  }, 0)
+}
+
+/**
+ * True for a picture-dense article, whose figures all stay inside a column so
+ * the two columns of text never stop. See `SPANNING_NEEDS_CHARS_PER_FIGURE`.
+ */
+export function figuresStayInColumn(article: Article): boolean {
+  const figures = article.blocks.filter((b) => b.type === 'figure').length
+  // Two or three plates cannot wreck a layout however short the piece is.
+  if (figures < 4) return false
+  return bodyChars(article) / figures < SPANNING_NEEDS_CHARS_PER_FIGURE
 }
 
 // ── HTML building ────────────────────────────────────────────────────────────
@@ -277,6 +385,8 @@ export function documentStyle(options: RenderOptions): string {
     '/* Openers run full bleed; only the foot is held back for the folio. */',
     `@page opener:left { margin: 0 0 ${openerFoot}pt 0; }`,
     `@page opener:right { margin: 0 0 ${openerFoot}pt 0; }`,
+    '/* An inset opener centres itself in the page it has to itself. */',
+    `.opener--inset { min-height: ${MEDIA_HEIGHT_PT - openerFoot}pt; }`,
     '',
     '/* Continuous numbering across a single-pass issue render (KTD7).',
     '   The reset has to hang off the first article, not the body: Vivliostyle',
@@ -305,21 +415,29 @@ export function documentStyle(options: RenderOptions): string {
   return lines.join('\n')
 }
 
-function figureHtml(image: ArticleImage): string {
+function figureHtml(image: ArticleImage, inColumnOnly = false): string {
+  const wide = !inColumnOnly && isWideFigure(image)
   const classes = ['figure', `figure--${image.orientation}`]
-  if (isWideFigure(image)) classes.push('figure--wide')
+  if (wide) classes.push('figure--wide')
+
+  // The plate is sized here, not in the stylesheet, because the answer depends
+  // on this image's pixel count. `--plate` caps the <figure>, so the caption
+  // sits under the picture rather than under an empty box beside it.
+  const width = plateWidthPt(image, wide ? MEASURE_PT : COLUMN_PT)
+  const style = Number.isFinite(width) ? ` style="--plate: ${width}pt"` : ''
+
   const caption = image.caption
     ? `<figcaption>${escapeHtml(image.caption)}</figcaption>`
     : ''
   return [
-    `<figure class="${classes.join(' ')}">`,
+    `<figure class="${classes.join(' ')}"${style}>`,
     `<img src="${IMAGE_DIR}/${escapeHtml(imageFileName(image.path))}" alt="${escapeHtml(image.alt)}">`,
     caption,
     '</figure>',
   ].join('')
 }
 
-function blockHtml(block: ArticleBlock): string {
+function blockHtml(block: ArticleBlock, inColumnOnly = false): string {
   switch (block.type) {
     case 'heading':
       return block.level === 3
@@ -336,7 +454,7 @@ function blockHtml(block: ArticleBlock): string {
       return `<blockquote><p>${sanitizeRichText(block.html)}</p>${cite}</blockquote>`
     }
     case 'figure':
-      return figureHtml(block.image)
+      return figureHtml(block.image, inColumnOnly)
     case 'list': {
       const tag = block.ordered ? 'ol' : 'ul'
       const items = block.items.map((i) => `<li>${sanitizeRichText(i)}</li>`).join('')
@@ -347,15 +465,58 @@ function blockHtml(block: ArticleBlock): string {
   }
 }
 
+/** Tallest an opener plate may stand before the title has nowhere to go. */
+const OPENER_PLATE_HEIGHT_PT = 430
+
+/**
+ * How the lead photograph opens the article.
+ *
+ * `bleed` runs it to all three trimmed edges, which is the design — but a
+ * full-bleed plate is 522pt wide and asks the image for 1,088 pixels before it
+ * drops under `MIN_PRINT_PPI`. Most web lead images do not have them, and the
+ * old code enlarged them anyway and then took `object-fit: cover` to the
+ * result, so a 350px slide was printed at 48 PPI *and* had its own title
+ * cropped off both edges.
+ *
+ * So: bleed when the pixels are there, inset when they are not, and in both
+ * cases set the box to the picture's own aspect ratio so nothing is ever cut.
+ */
+export function openerPlate(
+  image: ArticleImage,
+): { mode: 'bleed' | 'inset'; widthPt: number; heightPt: number } {
+  const bleedWidth = MEDIA_WIDTH_PT
+  const natural = image.width && image.height ? image.height / image.width : 0.618
+
+  // Full bleed needs both the pixels for 522pt and an aspect ratio that does
+  // not turn that width into a plate taller than the page can spare.
+  const canBleed =
+    maxPrintWidthPt(image) >= bleedWidth && bleedWidth * natural <= OPENER_PLATE_HEIGHT_PT
+
+  const widthPt = canBleed
+    ? bleedWidth
+    : plateWidthPt(image, Math.min(MEASURE_PT, maxPrintWidthPt(image)), OPENER_PLATE_HEIGHT_PT)
+
+  return {
+    mode: canBleed ? 'bleed' : 'inset',
+    widthPt: Math.round(widthPt * 10) / 10,
+    heightPt: Math.round(widthPt * natural * 10) / 10,
+  }
+}
+
 function openerHtml(article: Article, anchorId: string): string {
   const hasLead = Boolean(article.lead)
   const classes = ['opener', hasLead ? 'opener--photo' : 'opener--text']
 
-  const figure = article.lead
-    ? `<figure class="opener-figure"><img src="${IMAGE_DIR}/${escapeHtml(
-        imageFileName(article.lead.path),
-      )}" alt="${escapeHtml(article.lead.alt)}"></figure>`
-    : ''
+  let figure = ''
+  if (article.lead) {
+    const plate = openerPlate(article.lead)
+    classes.push(`opener--${plate.mode}`)
+    figure =
+      `<figure class="opener-figure" style="--plate: ${plate.widthPt}pt; --plate-height: ${plate.heightPt}pt">` +
+      `<img src="${IMAGE_DIR}/${escapeHtml(imageFileName(article.lead.path))}" alt="${escapeHtml(
+        article.lead.alt,
+      )}"></figure>`
+  }
 
   const kicker = article.sourceName
     ? `<p class="kicker">${escapeHtml(article.sourceName)}</p>`
@@ -488,7 +649,11 @@ function sourceLineHtml(article: Article): string {
 export function buildArticleSection(entry: ArticleEntry, index = 0): string {
   const { article } = entry
   const anchorId = entry.id ?? `article-${index + 1}`
-  const blocks = article.blocks.map(blockHtml).filter(Boolean).join('\n')
+  const inColumnOnly = figuresStayInColumn(article)
+  const blocks = article.blocks
+    .map((b) => blockHtml(b, inColumnOnly))
+    .filter(Boolean)
+    .join('\n')
   return [
     `<article class="article" data-index="${index + 1}">`,
     openerHtml(article, anchorId),

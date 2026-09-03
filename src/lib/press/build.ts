@@ -58,6 +58,8 @@ export interface BuildResult {
   name: string
   /** Real page count of the finished interior, padded to even. */
   pageCount: number
+  /** Each article's measured length, in the order it was given. */
+  pageCounts: number[]
   toc: TocEntry[]
   preflight: { code: string; detail: string }[]
   outDir: string
@@ -158,7 +160,25 @@ export async function buildIssue(opts: BuildOptions): Promise<BuildResult> {
   }
   const render = (html: string) => renderHtml(html, images)
 
-  const pageCounts = items.map((i) => i.pageCount ?? 1)
+  // Measure every article *now* rather than trusting the count recorded when
+  // it was ingested. The contents page is built from these numbers, so a stale
+  // one prints a magazine whose page references are wrong — which is exactly
+  // what happens the first time a layout change lands, since every count on
+  // disk was measured against the previous stylesheet. An article is rendered
+  // alone here and merged into a continuous document below; both give it the
+  // same length, because every article starts on a fresh page (KTD7).
+  progress(`Measuring ${items.length} article${items.length === 1 ? '' : 's'}`)
+  const pageCounts: number[] = []
+  for (const [i, entry] of entries.entries()) {
+    const measured = await render(
+      buildDocument([buildArticleSection({ article: (entry as { article: Article }).article }, i)], {
+        issueNumber: number,
+        startPage: 1,
+        measurement: true,
+      }),
+    )
+    pageCounts.push(measured.pageCount)
+  }
 
   let name = opts.name?.trim() ?? ''
   if (name) {
@@ -236,9 +256,11 @@ export async function buildIssue(opts: BuildOptions): Promise<BuildResult> {
     pageCount,
     builtAt: new Date().toISOString(),
     preflight,
-    articles: items.map((i) => ({ id: i.id, title: i.title, url: i.url, pageCount: i.pageCount })),
+    // The freshly measured lengths, not the ones that came in: the caller's
+    // copy is what the *previous* layout produced.
+    articles: items.map((i, n) => ({ id: i.id, title: i.title, url: i.url, pageCount: pageCounts[n] })),
   }
   await writeFile(path.join(outDir, 'meta.json'), JSON.stringify(meta, null, 2))
 
-  return { name, pageCount, toc, preflight, outDir }
+  return { name, pageCount, pageCounts, toc, preflight, outDir }
 }
