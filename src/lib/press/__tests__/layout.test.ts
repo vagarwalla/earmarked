@@ -10,7 +10,15 @@ import {
   formatSourceUrl,
   imageFileName,
   isWideFigure,
+  figuresStayInColumn,
+  openerPlate,
   loadImages,
+  maxPrintWidthPt,
+  plateWidthPt,
+  COLUMN_GAP_PT,
+  COLUMN_PT,
+  MEASURE_PT,
+  MIN_PRINT_PPI,
   pdfPageCount,
   pressCss,
   renderArticle,
@@ -169,7 +177,7 @@ describe('images', () => {
     expect(isWideFigure(image({ orientation: 'portrait' }))).toBe(false)
 
     const html = buildArticleHtml(article({ blocks: [{ type: 'figure', image: landscape }] }), OPTS)
-    const figure = /<figure class="([^"]*)">([\s\S]*?)<\/figure>/.exec(html)
+    const figure = /<figure class="([^"]*)"[^>]*>([\s\S]*?)<\/figure>/.exec(html)
     expect(figure?.[1]).toContain('figure--wide')
     expect(figure?.[2]).toContain('<figcaption>The valley at dusk.</figcaption>')
 
@@ -197,6 +205,94 @@ describe('images', () => {
       { render, loadImage },
     )
     expect(jobs[0].images.size).toBe(2)
+  })
+
+  it('states the column gap once — press.css and render.ts must agree', () => {
+    const declared = /--column-gap:\s*(\d+(?:\.\d+)?)pt/.exec(pressCss())?.[1]
+    expect(Number(declared)).toBe(COLUMN_GAP_PT)
+    expect(MEASURE_PT).toBe(504 - TRIM_MARGIN_PT.outer - TRIM_MARGIN_PT.inner)
+    expect(COLUMN_PT).toBe((MEASURE_PT - COLUMN_GAP_PT) / 2)
+  })
+
+  it('never enlarges a plate past the resolution it has', () => {
+    // A Substack thumbnail: 424px is 203pt at the 150 PPI floor, so it prints
+    // at 203pt and not across the 384pt measure.
+    const thumb = image({ width: 424, height: 283 })
+    expect(Math.round(maxPrintWidthPt(thumb))).toBe(Math.round((424 / MIN_PRINT_PPI) * 72))
+    expect(isWideFigure(thumb)).toBe(false)
+    expect(plateWidthPt(thumb, MEASURE_PT)).toBeLessThan(MEASURE_PT)
+
+    // A real photograph has the pixels and takes everything it is offered.
+    const plate = image({ width: 2400, height: 1350 })
+    expect(isWideFigure(plate)).toBe(true)
+    expect(plateWidthPt(plate, MEASURE_PT)).toBe(MEASURE_PT)
+    expect(plateWidthPt(plate, COLUMN_PT)).toBe(COLUMN_PT)
+
+    // An unmeasurable image is given the benefit of the doubt, not shrunk.
+    expect(maxPrintWidthPt(image({ width: null, height: null }))).toBe(Infinity)
+    expect(plateWidthPt(image({ width: null, height: null }), COLUMN_PT)).toBe(COLUMN_PT)
+  })
+
+  it('holds a tall plate back so it cannot be clipped by the page', () => {
+    // 800x4000 would stand 915pt tall at the measure — taller than the page.
+    const tall = image({ width: 800, height: 4000, orientation: 'portrait' })
+    const width = plateWidthPt(tall, MEASURE_PT)
+    expect((width * 4000) / 800).toBeLessThanOrEqual(470.5)
+  })
+
+  it('writes the plate width into the figure, in points', () => {
+    const html = buildArticleHtml(
+      article({ blocks: [{ type: 'figure', image: image({ width: 424, height: 283 }) }] }),
+      OPTS,
+    )
+    const style = / style="--plate: (\d+(?:\.\d+)?)pt"/.exec(html)
+    expect(style).not.toBeNull()
+    // Not wide enough to span, so it is offered a column — and 424px can
+    // carry a full column at the floor, so it takes all of it.
+    expect(Number(style?.[1])).toBe(COLUMN_PT)
+
+    // The same figure at 300px can only carry 144pt, and is set that wide.
+    const narrow = buildArticleHtml(
+      article({ blocks: [{ type: 'figure', image: image({ width: 300, height: 200 }) }] }),
+      OPTS,
+    )
+    expect(Number(/ style="--plate: (\d+(?:\.\d+)?)pt"/.exec(narrow)?.[1])).toBeCloseTo(
+      (300 / MIN_PRINT_PPI) * 72,
+      1,
+    )
+  })
+
+  it('keeps every figure in-column when an article is mostly pictures', () => {
+    const slides = (n: number): ArticleBlock[] => {
+      const blocks: ArticleBlock[] = []
+      for (let i = 0; i < n; i++) {
+        blocks.push({ type: 'para', html: 'A sentence of narration for this slide.' })
+        blocks.push({ type: 'figure', image: image({ path: `items/a/images/${i}.jpg`, width: 2400, height: 1350 }) })
+      }
+      return blocks
+    }
+
+    const deck = article({ blocks: slides(20) })
+    expect(figuresStayInColumn(deck)).toBe(true)
+    // The plates would otherwise span: they have the pixels for it.
+    expect(isWideFigure(image({ width: 2400, height: 1350 }))).toBe(true)
+    expect(buildArticleSection({ article: deck })).not.toContain('figure--wide')
+
+    // An essay with a page of prose between plates still gets them.
+    const essay = article({
+      blocks: [
+        ...paragraphs(30),
+        { type: 'figure', image: image({ width: 2400, height: 1350 }) },
+        ...paragraphs(30),
+        { type: 'figure', image: image({ path: 'items/a/images/2.jpg', width: 2400, height: 1350 }) },
+        ...paragraphs(30),
+        { type: 'figure', image: image({ path: 'items/a/images/3.jpg', width: 2400, height: 1350 }) },
+        ...paragraphs(30),
+        { type: 'figure', image: image({ path: 'items/a/images/4.jpg', width: 2400, height: 1350 }) },
+      ],
+    })
+    expect(figuresStayInColumn(essay)).toBe(false)
+    expect(buildArticleSection({ article: essay })).toContain('figure--wide')
   })
 
   it('never lets an untrusted storage path escape the images directory', () => {
@@ -232,6 +328,33 @@ describe('article opener', () => {
     const style = documentStyle(OPTS)
     expect(style).toContain('@page opener:left { margin: 0 0 ')
     expect(style).toContain('@page opener:right { margin: 0 0 ')
+  })
+
+  it('sizes the opener plate to the photograph, and never crops it', () => {
+    // A plate with the pixels for the trim runs to it, at its own aspect ratio.
+    const big = openerPlate(image({ width: 2400, height: 1500 }))
+    expect(big.mode).toBe('bleed')
+    expect(big.widthPt).toBe(MEDIA_WIDTH_PT)
+    expect(big.heightPt).toBeCloseTo((MEDIA_WIDTH_PT * 1500) / 2400, 0)
+
+    // A 350px slide has no business running 522pt wide: it is inset instead,
+    // at the width its own pixels support, with nothing cropped off the edges.
+    const small = openerPlate(image({ width: 350, height: 218 }))
+    expect(small.mode).toBe('inset')
+    expect(small.widthPt).toBeCloseTo((350 / MIN_PRINT_PPI) * 72, 1)
+    expect(small.heightPt).toBeCloseTo((small.widthPt * 218) / 350, 1)
+
+    // A near-square lead would stand taller than the page allows at full
+    // bleed, so it is inset rather than cropped into a band.
+    expect(openerPlate(image({ width: 2400, height: 2400 })).mode).toBe('inset')
+
+    const html = buildArticleHtml(article({ lead: image({ width: 350, height: 218 }) }), OPTS)
+    expect(html).toContain('opener--inset')
+    expect(html).toMatch(/class="opener-figure" style="--plate: [\d.]+pt; --plate-height: [\d.]+pt"/)
+
+    // Nothing in the stylesheet may crop the lead photograph.
+    const openerRules = pressCss().slice(pressCss().indexOf('.opener-figure'))
+    expect(openerRules.slice(0, 400)).not.toContain('object-fit: cover')
   })
 
   it('degrades to a text-only opener when the lead image is missing', () => {
@@ -380,7 +503,19 @@ describe('escaping untrusted article content', () => {
     // Every attribute on every real tag is one this template puts there — so
     // no event handler and no injected `src` survived. (The *escaped text* of
     // one, sitting harmlessly inside a quoted value or a text node, is fine.)
-    const allowed = new Set(['class', 'id', 'src', 'alt', 'href', 'lang', 'charset', 'rel'])
+    const allowed = new Set([
+      'class',
+      'id',
+      'src',
+      'alt',
+      'href',
+      'lang',
+      'charset',
+      'rel',
+      // Plate geometry, computed from the image's own pixel count. Its value
+      // is pinned to numbers below, so no article content can reach it.
+      'style',
+    ])
     for (const tag of html.match(/<[a-z][^>]*>/gi) ?? []) {
       // Blank out the quoted values first: escaped content inside them is inert.
       const bare = tag.replace(/"[^"]*"/g, '""')
@@ -388,6 +523,11 @@ describe('escaping untrusted article content', () => {
       for (const attr of bare.matchAll(/\s([a-zA-Z-]+)\s*=/g)) {
         expect(allowed.has(attr[1]) || attr[1].startsWith('data-')).toBe(true)
       }
+    }
+    // Every `style` this template writes is custom properties set to point
+    // measurements — never a declaration, never anything from the article.
+    for (const value of html.matchAll(/ style="([^"]*)"/g)) {
+      expect(value[1]).toMatch(/^(?:--[a-z-]+: \d+(?:\.\d+)?pt;? ?)+$/)
     }
     expect(html).toContain('&lt;script&gt;')
     expect(html).toContain('&quot;quoted&quot;')

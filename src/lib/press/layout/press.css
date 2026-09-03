@@ -140,9 +140,15 @@ p {
   break-inside: avoid;
 }
 
+/* The box is sized by render.ts from the photograph's own pixel count and
+   aspect ratio — `--plate` wide, `--plate-height` tall — so it is exactly the
+   shape of the picture inside it. Nothing here crops: a lead image is often a
+   slide or a book jacket with words running to its edges, and `object-fit:
+   cover` used to shave those words off. */
 .opener-figure {
   margin: 0;
-  height: 430pt;
+  width: var(--plate, 100%);
+  height: var(--plate-height, auto);
   overflow: hidden;
 }
 
@@ -150,7 +156,29 @@ p {
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+}
+
+/* A plate without the resolution to run to the trim is inset into the measure
+   instead, at whatever width its pixels support, with the text block's own
+   left margin so it lines up with the title beneath it.
+
+   Small plate, ordinary title, and then most of a page left over — so the
+   whole group is centred down the page and reads as a title page with air
+   around it, rather than as a photograph that fell off the top. The height it
+   centres in comes from documentStyle(), which owns the page geometry. */
+.opener--inset {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.opener--inset .opener-figure {
+  margin: 0 58pt 0 58pt;
+  max-width: calc(100% - 116pt);
+}
+
+.opener--inset .opener-text {
+  padding-top: 26pt;
 }
 
 .opener-text {
@@ -335,9 +363,17 @@ blockquote cite {
 
 /* ── Figures ──────────────────────────────────────────────────────────────── */
 
+/* `--plate` is written per figure by render.ts: the widest this particular
+ * image may print without dropping under 150 PPI, further limited so its own
+ * aspect ratio still fits the page. A picture with the pixels fills its
+ * container as before; one without simply sets smaller and centres, which is
+ * the whole fix for the blocky plates in Issues 5-9. */
 figure.figure {
   margin: 0 0 14pt;
   break-inside: avoid;
+  width: var(--plate, 100%);
+  max-width: 100%;
+  margin-inline: auto;
 }
 
 figure.figure img {
@@ -347,10 +383,16 @@ figure.figure img {
 }
 
 /* Landscape plates get the full measure, across both columns. This is the
- * rule WeasyPrint could not do and the reason for the Chromium engine. */
+ * rule WeasyPrint could not do and the reason for the Chromium engine.
+ *
+ * Only plates that can carry 384pt at 150 PPI get here, and only in articles
+ * with a page of prose between them — see `isWideFigure` and
+ * `figuresStayInColumn` in render.ts. Every spanner is a break in the column
+ * flow, so a picture-dense piece keeps its figures in-column and the two
+ * columns of text run unbroken down the page. */
 .figure--wide {
   column-span: all;
-  margin: 16pt 0 18pt;
+  margin: 16pt auto 18pt;
 }
 
 .figure--portrait,

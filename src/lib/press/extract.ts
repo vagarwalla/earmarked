@@ -21,7 +21,12 @@ import { JSDOM, VirtualConsole } from 'jsdom'
 import { Readability } from '@mozilla/readability'
 import Defuddle from 'defuddle'
 import { safeFetchText } from './fetch'
-import { fetchAndStoreImages, type CandidateImage, type StoredImage } from './images'
+import {
+  fetchAndStoreImages,
+  looksLikeImageUrl,
+  type CandidateImage,
+  type StoredImage,
+} from './images'
 import { collectOutboundLinks, type OutboundLink } from './linkpost'
 import type { Article, ArticleBlock, ArticleFootnote, ArticleImage } from './types'
 
@@ -432,7 +437,12 @@ export function toBlocks(root: Element): { blocks: ArticleBlock[]; images: Candi
     const src = img.getAttribute('src') ?? ''
     if (!/^https?:\/\//i.test(src) || seenImages.has(src)) return null
     seenImages.add(src)
-    images.push({ url: src, alt: img.getAttribute('alt') || null, caption })
+    images.push({
+      url: src,
+      alt: img.getAttribute('alt') || null,
+      caption,
+      alternates: largerVersionsOf(img),
+    })
     return images.length - 1
   }
 
@@ -505,6 +515,56 @@ export function toBlocks(root: Element): { blocks: ArticleBlock[]; images: Candi
 
   walk(root)
   return { blocks, images: images }
+}
+
+/**
+ * Bigger copies of this `<img>` that the markup itself points at, biggest
+ * first. Three places hide one:
+ *
+ *   - `srcset`, whose widest entry is usually several times the `src`;
+ *   - a `data-` attribute, where lazy-loaders and WordPress park the original;
+ *   - the `<a>` around the picture, when a thumbnail links to the full plate.
+ *     This is how idlewords.com serves the Superintelligence slides: 350px in
+ *     the page, 1920px one click away, and Issue 9 printed the 350.
+ *
+ * Everything returned is checked to look like an image file, so a lightbox
+ * link or an article permalink is not mistaken for a photograph.
+ */
+function largerVersionsOf(img: Element): string[] {
+  const out: string[] = []
+  const add = (url: string | null | undefined) => {
+    const u = (url ?? '').trim()
+    if (looksLikeImageUrl(u) && !out.includes(u)) out.push(u)
+  }
+
+  // `srcset`: "url 1024w, url 2048w" (or "url 2x"). Widest descriptor first.
+  for (const attr of ['srcset', 'data-srcset']) {
+    const set = img.getAttribute(attr)
+    if (!set) continue
+    const entries = set
+      .split(',')
+      .map((part) => part.trim().split(/\s+/))
+      .filter((bits) => bits[0])
+      .map((bits) => ({ url: bits[0], weight: Number.parseFloat(bits[1] ?? '1') || 1 }))
+      .sort((a, b) => b.weight - a.weight)
+    for (const e of entries) add(e.url)
+  }
+
+  for (const attr of ['data-large-file', 'data-full-src', 'data-original', 'data-src']) {
+    add(img.getAttribute(attr))
+  }
+
+  // A thumbnail wrapped in a link to its own full-size file. Two levels up
+  // covers `<a><img></a>` and `<a><picture><img></picture></a>`.
+  let node: Element | null = img.parentElement
+  for (let depth = 0; node && depth < 2; depth++, node = node.parentElement) {
+    if (node.tagName.toLowerCase() === 'a') {
+      add(node.getAttribute('href'))
+      break
+    }
+  }
+
+  return out
 }
 
 /**

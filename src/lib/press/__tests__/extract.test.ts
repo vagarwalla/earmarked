@@ -28,6 +28,8 @@ import {
 } from '../extract'
 import {
   looksLikeTrackingPixel,
+  largerImageUrls,
+  imageIdentity,
   orientationOf,
   fetchAndStoreImage,
   fetchAndStoreImages,
@@ -601,6 +603,93 @@ describe('orientationOf', () => {
   })
 })
 
+describe('largerImageUrls', () => {
+  it('asks Substack for the size it actually has', () => {
+    const url =
+      'https://substackcdn.com/image/fetch/$s_!m35K!,w_424,c_limit,f_webp,q_auto:good/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fabc_1024x1024.png'
+    const bigger = largerImageUrls(url)
+    expect(bigger[0]).toContain('w_2100')
+    expect(bigger[0]).not.toContain('w_424')
+    // And the uploaded original, decoded out of the last path segment.
+    expect(bigger).toContain(
+      'https://substack-post-media.s3.amazonaws.com/public/images/abc_1024x1024.png',
+    )
+  })
+
+  it('drops a WordPress crop, in the query and in the filename', () => {
+    expect(largerImageUrls('https://blog.test/wp-content/uploads/x.jpg?w=640')).toContain(
+      'https://blog.test/wp-content/uploads/x.jpg',
+    )
+    expect(largerImageUrls('https://i0.wp.com/blog.test/x.png?w=723&ssl=1')).toContain(
+      'https://i0.wp.com/blog.test/x.png',
+    )
+    expect(largerImageUrls('https://blog.test/uploads/photo-1024x539.jpg')).toContain(
+      'https://blog.test/uploads/photo.jpg',
+    )
+  })
+
+  it('offers nothing it cannot justify, and never the URL it was given', () => {
+    const url = 'https://undark.org/wp-content/uploads/2017/10/adminvac.jpg'
+    expect(largerImageUrls(url)).toEqual([])
+    for (const guess of largerImageUrls('https://blog.test/x.jpg?w=1')) {
+      expect(guess).not.toBe('https://blog.test/x.jpg?w=1')
+    }
+  })
+})
+
+describe('imageIdentity', () => {
+  it('sees one photograph behind two sizes of the same Substack URL', () => {
+    const at = (w: number, fmt: string) =>
+      `https://substackcdn.com/image/fetch/$s_!U0Lm!,w_${w},c_limit,f_${fmt},q_auto:good/` +
+      'https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fx_1024x768.png'
+    // What the newsletter sends, and what the live post serves.
+    expect(imageIdentity(at(424, 'webp'))).toBe(imageIdentity(at(1456, 'auto')))
+    expect(imageIdentity(at(424, 'webp'))).toBe(
+      'https://substack-post-media.s3.amazonaws.com/public/images/x_1024x768.png',
+    )
+  })
+
+  it('sees through a WordPress crop, in the query and in the filename', () => {
+    expect(imageIdentity('https://blog.test/x.jpg?w=640')).toBe(imageIdentity('https://blog.test/x.jpg'))
+    expect(imageIdentity('https://blog.test/x-1024x539.jpg')).toBe(imageIdentity('https://blog.test/x.jpg'))
+  })
+
+  it('keeps two genuinely different pictures apart', () => {
+    expect(imageIdentity('https://blog.test/a.jpg?w=640')).not.toBe(
+      imageIdentity('https://blog.test/b.jpg?w=640'),
+    )
+  })
+})
+
+describe('largerVersionsOf (through toBlocks)', () => {
+  const candidates = (html: string) =>
+    toBlocks(parseHtml(`<body><div id="r">${html}</div></body>`).window.document.getElementById('r')!)
+      .images
+
+  it('takes the full plate a thumbnail links to', () => {
+    const [c] = candidates(
+      '<p><a href="https://static.pinboard.in/si/si.001.jpg">' +
+        '<img src="https://static.pinboard.in/si/thumbs/si.001.thumb.jpg"></a></p>',
+    )
+    expect(c.alternates).toEqual(['https://static.pinboard.in/si/si.001.jpg'])
+  })
+
+  it('takes the widest srcset entry first, and ignores a link to a page', () => {
+    const [c] = candidates(
+      '<p><a href="https://blog.test/post"><img src="https://cdn.test/s.jpg" ' +
+        'srcset="https://cdn.test/m.jpg 800w, https://cdn.test/l.jpg 2000w"></a></p>',
+    )
+    expect(c.alternates).toEqual(['https://cdn.test/l.jpg', 'https://cdn.test/m.jpg'])
+  })
+
+  it('takes a lazy-loader original out of a data attribute', () => {
+    const [c] = candidates(
+      '<p><img src="https://cdn.test/tiny.jpg" data-large-file="https://cdn.test/full.jpg"></p>',
+    )
+    expect(c.alternates).toContain('https://cdn.test/full.jpg')
+  })
+})
+
 describe('fetchAndStoreImage', () => {
   const png = (w: number, h: number) => {
     // A real, decodable PNG so sharp reads genuine dimensions.
@@ -629,6 +718,55 @@ describe('fetchAndStoreImage', () => {
     expect(image!.width).toBe(1600)
     expect(image!.orientation).toBe('landscape')
     expect(store).toHaveBeenCalledOnce()
+  })
+
+  it('takes the biggest version offered, and falls back when a guess 404s', async () => {
+    const big = new Uint8Array(await png(1920, 1200))
+    const small = new Uint8Array(await png(350, 218))
+    const asked: string[] = []
+    const image = await fetchAndStoreImage(
+      'item1',
+      {
+        url: 'https://static.pinboard.in/si/thumbs/si.001.thumb.jpg',
+        alt: null,
+        caption: null,
+        alternates: ['https://static.pinboard.in/si/gone.jpg', 'https://static.pinboard.in/si/si.001.jpg'],
+      },
+      0,
+      {
+        fetchBytes: (async (url: string) => {
+          asked.push(url)
+          if (url.endsWith('gone.jpg')) throw new Error('fetch returned HTTP 404')
+          const bytes = url.endsWith('si.001.jpg') ? big : small
+          return { bytes, url, status: 200, contentType: 'image/png' }
+        }) as never,
+        store: (async (p: string) => p) as never,
+      },
+    )
+
+    expect(asked[0]).toContain('gone.jpg')
+    expect(image!.width).toBe(1920)
+    expect(image!.sourceUrl).toBe('https://static.pinboard.in/si/si.001.jpg')
+    // It stopped as soon as it had one: the thumbnail was never downloaded.
+    expect(asked).not.toContain('https://static.pinboard.in/si/thumbs/si.001.thumb.jpg')
+  })
+
+  it('falls back to the URL the page displayed when every guess fails', async () => {
+    const bytes = new Uint8Array(await png(1600, 1000))
+    const image = await fetchAndStoreImage(
+      'item1',
+      { url: 'https://cdn.test/a.jpg?w=640', alt: null, caption: null },
+      0,
+      {
+        fetchBytes: (async (url: string) => {
+          if (!url.includes('?w=640')) throw new Error('fetch returned HTTP 403')
+          return { bytes, url, status: 200, contentType: 'image/png' }
+        }) as never,
+        store: (async (p: string) => p) as never,
+      },
+    )
+    expect(image!.width).toBe(1600)
+    expect(image!.sourceUrl).toBe('https://cdn.test/a.jpg?w=640')
   })
 
   it('drops an image too small to be content', async () => {
