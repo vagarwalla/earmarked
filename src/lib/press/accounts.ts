@@ -82,30 +82,64 @@ export async function accountByEmail(
 }
 
 /**
- * Whose press the caller is looking at.
+ * The owner's account, whoever is looking.
  *
- * The seam. Today there is one account and this returns it; when sign-in lands
- * this reads the session and returns the account attached to it, and every
- * caller is already written to expect an answer that varies.
+ * For the two paths that act on V's behalf with no session to read: the
+ * inbound email webhook, whose allowlist is hers, and the Raindrop poll, which
+ * runs on her token. Everything a person drives goes through `currentAccount`.
  *
- * Throws rather than returning null when the account is missing, because the
- * only way that happens is migration 018 not having been applied — and a
- * workbench that silently shows an empty pool in that case is a worse bug than
- * one that says what is wrong.
+ * Throws rather than returning null, because the only way it is missing is
+ * migration 018 not having been applied — and a workbench that silently shows
+ * an empty pool in that case is a worse bug than one that says what is wrong.
  */
-export async function currentAccount(
+export async function ownerAccount(
   db: SupabaseClient = pressDbAsService(),
 ): Promise<PressAccount> {
   const account = await accountById(OWNER_ACCOUNT_ID, db)
   if (!account) {
-    throw new Error(
-      'press: no owner account — run `npm run db:apply -- 018_press_ownership.sql`',
-    )
+    throw new Error('press: no owner account — run `npm run db:apply -- 018_press_ownership.sql`')
   }
   return account
 }
 
+/** A sign-in that got as far as a page it has no account for. */
+export class NotInvitedError extends Error {
+  constructor() {
+    super('That address is not on the list for this press.')
+  }
+}
+
+/** Nobody is signed in. Distinct from being signed in and uninvited. */
+export class NotSignedInError extends Error {
+  constructor() {
+    super('Sign in to use press.')
+  }
+}
+
+/**
+ * Whose press the caller is looking at.
+ *
+ * The seam every route and page goes through. It throws rather than returning
+ * null in both failure cases, and they are different failures: one is answered
+ * with a sign-in page and the other with an explanation, and collapsing them
+ * would send an invited person who let their session lapse to a page telling
+ * them they are not welcome.
+ */
+export async function currentAccount(): Promise<PressAccount> {
+  // Imported here rather than at the top: `auth.ts` reaches for `next/headers`,
+  // which does not exist in the worker or in a script, and both of those call
+  // `ownerAccount` from this file.
+  const { signedInUser, attachAccount } = await import('./auth')
+
+  const user = await signedInUser()
+  if (!user) throw new NotSignedInError()
+
+  const account = await attachAccount(user)
+  if (!account) throw new NotInvitedError()
+  return account
+}
+
 /** The id alone, for the many callers that only need it to scope a client. */
-export async function currentOwnerId(db?: SupabaseClient): Promise<string> {
-  return (await currentAccount(db)).id
+export async function currentOwnerId(): Promise<string> {
+  return (await currentAccount()).id
 }

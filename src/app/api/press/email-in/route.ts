@@ -9,7 +9,7 @@
 import { NextResponse } from 'next/server'
 import { ingestEmail, secretMatches, EMAIL_WEBHOOK_HEADER } from '@/lib/press/email'
 import { loadSettings } from '@/lib/press/settings'
-import { currentOwnerId } from '@/lib/press/accounts'
+import { ownerAccount } from '@/lib/press/accounts'
 import { pressDb } from '@/lib/press/db'
 
 // Parsing MIME and normalizing an attached PDF is not edge work.
@@ -44,7 +44,7 @@ export async function POST(request: Request) {
     // webhook authenticated by a shared secret, with nobody signed in. What
     // arrives is V's mail — the allowlist is hers — and `ingestEmail` stamps
     // the owner onto what it stores.
-    const result = await ingestEmail(raw, { settings, db: pressDb(await currentOwnerId()) })
+    const result = await ingestEmail(raw, { settings, db: pressDb((await ownerAccount()).id) })
     return NextResponse.json({
       kind: result.kind,
       relayed: result.relayed,

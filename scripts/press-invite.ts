@@ -7,9 +7,15 @@
  *
  * This exists as a command rather than a form because addresses do not belong
  * in this repo — it is public, and migration 018 seeds the owner's account with
- * no email for that reason. An invitation is a row: it can be written before
- * the person has ever signed in, and their first magic link attaches their
- * Supabase Auth user to the row that was already waiting.
+ * no email for that reason.
+ *
+ * An invitation is two things written together: a `press_accounts` row, and
+ * the Supabase Auth user it will be signed in as. Creating the auth user here
+ * rather than at first sign-in is what lets the project run with signups
+ * disabled — otherwise anyone holding the anon key (it is in the page) could
+ * ask GoTrue for a magic link to an address of their choosing, and have this
+ * project send it. With signups off, only an address that has been through
+ * this command can ever receive one.
  *
  * Nobody gets `can_order`. Ordering bills the one Lulu account on file, which
  * is V's; a friend's finish line is the two PDFs (plan §6).
@@ -56,13 +62,47 @@ async function list(): Promise<void> {
 }
 
 async function setOwnerEmail(email: string): Promise<void> {
+  const authUserId = await authUserFor(email.trim())
   const db = pressDbAsService()
   const { error } = await db
     .from('press_accounts')
-    .update({ email: email.trim(), updated_at: new Date().toISOString() })
+    .update({
+      email: email.trim(),
+      auth_user_id: authUserId,
+      updated_at: new Date().toISOString(),
+    })
     .eq('id', OWNER_ACCOUNT_ID)
   if (error) throw new Error(error.message)
   console.log(`The owner account will accept sign-ins from ${email}.`)
+}
+
+/**
+ * The Supabase user an invitation will be signed in as.
+ *
+ * Confirmed on creation: the magic link is itself the proof they read mail at
+ * the address, so a separate confirmation step would be a second email saying
+ * the same thing. Returns the existing user's id when there already is one,
+ * which is what makes re-running this safe.
+ */
+async function authUserFor(email: string): Promise<string> {
+  const db = pressDbAsService()
+
+  const { data: created, error } = await db.auth.admin.createUser({
+    email,
+    email_confirm: true,
+  })
+  if (!error && created.user) return created.user.id
+
+  // Already registered — the owner signing in before being invited by name,
+  // or this command run twice. Find them rather than failing.
+  if (error && !/already been registered|already exists/i.test(error.message)) {
+    throw new Error(`could not create the sign-in for ${email}: ${error.message}`)
+  }
+  const { data: list, error: listError } = await db.auth.admin.listUsers({ perPage: 200 })
+  if (listError) throw new Error(listError.message)
+  const found = list.users.find((u) => u.email?.toLowerCase() === email.toLowerCase())
+  if (!found) throw new Error(`${email} is registered but could not be found`)
+  return found.id
 }
 
 async function invite(email: string, handle: string, displayName: string | null): Promise<void> {
@@ -77,11 +117,14 @@ async function invite(email: string, handle: string, displayName: string | null)
   if (await accountByEmail(email)) usage(`${email} already has an account.`)
   if (await accountByHandle(handle)) usage(`The handle "${handle}" is taken.`)
 
+  const authUserId = await authUserFor(email.trim())
+
   const db = pressDbAsService()
   const { error } = await db.from('press_accounts').insert({
     email: email.trim(),
     handle: handle.toLowerCase(),
     display_name: displayName,
+    auth_user_id: authUserId,
     can_order: false,
   })
   if (error) throw new Error(error.message)

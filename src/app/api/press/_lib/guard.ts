@@ -9,7 +9,7 @@
 
 import { NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { currentOwnerId } from '@/lib/press/accounts'
+import { NotInvitedError, NotSignedInError, currentOwnerId } from '@/lib/press/accounts'
 import { pressDb } from '@/lib/press/db'
 import { pressUiEnabled } from '@/lib/press/local'
 import { WorkbenchError } from '@/lib/press/workbench'
@@ -28,6 +28,16 @@ export const NOT_FOUND = () => new NextResponse('not found', { status: 404 })
  * broken pipeline looks fine for a week.
  */
 export function asResponse(err: unknown): NextResponse {
+  // The middleware turns most of these away before they arrive, but not all:
+  // a session can lapse between the two, and an account can be removed while
+  // one is open. 401 and 403 are different answers — one means sign in again,
+  // the other means signing in again will not help.
+  if (err instanceof NotSignedInError) {
+    return NextResponse.json({ error: err.message }, { status: 401 })
+  }
+  if (err instanceof NotInvitedError) {
+    return NextResponse.json({ error: err.message }, { status: 403 })
+  }
   if (err instanceof WorkbenchError) {
     return NextResponse.json({ error: err.message }, { status: 409 })
   }

@@ -19,15 +19,16 @@
  * See docs/plans/2026-08-31-003-feat-press-workbench-plan.md.
  */
 
-import { notFound } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import { pressUiEnabled } from '@/lib/press/local'
-import { currentAccount } from '@/lib/press/accounts'
+import { NotInvitedError, NotSignedInError, currentAccount } from '@/lib/press/accounts'
 import { itemsForIssue, pressDb } from '@/lib/press/db'
 import { itemsInState, listIssueRows, poolItems } from '@/lib/press/workbench'
 import { loadEffectiveSettings, readSettingsRow, SETTINGS_DEFAULTS } from '@/lib/press/settings-db'
 import { listOrders, type OrderWithIssue } from '@/lib/press/orders'
 import { loadSettings } from '@/lib/press/settings'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import SignOut from './SignOut'
 import { Workbench, type PoolItem, type WorkbenchIssue } from './Workbench'
 import type { PressItem } from '@/lib/press/types'
 
@@ -70,10 +71,18 @@ function printCounts(orders: OrderWithIssue[] | null): Map<number, number> {
 export default async function PressPage() {
   if (!pressUiEnabled()) notFound()
 
-  // Whose workbench this is. One account today; the moment sign-in lands this
-  // is the signed-in one and nothing below changes, because everything below
-  // already asks.
-  const account = await currentAccount()
+  // Whose workbench this is. The middleware has already turned away anyone
+  // with no session, but not everyone with a session has a press: an
+  // invitation can be withdrawn while a tab is open, and that is a different
+  // answer from "sign in".
+  let account
+  try {
+    account = await currentAccount()
+  } catch (err) {
+    if (err instanceof NotSignedInError) redirect('/press/sign-in')
+    if (err instanceof NotInvitedError) redirect('/press/sign-in?error=not-invited')
+    throw err
+  }
   const db = pressDb(account.id)
 
   const rows = await listIssueRows(db)
@@ -130,7 +139,15 @@ export default async function PressPage() {
     <main className="mx-auto max-w-[1600px] px-4 py-6">
       <header className="mb-5 flex items-baseline justify-between gap-4">
         <h1 className="font-serif text-2xl">Saved reading, laid out for print.</h1>
-        <ThemeToggle />
+        <div className="flex items-center gap-3">
+          {/* Whose press this is, said out loud. With more than one account it
+              is the difference between an empty pool and somebody else's. */}
+          <span className="text-muted-foreground hidden text-sm sm:inline">
+            {account.display_name ?? `@${account.handle}`}
+          </span>
+          <SignOut />
+          <ThemeToggle />
+        </div>
       </header>
 
       <Workbench
