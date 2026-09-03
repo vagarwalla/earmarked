@@ -73,7 +73,7 @@ export function PoolPanel({
       const body = await readJson(res)
       if (!res.ok) onError(body.error ?? 'That did not work.')
       else {
-        onNote(action === 'retry' ? 'Queued for another go.' : 'Back in the pool.')
+        onNote(action === 'retry' ? 'Queued for another try.' : 'Back in the pool.')
         onRefresh()
       }
     } finally {
@@ -95,7 +95,7 @@ export function PoolPanel({
       const body = await readJson<{ warning: string | null }>(res)
       if (!res.ok) onError(body.error ?? 'Could not delete it.')
       else {
-        onNote(body.warning ?? 'Deleted. The raindrop is in “Not printing”.')
+        onNote(body.warning ?? 'Deleted. The raindrop moved to “Not printing”.')
         onRefresh()
       }
     } finally {
@@ -206,9 +206,9 @@ export function PoolPanel({
             </h3>
             <p className="mt-2 text-sm">“{confirming.title}”</p>
             <p className="text-muted-foreground mt-3 text-xs">
-              It leaves the pool permanently, and re-saving the same link will not bring it back. The
-              raindrop moves to a <span className="font-medium">Not printing</span> collection, which is
-              where to find it if you change your mind.
+              It leaves the pool for good, and saving the same link again will not bring it back. The
+              raindrop moves to your <span className="font-medium">Not printing</span> collection, which
+              is where to find it if you change your mind.
             </p>
             <div className="mt-5 flex justify-end gap-2">
               <Button size="lg" variant="outline" onClick={() => setConfirming(null)}>

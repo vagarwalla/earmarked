@@ -29,7 +29,7 @@ const SAID: Record<string, string> = {
   ordered: 'ordered',
   'already-ordered': 'already ordered — nothing was charged twice',
   rejected: 'refused by Lulu',
-  'not-composed': 'not composed, so it was not sent',
+  'not-composed': 'not built, so it was not sent',
   'not-configured': 'not sent — the order could not be set up',
 }
 

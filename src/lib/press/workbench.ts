@@ -276,16 +276,16 @@ export function orderBlockers(
   const pages = issue.page_total || items.reduce((n, i) => n + (i.page_count ?? 0), 0)
   const blockers: string[] = []
 
-  if (issue.state === 'open') blockers.push('Lock the issue first — only a locked issue can be printed.')
+  if (issue.state === 'open') blockers.push('Lock the issue first. Only a locked issue can be printed.')
   if (!issue.interior_path || !issue.cover_path) blockers.push('The issue has not been built.')
   if (pages < opts.minPages) {
-    blockers.push(`Lulu will not perfect-bind under ${opts.minPages} pages; this issue is ${pages}.`)
+    blockers.push(`Too short to bind: ${pages} pages, and Lulu needs ${opts.minPages}.`)
   }
-  if (!opts.hasAddress) blockers.push('No complete shipping address — fill one in under Settings.')
-  if (!opts.hasEmail) blockers.push('No email on file to send the approval link to.')
+  if (!opts.hasAddress) blockers.push('No complete shipping address. Add one under Settings.')
+  if (!opts.hasEmail) blockers.push('No email on file for the approval link.')
   if (opts.openOrder) blockers.push('An order for this issue is already in progress.')
   if (!opts.orderingEnabled) {
-    blockers.push('Ordering is off. Set PRESS_ORDER_ENABLED=1 to allow a real order.')
+    blockers.push('Ordering is off. Set PRESS_ORDER_ENABLED=1 to turn it on.')
   }
 
   return { blockers, pages }

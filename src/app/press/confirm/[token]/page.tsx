@@ -17,7 +17,7 @@ export const dynamic = 'force-dynamic'
 const COPY: Record<string, { title: string; body: string; cta: string }> = {
   approve: {
     title: 'Print this issue?',
-    body: 'This places a single-copy order with Lulu and mails it to you. It cannot be undone once the printer picks it up.',
+    body: 'This orders one copy from Lulu and posts it to you. It cannot be undone once the printer starts.',
     cta: 'Print it',
   },
   /**
@@ -26,17 +26,17 @@ const COPY: Record<string, { title: string; body: string; cta: string }> = {
    */
   'approve-bundle': {
     title: 'Print these issues?',
-    body: 'This places ONE order with Lulu carrying all of them in a single parcel — which is what makes it cheaper than ordering them one at a time. It cannot be undone once the printer picks it up.',
+    body: 'This sends ONE order to Lulu with all of them in one parcel, which is what makes it cheaper than ordering them one at a time. It cannot be undone once the printer starts.',
     cta: 'Print them',
   },
   skip: {
     title: 'Skip this issue?',
-    body: 'Every article goes back into the issue that is currently filling. Nothing is lost and nothing is printed.',
+    body: 'Every article goes back to the issue that is filling now. Nothing is lost and nothing is printed.',
     cta: 'Skip it',
   },
   drop: {
     title: 'Drop this article?',
-    body: 'It leaves this issue and will not be printed. The issue is re-composed and a fresh approval email follows.',
+    body: 'It leaves this issue and will not be printed. The issue is rebuilt and a new approval email follows.',
     cta: 'Drop it',
   },
   preview: {
@@ -47,9 +47,9 @@ const COPY: Record<string, { title: string; body: string; cta: string }> = {
 }
 
 const EXPLAIN: Record<string, string> = {
-  unknown: 'This link is not one we issued. It may have been mistyped or truncated by a mail client.',
+  unknown: 'This is not a link we issued. It may have been mistyped, or cut short by a mail client.',
   used: 'This link has already been used. Each one works exactly once.',
-  expired: 'This link has expired. The next weekly tick will send a fresh approval email.',
+  expired: 'This link has expired. The next weekly run will send a new approval email.',
 }
 
 export default async function ConfirmPage({ params }: { params: Promise<{ token: string }> }) {

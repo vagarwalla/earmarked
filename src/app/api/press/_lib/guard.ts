@@ -34,7 +34,7 @@ export function asResponse(err: unknown): NextResponse {
   // will fail the same way until it is.
   if (/relation "press_(settings|orders)" does not exist|Could not find the function/i.test(message)) {
     return NextResponse.json(
-      { error: 'The workbench schema is not applied yet — run `npm run db:apply -- 013_press_workbench.sql`.' },
+      { error: 'The workbench tables are not there yet — run `npm run db:apply -- 013_press_workbench.sql`.' },
       { status: 503 },
     )
   }

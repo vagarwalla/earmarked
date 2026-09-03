@@ -90,7 +90,7 @@ export function SettingsPanel({
       onNote(
         body.hasShipping
           ? 'Saved.'
-          : 'Saved — but the address is incomplete, so ordering stays disabled.',
+          : 'Saved. The address is incomplete, so ordering stays off.',
       )
       onRefresh()
     } finally {
@@ -116,9 +116,9 @@ export function SettingsPanel({
         <div className="mt-2 grid grid-cols-2 gap-2">{ADDRESS_FIELDS.map(([k, l]) => field(k, l))}</div>
         <p className="text-muted-foreground mt-1.5 text-xs">
           {effective.hasShipping
-            ? 'Complete — orders can be placed.'
-            : 'Street, city and postcode are all required; anything less is treated as no address at all.'}
-          {env.hasShipping && !row.ship_street1 && ' Currently inherited from PRESS_SHIP_*.'}
+            ? 'Complete. Orders can be placed.'
+            : 'Street, city and postcode are all required. Anything less counts as no address.'}
+          {env.hasShipping && !row.ship_street1 && ' Using PRESS_SHIP_* for now.'}
         </p>
       </section>
 
@@ -126,7 +126,7 @@ export function SettingsPanel({
         <h3 className="font-serif text-sm">Email on file</h3>
         <label className="mt-2 block">
           <span className="text-muted-foreground text-xs">
-            Where the approval link goes, and what the order confirms against
+            Where the approval link is sent
           </span>
           <input
             value={draft.contact_email ?? ''}
@@ -136,15 +136,15 @@ export function SettingsPanel({
           />
         </label>
         {!draft.contact_email && env.mailTo && (
-          <p className="text-muted-foreground mt-1 text-xs">Inherited from PRESS_MAIL_TO: {env.mailTo}</p>
+          <p className="text-muted-foreground mt-1 text-xs">Using PRESS_MAIL_TO: {env.mailTo}</p>
         )}
       </section>
 
       <section>
         <h3 className="font-serif text-sm">Payment</h3>
         <p className="text-muted-foreground mt-1.5 text-xs">
-          Lulu bills the card on your Lulu account. No card number is stored here, and there is nowhere
-          to put one — which is the point of linking out rather than asking.
+          Lulu charges the card on your Lulu account. No card details are stored here, and there is
+          nowhere to put them — which is why this links out instead of asking.
         </p>
         <a
           href="https://developers.lulu.com/user/billing"
@@ -220,14 +220,13 @@ export function SettingsPanel({
           </div>
           <p className="text-muted-foreground mt-1.5 text-xs">
             {draft.lulu_sandbox
-              ? 'Sandbox — orders go to Lulu’s test host. Note the credentials on file are production ones, which the sandbox host rejects, so this is likely to fail rather than to be free.'
-              : 'Live — orders go to Lulu proper.'}
+              ? 'Sandbox — orders go to Lulu’s test host. The credentials on file are live ones, which that host rejects, so orders fail here rather than being free.'
+              : 'Live — orders go to Lulu.'}
           </p>
           <p className="text-muted-foreground mt-2 text-xs">
-            Neither setting is what stops a charge.{' '}
-            <code className="bg-muted rounded px-1 py-0.5">PRESS_ORDER_ENABLED=1</code> is required
-            before any order is placed at all, and it lives in the environment so it cannot be
-            turned on from this form.
+            Neither setting stops a charge.{' '}
+            <code className="bg-muted rounded px-1 py-0.5">PRESS_ORDER_ENABLED=1</code> is what
+            allows an order, and it lives in the environment so it cannot be set from this form.
           </p>
         </fieldset>
       </section>

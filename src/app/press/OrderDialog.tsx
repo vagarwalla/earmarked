@@ -136,7 +136,7 @@ export function OrderDialog({
         return
       }
       onNote(
-        `Approval sent to ${body.sentTo ?? 'the address on file'}. Nothing is ordered until you follow it.`,
+        `Approval sent to ${body.sentTo ?? 'the address on file'}. Nothing is ordered until you follow the link.`,
       )
       onClose()
     } finally {
@@ -170,7 +170,7 @@ export function OrderDialog({
       }
       setOutcome({
         ok: true,
-        text: `Ordered${body.jobId ? ` — Lulu job ${body.jobId}` : ''}. It appears under Orders, with tracking once it ships.`,
+        text: `Ordered${body.jobId ? ` — Lulu job ${body.jobId}` : ''}. It is under Orders, with tracking once it ships.`,
       })
       onNote('Ordered. Tracking will appear under Orders.')
     } finally {
@@ -281,8 +281,8 @@ export function OrderDialog({
 
             {preview.quoteError && (
               <p className="text-muted-foreground mt-3 text-xs">
-                Lulu would not quote just now ({preview.quoteError}). The approval email will carry the
-                price.
+                Lulu could not price it just now ({preview.quoteError}). The approval email will
+                carry the price.
               </p>
             )}
 
@@ -295,8 +295,8 @@ export function OrderDialog({
                 </ul>
                 {bundled && (
                   <p className="text-muted-foreground mt-2 text-xs">
-                    A print job cannot be placed half-way, so none of these are ordered until all of
-                    them can be.
+                    A print job cannot be placed in part, so none of these go until all of
+                    them can.
                   </p>
                 )}
               </>
@@ -314,15 +314,15 @@ export function OrderDialog({
 
             <p className="text-muted-foreground mt-3 text-xs">
               {preview.canEmail
-                ? `This sends ${bundled ? 'one email covering all of them' : 'an email'}. Nothing is ordered until you follow the link in it.`
-                : 'No mailer is configured here, so this gives you the approval link instead. Nothing is ordered until you open it and confirm.'}
+                ? `This sends ${bundled ? 'one email covering all of them' : 'an email'}. Nothing is ordered until you follow the link.`
+                : 'No mailer is set up here, so you get the approval link instead. Nothing is ordered until you open it and confirm.'}
             </p>
           </>
         )}
 
         {approveUrl && !outcome && (
           <div className="mt-4 rounded-md border p-3">
-            <p className="text-sm font-medium">What pressing Print does</p>
+            <p className="text-sm font-medium">What Print does</p>
             <ol className="text-muted-foreground mt-2 list-decimal space-y-1 pl-4 text-xs">
               <li>Sends the interior and cover PDFs to Lulu as one print job.</li>
               <li>
@@ -331,10 +331,10 @@ export function OrderDialog({
               </li>
               <li>Moves the issue from “locked” to “ordered” and records the job against it.</li>
               <li>
-                If Lulu refuses the files, nothing is charged and the reason is shown here — the
-                issue goes back to being orderable.
+                If Lulu refuses the files, nothing is charged, the reason appears here, and the
+                issue can be ordered again.
               </li>
-              <li>Afterwards, Orders polls Lulu for status and tracking until it ships.</li>
+              <li>Orders then follows it, with status and tracking, until it ships.</li>
             </ol>
             <Button size="lg" className="mt-3 w-full" disabled={printing} onClick={() => void print()}>
               {printing

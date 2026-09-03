@@ -321,7 +321,7 @@ export function Workbench(props: Props) {
         } | null
 
         if (!res.ok || !body?.contents || !body?.pool) {
-          if (seq === commitSeq.current) setError(body?.error ?? 'The edit did not stick.')
+          if (seq === commitSeq.current) setError(body?.error ?? 'That change did not save.')
           revert()
           return false
         }
@@ -452,7 +452,7 @@ export function Workbench(props: Props) {
       const res = await fetch('/api/press/issue', { method: 'POST' })
       const body = await readJson<{ number: number }>(res)
       if (!res.ok || body.number === undefined) {
-        setError(body.error ?? 'Could not open an issue.')
+        setError(body.error ?? 'Could not start a new issue.')
         return
       }
       setSelected(body.number)
@@ -546,8 +546,10 @@ export function Workbench(props: Props) {
           if (event.error) setError(event.error)
           if (event.done) {
             setNote(
-              `“${event.done.name}” — ${event.done.pageCount} pages, preflight ` +
-                `${event.done.preflight.length ? event.done.preflight.map((p) => p.code).join(', ') : 'clean'}`,
+              `“${event.done.name}” — ${event.done.pageCount} pages. ` +
+                (event.done.preflight.length
+                  ? `Checks flagged ${event.done.preflight.map((p) => p.code).join(', ')}.`
+                  : 'Checks passed.'),
             )
             refresh()
           }
@@ -671,7 +673,7 @@ export function Workbench(props: Props) {
             ))}
             {railIssues.length === 0 && (
               <li className="text-muted-foreground px-2 py-4 text-xs">
-                {issues.length === 0 ? 'No issues yet. Open one.' : 'Nothing matches.'}
+                {issues.length === 0 ? 'No issues yet. Make one.' : 'Nothing matches.'}
               </li>
             )}
           </ul>
@@ -683,8 +685,8 @@ export function Workbench(props: Props) {
             <div className="mt-2 rounded-lg border p-2.5">
               <p className="text-muted-foreground text-xs">
                 {selection.length === 1
-                  ? `Issue ${selection[0]} selected. Tick another to share one parcel.`
-                  : `${selection.map((n) => `#${n}`).join(', ')} — one job, one shipping charge.`}
+                  ? `Issue ${selection[0]} selected. Tick another to send them in one parcel.`
+                  : `${selection.map((n) => `#${n}`).join(', ')} — one parcel, one shipping charge.`}
               </p>
               <div className="mt-2 flex gap-2">
                 <Button size="lg" className="flex-1" onClick={() => setOrdering(selection)}>
@@ -737,7 +739,8 @@ export function Workbench(props: Props) {
             />
           ) : (
             <p className="text-muted-foreground rounded-lg border border-dashed p-10 text-center text-sm">
-              No issue selected. Open one with <span className="font-medium">New issue</span> on the right.
+              Nothing selected. Pick an issue on the left, or start one with{' '}
+              <span className="font-medium">New issue</span> on the right.
             </p>
           )}
 
@@ -830,7 +833,7 @@ export function Workbench(props: Props) {
                 </>
               ) : (
                 <p className="text-muted-foreground mt-3 rounded-lg border border-dashed p-4 text-center text-xs">
-                  Select an issue to build one.
+                  Pick an issue to work on.
                 </p>
               )}
             </div>
@@ -899,20 +902,21 @@ function IssuePanel({
         <p className="text-muted-foreground text-xs">
           Issue {issue.number} · {STATE_LABEL[issue.state] ?? issue.state} ·{' '}
           <span className="text-foreground tabular-nums">{issue.pages}pp</span> of articles ·{' '}
-          {issue.built ? `${issue.pageTotal}pp built${issue.dirty ? ', out of date' : ''}` : 'never built'} ·{' '}
+          {issue.built ? `${issue.pageTotal}pp built${issue.dirty ? ', out of date' : ''}` : 'not built yet'} ·{' '}
           <span className="text-foreground tabular-nums">printed {issue.printCount}×</span>
         </p>
       </div>
 
       {issue.state === 'rejected' && (
         <p className="border-destructive/50 text-destructive mb-3 border-l-2 py-1 pl-3 text-xs">
-          Lulu refused the files{issue.rejectionReason ? `: ${issue.rejectionReason}` : '.'} Unlock, fix, and lock again.
+          Lulu refused the files{issue.rejectionReason ? `: ${issue.rejectionReason}.` : '.'}{' '}
+          Unlock it, fix it, and lock it again.
         </p>
       )}
 
       {issue.dirty && issue.built && editable && (
         <p className="border-muted-foreground/30 text-muted-foreground mb-3 border-l-2 py-1 pl-3 text-xs">
-          The PDF on file is the previous build. Rebuild — or lock — to put these changes in print.
+          The PDF is from an earlier version. Rebuild, or lock, to include these changes.
         </p>
       )}
 
@@ -1058,13 +1062,13 @@ function OrderCta({
 
   if (pages < PRINT_SPEC.minPages) {
     reasons.push(
-      `Lulu will not perfect-bind under ${PRINT_SPEC.minPages} pages, and this is ${pages}. ` +
-        `Drag ${PRINT_SPEC.minPages - pages} more pages in from the pool.`,
+      `Too short to bind: ${pages} pages, and Lulu needs ${PRINT_SPEC.minPages}. ` +
+        `Add ${PRINT_SPEC.minPages - pages} more pages from the pool.`,
     )
   }
   if (!orderingEnabled) {
     reasons.push(
-      'Ordering is switched off. PRESS_ORDER_ENABLED=1 in the environment is what allows a real order, and it is not settable from this screen.',
+      'Ordering is switched off. Set PRESS_ORDER_ENABLED=1 in the environment to turn it on — it cannot be set from this screen.',
     )
   }
 
@@ -1078,10 +1082,10 @@ function OrderCta({
       <div className="bg-muted/40 mt-3 rounded-lg border p-3">
         <p className="text-sm font-medium">To order a printed copy</p>
         <p className="text-muted-foreground mt-0.5 text-xs">
-          Lock it first. Locking freezes the contents and builds the PDF that gets printed — you
-          can unlock again afterwards.
+          Lock it first. That freezes the contents and builds the PDF to print. You can unlock it
+          again later.
         </p>
-        {blocked && <Reasons reasons={reasons} heading="And before it can be ordered:" />}
+        {blocked && <Reasons reasons={reasons} heading="Also to fix first:" />}
       </div>
     )
   }
@@ -1100,8 +1104,8 @@ function OrderCta({
         {issue.state === 'shipped' ? 'Order another copy' : 'Order a copy'}
       </Button>
       <p className="text-muted-foreground mt-2 text-xs">
-        The next screen prices it and sends an approval email. Nothing is ordered until you follow
-        the link in that email.
+        The next screen shows the price and emails you a link. Nothing is ordered until you follow
+        that link.
       </p>
       {blocked && <Reasons reasons={reasons} />}
     </div>
@@ -1256,7 +1260,7 @@ function PreviewControls({
         onClick={() => onSheet('cover')}
         disabled={!issue.hasCover}
         className="w-full justify-start"
-        title={issue.hasCover ? 'The wrap — back, spine, front' : 'No cover built yet'}
+        title={issue.hasCover ? 'Back, spine and front, as one sheet' : 'No cover built yet'}
       >
         <BookImage className="size-4" />
         Cover
@@ -1275,8 +1279,8 @@ function PreviewControls({
         {open ? 'Hide the preview' : 'Show the preview'}
       </Toggle>
       <p className="text-muted-foreground text-xs">
-        {sheet === 'cover' ? 'One spread — back, spine, front.' : 'Contents and articles.'}
-        {issue.dirty && ' Older than the list beside it.'}
+        {sheet === 'cover' ? 'Back, spine and front, as one sheet.' : 'Contents and articles.'}
+        {issue.dirty && ' Older than the contents below.'}
       </p>
     </div>
   )

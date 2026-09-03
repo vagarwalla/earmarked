@@ -93,7 +93,7 @@ export function OrdersPanel({
   if (orders === null) {
     return (
       <p className="text-muted-foreground rounded-lg border border-dashed p-6 text-center text-xs">
-        No orders table yet — apply migration 013 with
+        No orders table yet. Apply migration 013:
         <br />
         <code className="bg-muted mt-1 inline-block rounded px-1.5 py-0.5">
           npm run db:apply -- 013_press_workbench.sql
@@ -128,7 +128,7 @@ export function OrdersPanel({
               {bundled && (
                 <div className="mb-1.5 flex items-baseline gap-2">
                   <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
-                    One job · {group.orders.length} issues · one parcel
+                    One parcel · {group.orders.length} issues
                   </span>
                   <span className="shrink-0 text-xs tabular-nums">
                     {formatMoney(group.totalCents, group.currency)}
@@ -171,7 +171,8 @@ export function OrdersPanel({
                     {order.status === 'UNPAID' && order.lulu_job_id && (
                       <div className="mt-1.5 rounded-md border px-2.5 py-2">
                         <p className="text-xs">
-                          Lulu accepted it and is waiting to be paid. It does not print until then.
+                          Lulu has the files and is waiting for payment. It does not print until it
+                          is paid.
                         </p>
                         <a
                           className="mt-1.5 inline-block text-xs underline"
@@ -192,7 +193,7 @@ export function OrdersPanel({
                     {!order.lulu_job_id && !isFinished(order) && (
                       <div className="mt-1.5 flex items-baseline gap-2">
                         <p className="text-muted-foreground min-w-0 flex-1 text-xs">
-                          Held, but Lulu never took it — this is blocking a new order for #
+                          Held, but never sent to Lulu. It is blocking a new order for #
                           {order.issue_number}.
                         </p>
                         <Button

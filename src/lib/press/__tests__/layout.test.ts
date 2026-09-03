@@ -468,6 +468,15 @@ describe('offline guarantee', () => {
     expect(css).not.toMatch(/url\(/i)
     expect(css).not.toMatch(/https?:/i)
   })
+
+  it('sets nothing below the 10px type floor', () => {
+    // 7.5pt is 10px exactly. Furniture — running heads, folios, flags, note
+    // markers — used to run down to 6.5pt, which is too small to read on the
+    // page and too small on screen in the workbench preview.
+    const sizes = [...pressCss().matchAll(/font-size:\s*([\d.]+)pt/g)].map((m) => Number(m[1]))
+    expect(sizes.length).toBeGreaterThan(0)
+    expect(Math.min(...sizes)).toBeGreaterThanOrEqual(7.5)
+  })
 })
 
 // ── Fragment API for U5 ──────────────────────────────────────────────────────

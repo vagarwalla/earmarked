@@ -18,6 +18,11 @@
  *
  * Design: Nat Geo-ish. One serif for reading, one sans for furniture
  * (running heads, folios, captions, bylines). Deliberately spare.
+ *
+ * Nothing is set below 7.5pt — 10px exactly, and the floor for every size in
+ * this file. The furniture used to run down to 6.5pt, which is small enough to
+ * be a squint in print and a smudge in the workbench's preview. Held there by
+ * src/lib/press/__tests__/layout.test.ts.
  */
 
 /* ── Tokens ───────────────────────────────────────────────────────────────── */
@@ -383,7 +388,7 @@ figcaption {
 
 .flag {
   font-family: var(--sans);
-  font-size: 7pt;
+  font-size: 7.5pt;
   line-height: 1.2;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -430,7 +435,7 @@ figcaption {
 
 .linked-head {
   font-family: var(--sans);
-  font-size: 7pt;
+  font-size: 7.5pt;
   font-weight: 600;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -469,7 +474,7 @@ figcaption {
 .linked-host {
   display: block;
   font-family: var(--sans);
-  font-size: 6.5pt;
+  font-size: 7.5pt;
   letter-spacing: 0.04em;
   color: var(--ink-soft);
 }
@@ -477,7 +482,7 @@ figcaption {
 /* On the contents page, the same two relationships in one line of small type. */
 .toc-flag {
   font-family: var(--sans);
-  font-size: 6.5pt;
+  font-size: 7.5pt;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--accent);
@@ -509,7 +514,7 @@ figcaption {
 
 .footnotes-head {
   font-family: var(--sans);
-  font-size: 7pt;
+  font-size: 7.5pt;
   font-weight: 600;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -542,7 +547,7 @@ figcaption {
   width: 14pt;
   text-indent: 0;
   font-family: var(--sans);
-  font-size: 6.5pt;
+  font-size: 7.5pt;
   color: var(--accent);
   vertical-align: baseline;
 }
@@ -556,7 +561,7 @@ figcaption {
   padding-top: 6pt;
   border-top: 0.5pt solid var(--rule);
   font-family: var(--sans);
-  font-size: 7pt;
+  font-size: 7.5pt;
   line-height: 1.4;
   letter-spacing: 0.04em;
   color: var(--ink-soft);

@@ -74,7 +74,7 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
     // disagreeing is a moved bookmark rather than a wrong answer.
     if (item.issue_id !== null || item.state === 'in_issue') {
       return NextResponse.json(
-        { error: 'That article belongs to an issue; remove it from the issue first.' },
+        { error: 'That article is in an issue. Take it out of the issue first.' },
         { status: 409 },
       )
     }
