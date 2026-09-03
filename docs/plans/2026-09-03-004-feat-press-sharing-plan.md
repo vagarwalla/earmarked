@@ -2,7 +2,8 @@
 title: "feat: press for other people — accounts, shared reading, and a PDF anyone can make"
 date: 2026-09-03
 revised: 2026-09-03
-status: proposed
+built: 2026-09-03
+status: built
 type: feat
 depends_on: 2026-08-31-003-feat-press-workbench-plan.md
 ---
@@ -309,6 +310,41 @@ mid-tick costs nothing.
 
 ---
 
+## Built
+
+All seven landed on 2026-09-03, one PR each, in this order. Migrations 017–020.
+
+| | | |
+|---|---|---|
+| 1 | Compose on the worker | `press_jobs`, a claimed job, progress polled instead of streamed; the 501 gone |
+| 2 | SSRF guard | Already existed — `fetch.ts` resolves and refuses private addresses at every hop |
+| 3 | Ownership | `owner_id` everywhere, `pressDb(owner)`, no default clients; the swallowed-paste bug fixed |
+| 4 | Auth | Magic link, invite-only, Basic auth removed, project signups disabled |
+| 5 | Bulk paste | A textarea, counts for everything that did not land, the "arriving" pile |
+| 6 | Sharing | `visibility`, `/press/by/<handle>`, `/press/i/<handle>/<n>` |
+| 7 | The friend's finish line | Two PDFs and a print spec; `can_order` enforced in the routes |
+
+**What it still needs to work end to end: the Fly worker.** `press-worker` has
+never existed — `flyctl apps list` shows one unrelated app. Without it a
+deployed "Make the PDF" queues a job nothing will claim, and a pasted link
+never gets extracted. Everything else is live. Deploying it is
+`fly launch --no-deploy -c worker/fly.toml`, `fly secrets set …` from the
+configuration table in the runbook, `fly deploy -c worker/fly.toml` — and about
+$2–3/month for a machine that must never auto-stop.
+
+Three answers the build found that the plan had wrong or missing:
+
+- The SSRF work in step 2 was already done.
+- The new dedupe index cannot be partial. PostgREST emits a bare `ON CONFLICT`
+  and Postgres will not infer a partial index from one; the predicate bought
+  nothing anyway, since NULLs are already distinct.
+- Disabling project signups is load-bearing, and it needs `press:invite` to
+  create the Supabase user. Checking the invite list inside the sign-in action
+  is only half a gate: the anon key is in the page, so the same request can go
+  straight to GoTrue.
+
+---
+
 ## Build order
 
 Each is a PR that lands on its own.
@@ -382,12 +418,15 @@ Each is a PR that lands on its own.
 
 ## Still open
 
-- Should a shared issue's interior PDF be downloadable, or only readable in the
-  browser? Downloadable is simpler and is what the current signed-URL code
-  already does; it also means anything V shares can be reprinted by anyone.
+- ~~Should a shared issue's interior PDF be downloadable?~~ **Built
+  downloadable**, as the simpler thing and as what the signed-URL code already
+  did. Worth revisiting only if it starts to matter that anything shared can be
+  reprinted by whoever has the link — the page says the links expire in an
+  hour, which is the honest half of it.
 - Does a friend get the linkpost expansion — a roundup printing the pieces it
   names — on pasted URLs? It is the most distinctive thing press does and it is
   also several model calls per linkpost on V's key.
-- Handles: chosen by the friend, or assigned by V when she adds the row? The
-  second is less code and one fewer uniqueness race.
+- ~~Handles: chosen by the friend, or assigned by V?~~ **Assigned**, as an
+  argument to `npm run press:invite`. Less code and one fewer uniqueness race,
+  as expected.
 - Does V want to see friends' issues, or is the read direction one-way?
