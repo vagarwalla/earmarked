@@ -66,6 +66,13 @@ export interface IssueDraft {
   number: number
   itemIds: string[]
   state: 'draft' | 'ordered'
+  /**
+   * A name chosen by hand, which the build must keep. Absent means "let the
+   * model name it from the contents", which is what every issue did before an
+   * issue could be assembled around a theme decided in advance — and a theme
+   * decided in advance is exactly the name worth keeping.
+   */
+  name?: string
 }
 
 export interface PrintedIssue {

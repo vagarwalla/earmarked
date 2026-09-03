@@ -165,6 +165,7 @@ async function rebuildIfStale(): Promise<boolean> {
         buildIssue({
           number: draft.number,
           items,
+          name: draft.name,
           apiKey: settings.anthropicApiKey,
           onProgress: (m) => console.log(`   ${m}…`),
         }),
