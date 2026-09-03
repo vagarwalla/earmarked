@@ -62,7 +62,11 @@ export const SETTINGS_DEFAULTS: PressSettingsRow = {
 export async function readSettingsRow(
   db: SupabaseClient,
 ): Promise<PressSettingsRow | null> {
-  const { data, error } = await db.from('press_settings').select('*').eq('id', true).maybeSingle()
+  // No `.eq('id', true)` any more. 018 dropped the boolean primary key that
+  // made this one row in the world and made `owner_id` the key instead, and
+  // the scoped client applies that filter itself — so this reads whichever
+  // account's row the caller's client can see, and there is at most one.
+  const { data, error } = await db.from('press_settings').select('*').maybeSingle()
   if (error) throw new Error(`press/settings: read: ${error.message}`)
   return (data as PressSettingsRow) ?? null
 }
@@ -73,7 +77,10 @@ export async function writeSettingsRow(
 ): Promise<PressSettingsRow> {
   const { data, error } = await db
     .from('press_settings')
-    .upsert({ id: true, ...patch, updated_at: new Date().toISOString() }, { onConflict: 'id' })
+    // `owner_id` is both the conflict target and what the scoped client puts
+    // on the row, so an account that has never opened the settings form gets
+    // its row written here rather than needing one seeded for it.
+    .upsert({ ...patch, updated_at: new Date().toISOString() }, { onConflict: 'owner_id' })
     .select()
     .single()
   if (error) throw new Error(`press/settings: write: ${error.message}`)

@@ -56,8 +56,33 @@ and that is the only question the workbench now asks.
   `/api/press/action/[token]` and `/api/press/email-in` carry their own
   credentials and stay outside the matcher.
 
-`NEXT_PUBLIC_SUPABASE_ANON_KEY` is now required wherever the app runs — the
-session client uses it, and without it the middleware refuses every request.
+### On a laptop there is nothing to sign in to
+
+`/press` on localhost is the owner's, with no session and no link. This is how
+press behaved for its whole life before sign-in existed — `PRESS_PASSWORD`
+unset meant open, and the file that did it said "localhost stays frictionless"
+in as many words.
+
+It gives away nothing. Reaching press at all needs `.env.local`, and
+`.env.local` holds `SUPABASE_SERVICE_ROLE_KEY` — every account's everything,
+session or no session. Asking somebody holding that key to prove who they are
+is ceremony, not security.
+
+It is the **Host header**, not "not production": put a dev server behind a
+tunnel to look at it from your phone and it asks for a session, exactly as the
+password did. `VERCEL` being set rules out preview deployments too.
+
+`PRESS_REQUIRE_SIGN_IN=1` turns it off, for checking the signed-in path from a
+laptop. It is read in `runningLocally()` and deliberately *not* in the
+middleware: Next inlines `process.env.X` at build time in server chunks as well
+as client ones, so a flag set at start-up has no effect there — and an escape
+hatch that silently does nothing is worse than none. For the same reason it is
+read as `process.env['PRESS_REQUIRE_SIGN_IN']`, which survives the inlining.
+
+`NEXT_PUBLIC_SUPABASE_ANON_KEY` is required wherever the app is *deployed* —
+the session client uses it, and without it the middleware refuses every
+request. Locally it is optional: with no key nobody can be signed in, which is
+the honest answer and the laptop case anyway.
 
 ### Inviting somebody
 

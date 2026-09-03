@@ -7,7 +7,7 @@
 
 import { notFound, redirect } from 'next/navigation'
 import { pressUiEnabled } from '@/lib/press/local'
-import { signedInAccount } from '@/lib/press/auth'
+import { runningLocally, signedInAccount } from '@/lib/press/auth'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import SignInForm from './SignInForm'
 
@@ -30,8 +30,10 @@ export default async function SignInPage({
   const refusal = error ? (REFUSALS[error] ?? 'That sign-in did not work.') : null
 
   // Already in. Landing here from a bookmark should not mean typing an address
-  // to be told you did not need to.
-  if (await signedInAccount()) redirect('/press')
+  // to be told you did not need to — and on a laptop there is nothing to sign
+  // in to at all, so a form here would be a door in a wall with no building
+  // behind it.
+  if ((await runningLocally()) || (await signedInAccount())) redirect('/press')
 
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6 py-12">
