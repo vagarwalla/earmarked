@@ -656,16 +656,23 @@ export function Workbench(props: Props) {
           <h2 className="text-muted-foreground mt-6 mb-2 text-xs font-medium tracking-wide uppercase">
             Pool · {pool.length}
           </h2>
-          <PoolPanel
-            pool={pool}
-            failed={props.failed}
-            skipped={props.skipped}
-            dropped={props.dropped}
-            editable={editable}
-            onError={setError}
-            onNote={setNote}
-            onRefresh={refresh}
-          />
+          {/* Capped below `lg`, uncapped above it. At full width the pool sits
+              in its own scrolling column and needs no limit; below `lg` the
+              three columns stack, and an uncapped pool of a dozen articles
+              pushed the issue — and every button that acts on it — a thousand
+              pixels off the bottom of the screen. */}
+          <div className="max-h-[22rem] overflow-y-auto lg:max-h-none lg:overflow-visible">
+            <PoolPanel
+              pool={pool}
+              failed={props.failed}
+              skipped={props.skipped}
+              dropped={props.dropped}
+              editable={editable}
+              onError={setError}
+              onNote={setNote}
+              onRefresh={refresh}
+            />
+          </div>
         </aside>
 
         {/* ── The issue ────────────────────────────────────────────── */}
@@ -678,6 +685,8 @@ export function Workbench(props: Props) {
               locked={locked}
               working={working?.message ?? null}
               onRemove={(itemId) => returnToPool(issue, itemId)}
+              onLock={() => void stream('lock', `/api/press/issue/${issue.number}/lock`, { action: 'lock' })}
+              onOrder={() => setOrdering([issue.number])}
             />
           ) : (
             <p className="text-muted-foreground rounded-lg border border-dashed p-10 text-center text-sm">
@@ -797,6 +806,8 @@ function IssuePanel({
   locked,
   working,
   onRemove,
+  onLock,
+  onOrder,
 }: {
   issue: WorkbenchIssue
   threshold: number
@@ -807,23 +818,59 @@ function IssuePanel({
   working: string | null
   /** Send one article back to the pool, by id. */
   onRemove: (itemId: string) => void
+  /** Freeze the contents for printing. Deliberately the same handler the
+      right-hand column uses — two buttons, one action. */
+  onLock: () => void
+  /** Open the order dialog on this issue alone. */
+  onOrder: () => void
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: 'issue', disabled: !editable })
   const printed = ['approved', 'ordered', 'shipped'].includes(issue.state)
 
+  const empty = issue.contents.length === 0
+
   return (
     <div>
-      <div className="mb-3">
-        <h2 className="font-serif text-2xl">{issue.name}</h2>
-        {/* Two page counts, and they mean different things: the articles as
-            they stand right now, which every add and remove changes, and the
-            PDF on file, which only a build changes. Showing one number for
-            both is what made editing look like it did nothing. */}
-        <p className="text-muted-foreground mt-1 text-xs">
-          Issue {issue.number} · {STATE_LABEL[issue.state] ?? issue.state} ·{' '}
-          <span className="text-foreground tabular-nums">{issue.pages}pp</span> of articles ·{' '}
-          {issue.built ? `${issue.pageTotal}pp built${issue.dirty ? ', out of date' : ''}` : 'never built'}
-        </p>
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <div className="min-w-0">
+          <h2 className="font-serif text-2xl">{issue.name}</h2>
+          {/* Two page counts, and they mean different things: the articles as
+              they stand right now, which every add and remove changes, and the
+              PDF on file, which only a build changes. Showing one number for
+              both is what made editing look like it did nothing. */}
+          <p className="text-muted-foreground mt-1 text-xs">
+            Issue {issue.number} · {STATE_LABEL[issue.state] ?? issue.state} ·{' '}
+            <span className="text-foreground tabular-nums">{issue.pages}pp</span> of articles ·{' '}
+            {issue.built ? `${issue.pageTotal}pp built${issue.dirty ? ', out of date' : ''}` : 'never built'}
+          </p>
+        </div>
+
+        {/* Ordering, on the issue itself.
+            It lived only at the foot of the right-hand column, which is fine
+            at full width and useless below `lg`, where the three columns
+            stack and that column lands under the pool. The single action this
+            whole screen is for should not need a scroll to find, so it sits
+            beside the issue's name as well.
+            A draft has nothing to order yet, so the same slot carries the step
+            that makes it orderable — and says so, rather than showing a dead
+            button with no explanation. */}
+        {orderable(issue.state) ? (
+          <Button className="shrink-0" disabled={locked} onClick={onOrder}>
+            <Package data-icon="inline-start" />
+            {issue.state === 'shipped' ? 'Order another copy' : 'Order a copy'}
+          </Button>
+        ) : editable ? (
+          <Button
+            className="shrink-0"
+            variant="outline"
+            disabled={locked || empty}
+            onClick={onLock}
+            title={empty ? 'Nothing to print yet' : 'Freezes the contents — then you can order a printed copy'}
+          >
+            <Lock data-icon="inline-start" />
+            Lock to order
+          </Button>
+        ) : null}
       </div>
 
       {issue.state === 'rejected' && (
