@@ -351,6 +351,23 @@ export async function performBundledApproval(
     for (const [i, issue] of issues.entries()) {
       if (status) {
         await updateOrder(orders[i].id, { status, message: (err as Error).message }, db)
+
+        // And put the issue back. Claiming the row moved it to `approved`,
+        // which is neither orderable nor unlockable — so a refused job left
+        // the reader with an issue they could not order again, could not
+        // unlock to edit, and could not do anything else with either. The
+        // Release button in the Orders panel was a way out of that; it should
+        // not have been the only one, and needing it at all is the bug.
+        //
+        // `closed` is where it was a moment ago: locked, built, orderable.
+        // Only from `approved` — `ordered` and `shipped` mean a job exists.
+        if (!reorder) {
+          await updateIssue(
+            issue.id,
+            { state: 'closed', ordered_at: null, lulu_job_id: null },
+            db,
+          ).catch(() => {})
+        }
       }
       await recordEvent(
         {
