@@ -24,7 +24,7 @@
  * See docs/plans/2026-08-31-003-feat-press-workbench-plan.md §2, §3.
  */
 
-import { useCallback, useMemo, useRef, useState, useTransition } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   DndContext,
@@ -74,6 +74,31 @@ export interface PoolItem {
   sourceName: string | null
   pageCount: number
   reason?: string | null
+}
+
+/** The bit of a `press_jobs` row a button needs. See src/lib/press/jobs.ts. */
+interface PressJobView {
+  id: string
+  issue_id: string
+  intent: 'rebuild' | 'lock'
+  state: 'queued' | 'running' | 'done' | 'failed'
+  progress: string | null
+  error: string | null
+  result: { name: string; pageCount: number; preflight: { code: string }[] } | null
+}
+
+/**
+ * What the issue's buttons are doing, and the line they are reporting.
+ *
+ * `number` is carried because a render no longer happens inside the request
+ * that asked for it: one queued for issue 4 goes on running while you open
+ * issue 5, and without this its progress would light up issue 5's buttons and
+ * freeze a panel that has nothing to do with it.
+ */
+interface Working {
+  what: 'rebuild' | 'lock' | 'unlock'
+  number: number
+  message: string
 }
 
 export interface WorkbenchIssue {
@@ -443,7 +468,9 @@ export function Workbench(props: Props) {
     }
   }
 
-  const refresh = () => startTransition(() => router.refresh())
+  // Stable, because `track` closes over it for the length of a render and a
+  // fresh identity every keystroke would mean a fresh `track` mid-poll.
+  const refresh = useCallback(() => startTransition(() => router.refresh()), [router, startTransition])
 
   const newIssue = async () => {
     setBusy(true)
@@ -502,13 +529,73 @@ export function Workbench(props: Props) {
    * button that was pressed says it is working; a single boolean made Lock
    * announce a rebuild.
    */
-  const [working, setWorking] = useState<{ what: 'rebuild' | 'lock' | 'unlock'; message: string } | null>(
-    null,
+  const [working, setWorking] = useState<Working | null>(null)
+
+  /** Say what a finished compose produced, in the one line the panel has. */
+  const announce = useCallback(
+    (done: { name: string; pageCount: number; preflight: { code: string }[] }) => {
+      setNote(
+        `“${done.name}” — ${done.pageCount} pages, preflight ` +
+          `${done.preflight.length ? done.preflight.map((p) => p.code).join(', ') : 'clean'}`,
+      )
+    },
+    [],
   )
 
-  /** Lock and rebuild both stream NDJSON, because both are minutes of Chromium. */
-  const stream = async (what: 'rebuild' | 'lock', url: string, body?: object) => {
-    setWorking({ what, message: 'Starting' })
+  /**
+   * Follow a render happening on the worker.
+   *
+   * Polling, not streaming, and the reason is in the row: a compose queued from
+   * here outlives this tab, so its progress cannot travel down a response body
+   * that closes with the page. Two seconds is comfortably faster than the
+   * stages it is reporting and is one indexed row read.
+   */
+  const track = useCallback(
+    async (jobId: string, what: 'rebuild' | 'lock', number: number) => {
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 2000))
+        let job: PressJobView | undefined
+        try {
+          const res = await fetch(`/api/press/job/${jobId}`, { cache: 'no-store' })
+          if (!res.ok) throw new Error('Lost track of the render.')
+          ;({ job } = (await res.json()) as { job?: PressJobView })
+        } catch (err) {
+          // A dropped poll is not a failed render — the worker is still going.
+          // Say so and keep asking; only a job row can end this loop.
+          setWorking({ what, number, message: (err as Error).message })
+          continue
+        }
+        if (!job) {
+          setError('That render is no longer on the queue.')
+          return
+        }
+        if (job.state === 'failed') {
+          setError(job.error ?? 'The render failed.')
+          return
+        }
+        if (job.state === 'done') {
+          if (job.result) announce(job.result)
+          refresh()
+          return
+        }
+        setWorking({ what, number, message: job.progress ?? 'Working' })
+      }
+    },
+    [announce, refresh],
+  )
+
+  /**
+   * Ask for a compose, and follow it whichever way it happens.
+   *
+   * Two shapes come back. On the machine with `.press/`, the build runs inside
+   * the request and streams NDJSON. Deployed, there is no browser: the route
+   * answers 202 with a job row the worker will claim, and this polls it. One
+   * button, one route, and the difference is which response arrives.
+   */
+  const compose = async (what: 'rebuild' | 'lock', number: number, body?: object) => {
+    const url =
+      what === 'lock' ? `/api/press/issue/${number}/lock` : `/api/press/issue/${number}/rebuild`
+    setWorking({ what, number, message: 'Starting' })
     setError(null)
     setNote(null)
     try {
@@ -517,11 +604,18 @@ export function Workbench(props: Props) {
         headers: { 'content-type': 'application/json' },
         body: body ? JSON.stringify(body) : undefined,
       })
-      // A refusal — an empty issue, an article this machine cannot render,
-      // nothing to render it with — arrives as JSON, not as a stream.
-      if (!res.ok && res.headers.get('content-type')?.includes('application/json')) {
+      const isJson = res.headers.get('content-type')?.includes('application/json')
+      // A refusal — an empty issue, an article this machine cannot render, a
+      // render already in flight — arrives as JSON, not as a stream.
+      if (!res.ok && isJson) {
         const err = (await res.json()) as { error?: string }
         setError(err.error ?? 'That did not work.')
+        return
+      }
+      if (res.status === 202 && isJson) {
+        const { job } = (await res.json()) as { job: PressJobView }
+        setWorking({ what, number, message: job.progress ?? 'Queued' })
+        await track(job.id, what, number)
         return
       }
       if (!res.body) throw new Error('No response from the builder.')
@@ -542,13 +636,10 @@ export function Workbench(props: Props) {
             error?: string
             done?: { name: string; pageCount: number; preflight: { code: string }[] }
           }
-          if (event.progress) setWorking({ what, message: event.progress })
+          if (event.progress) setWorking({ what, number, message: event.progress })
           if (event.error) setError(event.error)
           if (event.done) {
-            setNote(
-              `“${event.done.name}” — ${event.done.pageCount} pages, preflight ` +
-                `${event.done.preflight.length ? event.done.preflight.map((p) => p.code).join(', ') : 'clean'}`,
-            )
+            announce(event.done)
             refresh()
           }
         }
@@ -560,8 +651,41 @@ export function Workbench(props: Props) {
     }
   }
 
+  /**
+   * Pick up a render that was already in flight when this page loaded.
+   *
+   * The point of composing on the worker is that it survives the tab that
+   * asked for it — pressed on a phone, watched on a laptop, or simply reloaded
+   * halfway through. Without this the page shows an idle Rebuild button over a
+   * machine four minutes into a hundred pages, and pressing it earns a refusal
+   * from the one-live-job index rather than the progress that already exists.
+   */
+  const resumed = useRef(false)
+  useEffect(() => {
+    if (resumed.current) return
+    resumed.current = true
+    void (async () => {
+      try {
+        const res = await fetch('/api/press/job', { cache: 'no-store' })
+        if (!res.ok) return
+        const { jobs } = (await res.json()) as { jobs: PressJobView[] }
+        const live = jobs[0]
+        if (!live) return
+        const number = props.issues.find((i) => i.id === live.issue_id)?.number
+        if (number === undefined) return
+        setWorking({ what: live.intent, number, message: live.progress ?? 'Working' })
+        await track(live.id, live.intent, number)
+      } catch {
+        // Nothing to recover, and nothing worth saying about it: the buttons
+        // work either way, and a render nobody is watching still finishes.
+      } finally {
+        setWorking(null)
+      }
+    })()
+  }, [props.issues, track])
+
   const unlock = async (number: number) => {
-    setWorking({ what: 'unlock', message: 'Unlocking' })
+    setWorking({ what: 'unlock', number, message: 'Unlocking' })
     setError(null)
     try {
       const res = await fetch(`/api/press/issue/${number}/lock`, {
@@ -585,7 +709,16 @@ export function Workbench(props: Props) {
         : true,
     )
 
-  const locked = busy || working !== null
+  /**
+   * Don't touch this one while it is being made.
+   *
+   * Scoped to the issue the render is for, not to the whole workbench. It used
+   * to be global, which was right when a build ran inside the request and the
+   * page was the only thing that could have started one. A compose on the
+   * worker outlives the tab, so a global lock would mean opening /press during
+   * a four-minute render found every button dead, on every issue.
+   */
+  const locked = busy || (working !== null && working.number === issue?.number)
 
   return (
     <DndContext
@@ -798,10 +931,8 @@ export function Workbench(props: Props) {
                     poolCount={pool.length}
                     threshold={props.threshold}
                     onAutoFill={autoFill}
-                    onRebuild={() => void stream('rebuild', `/api/press/issue/${issue.number}/rebuild`)}
-                    onLock={() =>
-                      void stream('lock', `/api/press/issue/${issue.number}/lock`, { action: 'lock' })
-                    }
+                    onRebuild={() => void compose('rebuild', issue.number)}
+                    onLock={() => void compose('lock', issue.number, { action: 'lock' })}
                     onUnlock={() => void unlock(issue.number)}
                   />
                   <PreviewControls
@@ -1146,7 +1277,7 @@ function IssueActions({
   issue: WorkbenchIssue
   editable: boolean
   locked: boolean
-  working: { what: 'rebuild' | 'lock' | 'unlock'; message: string } | null
+  working: Working | null
   poolCount: number
   threshold: number
   onAutoFill: () => void

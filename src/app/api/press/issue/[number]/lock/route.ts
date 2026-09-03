@@ -10,17 +10,21 @@
  * render succeeded.
  *
  * That has a consequence worth stating plainly. Composing is minutes of
- * headless Chromium, so — exactly like `/rebuild`, and for exactly the same
- * reason — locking only works where there is a browser. Deployed, this answers
- * 501 and says where to do it instead. See plan §9.
+ * headless Chromium, so locking only works where there is a browser. On the
+ * machine that has `.press/` this streams NDJSON progress, because a button
+ * that appears to hang for four minutes is a button people press twice.
+ * Deployed there is no browser: the render is queued for the Fly worker and
+ * the response names the job to poll, exactly as /rebuild does.
  *
- * Streams NDJSON progress, like /rebuild, because a button that appears to
- * hang for four minutes is a button people press twice.
+ * The freeze happens on the far side of the render either way — the worker
+ * calls `lockIssue` itself once the compose has succeeded (see run-job.ts), so
+ * "a locked issue's PDFs match its contents" holds on both paths.
  */
 
 import { NextResponse } from 'next/server'
 import { reviewSource } from '@/lib/press/review'
 import { itemsForIssue } from '@/lib/press/db'
+import { JobError, enqueueCompose } from '@/lib/press/jobs'
 import { localItems, mirrorOrder, publishBuild } from '@/lib/press/handoff'
 import { issueByNumber, lockIssue, unlockIssue } from '@/lib/press/workbench'
 import { loadEffectiveSettings } from '@/lib/press/settings-db'
@@ -68,17 +72,17 @@ export async function POST(request: Request, context: { params: Promise<{ number
       return NextResponse.json({ error: 'An empty issue cannot be locked.' }, { status: 409 })
     }
 
-    // Rendering does not fit a serverless function, and the 93MB of browser it
-    // would drag in puts the route over the deploy size limit. Honest 501.
+    // No browser here. The worker renders and then freezes, in that order.
     if (reviewSource() === 'supabase') {
-      return NextResponse.json(
-        {
-          error:
-            'Locking composes the final PDFs, which needs a machine with a browser. ' +
-            'Run press-sync locally and lock from there.',
-        },
-        { status: 501 },
-      )
+      try {
+        const job = await enqueueCompose(issue.id, 'lock')
+        return NextResponse.json({ job }, { status: 202 })
+      } catch (err) {
+        if (err instanceof JobError) {
+          return NextResponse.json({ error: err.message }, { status: 409 })
+        }
+        throw err
+      }
     }
 
     // The renderer reads `.press/items/<id>/`, where the id is the raindrop id

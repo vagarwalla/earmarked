@@ -123,6 +123,23 @@ export interface ComposeDeps extends RenderDeps {
   /** Injected in tests; production names the issue with a small Claude model. */
   nameIssueFn?: typeof nameIssue
   now?: Date
+  /**
+   * Keep this name instead of naming the issue again.
+   *
+   * A rebuild re-renders an issue; it does not re-title it. `nameIssue` is a
+   * model call, so without this the button quietly renames the magazine every
+   * time it is pressed — the same reason `buildIssue` takes a `name`. Only once
+   * it has one, though: an unnamed draft gets its name from the compose.
+   */
+  name?: string
+  /**
+   * Said as each stage begins, for the row a button is polling.
+   *
+   * A compose is four to six minutes with nothing to show for most of it. What
+   * the caller does with these is its own business — the worker writes them
+   * into `press_jobs.progress`, the tests ignore them.
+   */
+  onProgress?: (message: string) => void
 }
 
 /**
@@ -509,7 +526,9 @@ export async function composeIssue(issue: PressIssue, deps: ComposeDeps = {}): P
   const db = deps.db
   const now = deps.now ?? new Date()
   const nameFn = deps.nameIssueFn ?? nameIssue
+  const progress = deps.onProgress ?? (() => {})
 
+  progress('Loading the articles')
   const items = await itemsForIssue(issue.id, db)
   const { entries, skipped } = await loadEntries(items, deps)
   if (entries.length === 0) throw new Error(`press/compose: issue ${issue.number} has nothing to print`)
@@ -520,7 +539,8 @@ export async function composeIssue(issue: PressIssue, deps: ComposeDeps = {}): P
 
   // 1. Measure each article at the current template version (KTD7).
   const pageCounts: number[] = []
-  for (const entry of entries) {
+  for (const [i, entry] of entries.entries()) {
+    progress(`Measuring ${i + 1} of ${entries.length}`)
     if (entry.kind === 'pdf') {
       pageCounts.push(entry.pageCount)
       continue
@@ -534,16 +554,21 @@ export async function composeIssue(issue: PressIssue, deps: ComposeDeps = {}): P
     pageCounts.push((await renderHtml(html, images, deps)).pageCount)
   }
 
-  // 2. Name the issue from what is actually in it.
+  // 2. Name the issue from what is actually in it — unless it already has one.
   const provisionalToc = computeToc(entries, pageCounts, 0)
-  const name = await nameFn({
-    issueNumber: issue.number,
-    toc: provisionalToc,
-    apiKey: settings.anthropicApiKey,
-  })
+  let name = deps.name
+  if (!name) {
+    progress('Naming the issue')
+    name = await nameFn({
+      issueNumber: issue.number,
+      toc: provisionalToc,
+      apiKey: settings.anthropicApiKey,
+    })
+  }
 
   // 3. Render the front matter to learn how long it really is, then rebuild it
   //    with the page numbers that knowledge produces.
+  progress('Setting the contents page')
   let frontPages = Math.max(1, Math.ceil(entries.length / TOC_ENTRIES_PER_PAGE))
   let toc = computeToc(entries, pageCounts, frontPages)
   let front = await renderHtml(
@@ -574,6 +599,7 @@ export async function composeIssue(issue: PressIssue, deps: ComposeDeps = {}): P
   }
 
   // 4. Render the prose. One pass when nothing interrupts it.
+  progress('Typesetting the pages')
   const parts: Uint8Array[] = [front.pdf]
   for (const group of groupRuns(entries)) {
     if ('pdf' in group) {
@@ -592,11 +618,13 @@ export async function composeIssue(issue: PressIssue, deps: ComposeDeps = {}): P
     parts.push((await renderHtml(html, images, deps)).pdf)
   }
 
+  progress('Binding the interior')
   const interior = await padToEven(await mergePdfs(parts))
   const pageCount = await pdfPageCount(interior)
   const preflight = await preflightInterior(interior)
 
   // 5. Cover, sized to the finished interior.
+  progress('Rendering the cover')
   const cover = (
     await renderHtml(
       buildCoverHtml({
@@ -613,6 +641,7 @@ export async function composeIssue(issue: PressIssue, deps: ComposeDeps = {}): P
     )
   ).pdf
 
+  progress('Storing the files')
   const interiorPath = storagePath.interior(issue.id)
   const coverPath = storagePath.cover(issue.id)
   await putObject(interiorPath, interior, 'application/pdf', db)

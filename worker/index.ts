@@ -2,9 +2,10 @@
  * press — the Fly.io worker (U7).
  *
  * Everything that does not fit in a Vercel function lives here: the Raindrop
- * poll, extraction, layout, and the weekly tick that closes, composes and asks
- * for approval. Chromium and multi-minute renders are the reason this is a
- * separate runtime (assumption 6 in the plan).
+ * poll, extraction, layout, the weekly tick, and — since 017 — composing an
+ * issue on demand. Chromium and multi-minute renders are the reason this is a
+ * separate runtime (assumption 6 in the plan), and the reason the website asks
+ * for a compose by writing a `press_jobs` row rather than doing it itself.
  *
  * The machine is stateless — all state is in Supabase — so it can be killed
  * and restarted at any point. Every step below is written to be resumable.
@@ -33,11 +34,22 @@ import { archiveIssue } from '../src/lib/press/archive'
 import { refreshOrders } from '../src/lib/press/orders'
 import { sendWeeklyDigest } from '../src/lib/press/digest'
 import { getObject } from '../src/lib/press/db'
+import { claimJob, reapStaleJobs } from '../src/lib/press/jobs'
+import { runComposeJob } from '../src/lib/press/run-job'
 import type { Article, LinkpostTarget } from '../src/lib/press/types'
 
+const SECOND = 1_000
 const MINUTE = 60_000
 const POLL_INTERVAL = 30 * MINUTE
 const TICK_INTERVAL = 15 * MINUTE
+/**
+ * How often to look for work a button is waiting on.
+ *
+ * Ten seconds, not the poll's thirty minutes: somebody pressed "Make the PDF"
+ * and is watching a progress line. One indexed lookup against a table with a
+ * handful of rows is cheap enough to do six times a minute forever.
+ */
+const JOB_INTERVAL = 10 * SECOND
 
 function log(step: string, detail: Record<string, unknown> = {}): void {
   console.log(JSON.stringify({ at: new Date().toISOString(), step, ...detail }))
@@ -197,6 +209,28 @@ async function layoutExtracted(): Promise<number> {
 // an issue is the one part of this pipeline that was never the worker's to do.
 // See docs/plans/2026-08-31-003-feat-press-workbench-plan.md §2.
 
+// ── Jobs ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Compose whatever the website has asked for.
+ *
+ * One at a time and in the same process as everything else, deliberately: a
+ * hundred-page render is most of a gigabyte of Chromium, and this machine has
+ * one. Two at once is how the worker gets OOM-killed halfway through both.
+ *
+ * The loop drains rather than taking one per tick, so a friend who queues three
+ * issues does not wait thirty seconds between them.
+ */
+async function runJobs(): Promise<void> {
+  for (;;) {
+    const job = await claimJob()
+    if (!job) return
+    log('job_started', { job: job.id, issue: job.issue_id, intent: job.intent })
+    const result = await runComposeJob(job)
+    log(result ? 'job_done' : 'job_failed', { job: job.id, ...(result ?? {}) })
+  }
+}
+
 // ── The weekly tick ──────────────────────────────────────────────────────────
 
 // closeIfReady and composeAndAsk used to live here — the timer that decided an
@@ -266,6 +300,16 @@ export async function runPoll(): Promise<void> {
   } catch (err) {
     log('order_refresh_failed', { reason: (err as Error).message })
   }
+  // A machine killed mid-render leaves a `running` row, and the one-live-job
+  // index then refuses every new job for that issue — a dead button with no
+  // way out but the SQL editor. Reaping on the poll is often enough: the row
+  // has to be half an hour stale before it counts.
+  try {
+    const reaped = await reapStaleJobs()
+    if (reaped) log('jobs_reaped', { count: reaped })
+  } catch (err) {
+    log('job_reap_failed', { reason: (err as Error).message })
+  }
 }
 
 /** Sunday evening PT. The tick is idempotent, so a double fire is harmless. */
@@ -307,7 +351,7 @@ async function main(): Promise<void> {
   // No bootstrapIssue(): issues are opened by hand in the workbench now, and
   // there may legitimately be none at all. Arriving articles land in the pool,
   // which needs nothing to exist first.
-  log('worker_started', { poll_minutes: POLL_INTERVAL / MINUTE })
+  log('worker_started', { poll_minutes: POLL_INTERVAL / MINUTE, job_seconds: JOB_INTERVAL / SECOND })
 
   const guard = async (name: string, fn: () => Promise<void>) => {
     try {
@@ -321,6 +365,18 @@ async function main(): Promise<void> {
 
   await guard('poll', runPoll)
   setInterval(() => void guard('poll', runPoll), POLL_INTERVAL)
+
+  // Serialised against itself: a render outlasts the interval many times over,
+  // and a second timer firing into a running drain would claim the next job
+  // and start a second Chromium beside the first.
+  let jobsRunning = false
+  setInterval(() => {
+    if (jobsRunning) return
+    jobsRunning = true
+    void guard('jobs', runJobs).finally(() => {
+      jobsRunning = false
+    })
+  }, JOB_INTERVAL)
 
   let lastTick = ''
   setInterval(() => {

@@ -519,3 +519,40 @@ export interface ActionToken {
   used_at: string | null
   created_at: string
 }
+
+// ── Jobs ─────────────────────────────────────────────────────────────────────
+
+export type JobState = 'queued' | 'running' | 'done' | 'failed'
+/** `rebuild` re-renders a draft; `lock` renders and then freezes it. */
+export type JobIntent = 'rebuild' | 'lock'
+
+/** What a finished compose hands back — the same three facts a build streamed. */
+export interface JobResult {
+  name: string
+  pageCount: number
+  preflight: { code: string; detail: string }[]
+  /** Articles the compose could not read, and why. Empty is the normal case. */
+  skipped?: { title: string; reason: string }[]
+}
+
+/**
+ * One request to render an issue on a machine that has a browser.
+ *
+ * See supabase/migrations/017_press_jobs.sql for why this is a table rather
+ * than a streamed request: a render that outlives the tab that asked for it
+ * cannot report through the response body it no longer has.
+ */
+export interface PressJob {
+  id: string
+  kind: 'compose'
+  issue_id: string
+  intent: JobIntent
+  state: JobState
+  progress: string | null
+  error: string | null
+  result: JobResult | null
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+  heartbeat_at: string | null
+}

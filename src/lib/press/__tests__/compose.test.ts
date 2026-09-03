@@ -697,6 +697,57 @@ describe('composeIssue', () => {
     expect(result.pageCount).toBe(8)
   })
 
+  it('keeps the name it was given rather than naming the issue again', async () => {
+    countingRenderer()
+    const items = [item({ id: 'a', content_path: 'items/a/article.json' })]
+    const db = composeDb({ 'items/a/article.json': article('First') }, {}, items)
+    const naming = vi.fn(async () => 'A Second Name')
+
+    // A rebuild re-renders an issue; it does not retitle it. Without this the
+    // button quietly renames the magazine on every press — and `nameIssue` is
+    // a model call, so it would also spend a token to do it.
+    const result = await composeIssue(issue({ name: 'Winter Light' }), {
+      db: db.client,
+      settings,
+      loadImage: async () => new Uint8Array(),
+      nameIssueFn: naming,
+      name: 'Winter Light',
+    })
+
+    expect(result.name).toBe('Winter Light')
+    expect(naming).not.toHaveBeenCalled()
+  })
+
+  it('reports each stage, so a four-minute render has something to show', async () => {
+    countingRenderer()
+    const items = [
+      item({ id: 'a', content_path: 'items/a/article.json' }),
+      item({ id: 'b', content_path: 'items/b/article.json' }),
+    ]
+    const db = composeDb(
+      { 'items/a/article.json': article('First'), 'items/b/article.json': article('Second') },
+      {},
+      items,
+    )
+    const said: string[] = []
+
+    await composeIssue(issue(), {
+      db: db.client,
+      settings,
+      loadImage: async () => new Uint8Array(),
+      nameIssueFn: async () => 'Winter Light',
+      onProgress: (m) => said.push(m),
+    })
+
+    // The stages the job row shows a button. Measuring counts, because it is
+    // the one that takes proportionally longer the fatter the issue gets.
+    expect(said).toContain('Measuring 1 of 2')
+    expect(said).toContain('Measuring 2 of 2')
+    expect(said).toContain('Typesetting the pages')
+    expect(said).toContain('Rendering the cover')
+    expect(said[said.length - 1]).toBe('Storing the files')
+  })
+
   it('renders the prose in a single pass when nothing interrupts it', async () => {
     const calls = countingRenderer()
     const items = [item({ id: 'a', content_path: 'items/a/article.json' }), item({ id: 'b', content_path: 'items/b/article.json' })]

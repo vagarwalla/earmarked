@@ -74,6 +74,11 @@ export const config = {
     // will one day be missing one, so every new /api/press/* route belongs
     // here unless it is deliberately public like action/ and email-in/.
     '/api/press/item/:path*',
+    // The renderer's queue: asking for a compose spends four minutes of the
+    // worker's only machine, and what it reports back is the running order of
+    // an issue by another name.
+    '/api/press/job',
+    '/api/press/job/:path*',
     '/api/press/settings',
     '/api/press/orders',
     // The route that mints approval tokens and sends the mail that spends the

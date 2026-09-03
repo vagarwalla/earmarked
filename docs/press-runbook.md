@@ -113,8 +113,30 @@ been open past the age backstop and still clears Lulu's 32-page floor; compose
 it; quote it; email approval. Re-send approval for anything still waiting.
 Follow ordered issues to shipped and archive them. Send the weekly digest.
 
+**Every 10 seconds:** look for a compose the website has asked for, and run it.
+
 **On approve:** one Lulu print job, then the articles move out of `hw` into a
 Raindrop collection named `YYYY-MM-DD — <issue name>`.
+
+### Where a render happens
+
+Composing an issue is minutes of headless Chromium, so it happens wherever
+there is a browser — and that is never a Vercel function.
+
+| Where you press it | What happens |
+|---|---|
+| Locally, with `.press/` on disk | `buildIssue` runs inside the request and streams NDJSON progress. Unchanged; this is the fast loop |
+| The deployed site | The route writes a `press_jobs` row and answers `202 {job}`. The worker claims it, renders, and writes progress back into the row; the button polls `/api/press/job/<id>` |
+
+Both end the same way: `interior.pdf` and `cover.pdf` in Storage, `built_order`
+and `page_total` on the issue, and — for a Lock — the issue frozen only after
+the render succeeded.
+
+One live job per issue, enforced by a partial unique index rather than by the
+UI, so a second press of the button during a render is refused with a sentence
+instead of starting a second Chromium. A job outlives the tab that asked for
+it: reload, or open `/press` on another device, and the progress is still
+there, because the workbench asks `/api/press/job` on load.
 
 ### Ordering several issues at once
 
@@ -214,6 +236,16 @@ for `order_failed`, confirm at Lulu whether a job exists, and set
 must be up. Confirm `auto_stop_machines = false` and `min_machines_running = 1`
 are still in effect — Fly's defaults would suspend an idle machine and the tick
 would silently never run.
+
+**"Make the PDF" queues but nothing happens.** Nothing is claiming jobs — check
+that the Fly machine is up (`fly status -a press-worker`) and that its log shows
+`worker_started` with a `job_seconds` field. A worker deployed before migration
+017 does not know about jobs at all and will leave them queued forever.
+
+**A job is stuck `running` and the button is dead.** The machine died
+mid-render. `press_reap_jobs()` fails anything that has not written a progress
+line in 30 minutes, and the poll calls it every half hour, so this clears
+itself; `SELECT press_reap_jobs('1 minute')` forces it.
 
 **Renders are slow or the machine is out of memory.** Chromium on a 100-page
 interior is the heavy step. Raise `memory` in `worker/fly.toml`; the weekly

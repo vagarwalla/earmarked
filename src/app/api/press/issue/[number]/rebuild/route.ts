@@ -16,10 +16,17 @@
  * the button appeared to work and changed nothing. `handoff.ts` makes the
  * crossing in both directions: the running order down onto the disk before the
  * render, the PDFs and page count back up after it.
+ *
+ * Deployed, none of that applies: there is no disk and no browser. This used to
+ * answer 501 and tell you to go and find a laptop. It now queues the render for
+ * the Fly worker and answers with the job to poll:
+ *
+ *   {"job":{"id":"…","state":"queued","progress":"Waiting for the renderer"}}
  */
 
 import { NextResponse } from 'next/server'
 import { itemsForIssue } from '@/lib/press/db'
+import { JobError, enqueueCompose } from '@/lib/press/jobs'
 import { localItems, mirrorOrder, publishBuild } from '@/lib/press/handoff'
 import { issueByNumber } from '@/lib/press/workbench'
 import { reviewSource } from '@/lib/press/review'
@@ -46,18 +53,6 @@ export async function POST(
   const number = issueNumber(raw)
   if (number === null) return NextResponse.json({ error: 'bad issue' }, { status: 400 })
 
-  // Rendering an issue is minutes of headless Chromium. It does not fit a
-  // serverless function, and the 93MB of browser it would drag along puts the
-  // whole route over the deploy size limit — so deployed, this is honestly a
-  // 501, before the two queries below and in the few milliseconds the comment
-  // above promises.
-  if (reviewSource() === 'supabase') {
-    return NextResponse.json(
-      { error: 'Rebuilding needs a machine with a browser. Run press-run locally, then re-import.' },
-      { status: 501 },
-    )
-  }
-
   try {
     const issue = await issueByNumber(number)
     if (!issue) return NextResponse.json({ error: 'no such issue' }, { status: 404 })
@@ -75,6 +70,22 @@ export async function POST(
     const items = await itemsForIssue(issue.id)
     if (items.length === 0) {
       return NextResponse.json({ error: 'An empty issue has nothing to render.' }, { status: 409 })
+    }
+
+    // Deployed there is no disk and no browser, so the render happens on the
+    // worker. Everything above still applies — a job for a locked or empty
+    // issue would be claimed only to fail four minutes later, and refusing it
+    // here is the same refusal in the same place.
+    if (reviewSource() === 'supabase') {
+      try {
+        const job = await enqueueCompose(issue.id, 'rebuild')
+        return NextResponse.json({ job }, { status: 202 })
+      } catch (err) {
+        if (err instanceof JobError) {
+          return NextResponse.json({ error: err.message }, { status: 409 })
+        }
+        throw err
+      }
     }
 
     // An article that was never extracted on this machine cannot be rendered,
