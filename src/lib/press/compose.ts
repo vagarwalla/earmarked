@@ -342,17 +342,269 @@ export function paletteFor(issueNumber: number, length = COVER_PALETTE.length): 
   return Array.from({ length }, (_, i) => COVER_PALETTE[(offset + i) % n])
 }
 
-/** Concentric hard-stop bands radiating from the panel's outer bottom corner. */
-function orbitGradient(colors: string[]): string {
-  const stops = colors
+// ── Cover art ────────────────────────────────────────────────────────────────
+
+/**
+ * Every issue is drawn its own figure, and the figures have to read as one
+ * series: the same six-colour palette, the same hard-stop riso register, the
+ * same paper ground showing through as the drawing's negative space. What
+ * changes from issue to issue is the geometry — which motif is struck, and the
+ * handful of numbers inside it.
+ *
+ * The motif steps with the issue number, so no two issues standing next to each
+ * other on a shelf carry the same figure. Seven motifs against six palette
+ * rotations: a figure and a colour set do not pair up again for 42 issues. The
+ * numbers inside a motif come off a hash of the issue's number *and* its name,
+ * so even those two are drawn differently — and the hash is stable, so
+ * re-composing an issue prints the cover it printed before.
+ *
+ * Still CSS rather than a placed photograph, for the resolution reason set out
+ * at the top of templates/cover.html.
+ */
+export const COVER_MOTIFS = [
+  'orbit',
+  'arches',
+  'rays',
+  'strata',
+  'columns',
+  'eclipse',
+  'horizon',
+] as const
+
+export type CoverMotif = (typeof COVER_MOTIFS)[number]
+
+/** The figure this issue is drawn with. Consecutive issues never share one. */
+export function motifFor(issueNumber: number): CoverMotif {
+  const n = COVER_MOTIFS.length
+  return COVER_MOTIFS[((Math.trunc(issueNumber) - 1) % n + n) % n]
+}
+
+/** FNV-1a, 32-bit: small, dependency-free, and stable from run to run. */
+function hash32(input: string, seed = 0x811c9dc5): number {
+  let h = seed >>> 0
+  for (let i = 0; i < input.length; i++) {
+    h = Math.imul(h ^ input.charCodeAt(i), 0x01000193) >>> 0
+  }
+  return h >>> 0
+}
+
+/**
+ * The dials one figure is drawn with — an angle, a radius, a band count. Each
+ * is read off the issue's seed under its own name, so adding a dial to a motif
+ * does not shift the ones already there.
+ */
+interface Dials {
+  /** A whole number in [lo, hi]. */
+  int(salt: string, lo: number, hi: number): number
+  /** A number in [lo, hi). */
+  span(salt: string, lo: number, hi: number): number
+}
+
+function dialsFor(seed: number): Dials {
+  const at = (salt: string) => hash32(salt, seed)
+  return {
+    int: (salt, lo, hi) => lo + (at(salt) % (hi - lo + 1)),
+    span: (salt, lo, hi) => lo + ((at(salt) % 1024) / 1024) * (hi - lo),
+  }
+}
+
+const pc = (n: number) => `${n.toFixed(1)}%`
+
+/**
+ * A run of bands across a stretch of the gradient line. Every stop is hard —
+ * each colour ends exactly where the next begins — because a riso plate does
+ * not gradate, and because a colour left to interpolate towards `transparent`
+ * fringes grey on the way there.
+ */
+function bandStops(colors: string[], from: number, to: number, unit = '%'): string {
+  const step = (to - from) / colors.length
+  return colors
     .map((c, i) => {
-      const from = (i / colors.length) * 100
-      const to = ((i + 1) / colors.length) * 100
-      return `${c} ${from.toFixed(1)}% ${to.toFixed(1)}%`
+      const a = (from + i * step).toFixed(1)
+      const b = (from + (i + 1) * step).toFixed(1)
+      return `${c} ${a}${unit} ${b}${unit}`
     })
     .join(', ')
-  // 118% so the outermost band still covers the far corner of the box.
-  return `radial-gradient(circle at 100% 100%, ${stops}, transparent 118%)`
+}
+
+/** Concentric rings with paper left between them. */
+function ringStops(colors: string[], inner: number, outer: number, gap: number): string {
+  const step = (outer - inner) / colors.length
+  const parts = [`transparent 0 ${pc(inner)}`]
+  colors.forEach((c, i) => {
+    const a = inner + i * step
+    const b = a + step - gap
+    parts.push(`${c} ${pc(a)} ${pc(b)}`, `transparent ${pc(b)} ${pc(a + step)}`)
+  })
+  return parts.join(', ')
+}
+
+/** Weights that sum to 1 — uneven, but never so uneven a band disappears. */
+function weights(d: Dials, salt: string, n: number): number[] {
+  const raw = Array.from({ length: n }, (_, i) => 0.6 + d.span(`${salt}-w${i}`, 0, 0.8))
+  const total = raw.reduce((a, b) => a + b, 0)
+  return raw.map((w) => w / total)
+}
+
+/**
+ * Bands of unequal width, laid end to end along the gradient line, with one
+ * seam of paper left open between two of them. The seam is a hairline of the
+ * ground rather than a whole band: a band dropped to paper leaves a hole in the
+ * middle of the figure, where a seam reads as one plate lifted off the next.
+ */
+function unevenStops(colors: string[], ws: number[], seam: { at: number; width: number }): string {
+  let at = 0
+  const parts: string[] = []
+  colors.forEach((c, i) => {
+    const from = at * 100
+    at += ws[i]
+    const to = at * 100
+    const cut = i === seam.at ? seam.width : 0
+    parts.push(`${c} ${pc(from)} ${pc(to - cut)}`)
+    if (cut) parts.push(`transparent ${pc(to - cut)} ${pc(to)}`)
+  })
+  return parts.join(', ')
+}
+
+/**
+ * One flat disc. Sized `closest-side`, so its radius is measured against the
+ * short edge of the art box and a thicker issue does not inflate it.
+ */
+function disc(color: string, x: number, y: number, r: number): string {
+  return `radial-gradient(circle closest-side at ${pc(x)} ${pc(y)}, ${color} 0 ${pc(r)}, transparent ${pc(r)})`
+}
+
+/** Bands held to the foot of the box — the ground a figure stands on. */
+function ground(colors: string[], from: number, ws: number[]): string {
+  let at = from
+  const parts = [`transparent 0 ${pc(from)}`]
+  colors.forEach((c, i) => {
+    const next = at + ws[i] * (100 - from)
+    parts.push(`${c} ${pc(at)} ${pc(next)}`)
+    at = next
+  })
+  return `linear-gradient(to bottom, ${parts.join(', ')})`
+}
+
+/**
+ * Each motif returns a CSS `background-image` list, front layer first. They all
+ * bleed off the outer edge of the panel, and none of them reference anything.
+ */
+const MOTIF_LAYERS: Record<CoverMotif, (colors: string[], d: Dials) => string[]> = {
+  /** Concentric hard bands struck from the panel's outer bottom corner. */
+  orbit: (colors, d) => {
+    const rings = colors.slice(0, d.int('orbit-rings', 4, colors.length))
+    // Past 100% is past the box's far corner: the outermost band has to reach
+    // beyond it, or the corner prints paper.
+    const reach = d.span('orbit-reach', 106, 124)
+    return [
+      `radial-gradient(circle at 100% 100%, ${bandStops(rings, 0, reach)}, transparent ${pc(reach)})`,
+    ]
+  },
+
+  /** Half-rings rising from the foot, with paper between them. */
+  arches: (colors, d) => {
+    const arcs = colors.slice(0, d.int('arch-count', 3, 5))
+    return [
+      `radial-gradient(circle at ${pc(d.span('arch-x', 34, 66))} 100%, ${ringStops(
+        arcs,
+        d.span('arch-inner', 16, 32),
+        d.span('arch-outer', 98, 122),
+        d.span('arch-gap', 3, 6),
+      )})`,
+    ]
+  },
+
+  /** A fan of wedges opening from the outer bottom corner. */
+  rays: (colors, d) => {
+    const wedges = colors.slice(0, d.int('ray-count', 4, colors.length))
+    // 270deg puts the fan's zero on the left of the outer bottom corner, so the
+    // box is one quadrant of it, and the tilt swings the fan off square. The
+    // wedges are spread over 108deg rather than 90 so that whatever the tilt
+    // the fan still overruns the quadrant: a wedge stopping short of the edge
+    // leaves a hairline of paper down the trim, and it prints as a sawtooth.
+    const tilt = d.span('ray-tilt', 0, 18)
+    return [
+      `conic-gradient(from ${(270 - tilt).toFixed(1)}deg at 100% 100%, ${bandStops(
+        wedges,
+        0,
+        108,
+        'deg',
+      )})`,
+    ]
+  },
+
+  /** Horizontal seams of unequal depth, one of them opened to the paper. */
+  strata: (colors, d) => {
+    const n = d.int('strata-count', 4, colors.length)
+    const seam = { at: d.int('strata-seam', 0, n - 2), width: d.span('strata-seam-w', 2.4, 4.6) }
+    return [
+      `linear-gradient(to bottom, ${unevenStops(colors.slice(0, n), weights(d, 'strata', n), seam)})`,
+    ]
+  },
+
+  /** Vertical columns of unequal width, crossed by a single rule. */
+  columns: (colors, d) => {
+    const n = d.int('col-count', 4, colors.length)
+    const seam = { at: d.int('col-seam', 0, n - 2), width: d.span('col-seam-w', 2, 4) }
+    const rule = d.span('col-rule', 52, 74)
+    return [
+      // Listed first, so the rule lies over the columns rather than under them,
+      // and drawn in the paper so it reads against every column it crosses.
+      `linear-gradient(to bottom, transparent 0 ${pc(rule)}, var(--paper) ${pc(rule)} ${pc(
+        rule + 1.6,
+      )}, transparent ${pc(rule + 1.6)})`,
+      `linear-gradient(to right, ${unevenStops(colors.slice(0, n), weights(d, 'col', n), seam)})`,
+    ]
+  },
+
+  /**
+   * Two discs, the nearer one punched out of the further in paper, standing in
+   * banded ground. The offset between them is held to a fraction of the radius
+   * and the ground is set above the disc's foot, so the crescent is always cut
+   * from a disc it overlaps and always stands on something.
+   */
+  eclipse: (colors, d) => {
+    const r = d.span('ecl-r', 58, 76)
+    const x = d.span('ecl-x', 30, 46)
+    const y = d.span('ecl-y', 38, 50)
+    return [
+      disc('var(--paper)', x + d.span('ecl-dx', 9, 16), y - d.span('ecl-dy', 5, 11), r * 0.84),
+      disc(colors[0], x, y, r),
+      ground(colors.slice(1, 3), d.span('ecl-ground', 62, 72), weights(d, 'ecl', 2)),
+    ]
+  },
+
+  /** A disc rising out of banded ground. */
+  horizon: (colors, d) => {
+    const line = d.span('hor-line', 46, 62)
+    const n = d.int('hor-bands', 2, 4)
+    return [
+      // The ground is the front layer, so the disc is cut by the horizon.
+      ground(colors.slice(1, 1 + n), line, weights(d, 'hor', n)),
+      disc(colors[0], d.span('hor-x', 34, 66), line, d.span('hor-r', 46, 70)),
+    ]
+  },
+}
+
+export interface CoverArt {
+  motif: CoverMotif
+  /** A CSS `background-image` list, front layer first. */
+  layers: string
+}
+
+/**
+ * The figure for one issue: which motif, drawn with which numbers. Pure and
+ * deterministic — the same issue always yields the same art.
+ */
+export function coverArt(
+  issueNumber: number,
+  issueName: string,
+  colors: string[] = paletteFor(issueNumber),
+): CoverArt {
+  const motif = motifFor(issueNumber)
+  const d = dialsFor(hash32(`${Math.trunc(issueNumber)} ${issueName}`))
+  return { motif, layers: MOTIF_LAYERS[motif](colors.slice(), d).join(', ') }
 }
 
 /**
@@ -401,6 +653,7 @@ function spineContent(opts: CoverOptions): string {
  *
  * The art is drawn in CSS, not placed as an image: Lulu wants 300 PPI on the
  * cover and the extracted article art is web-sized. See `templates/cover.html`.
+ * Which figure it draws is the issue's own — see `coverArt`.
  */
 export function buildCoverHtml(opts: CoverOptions): string {
   const { width, height } = coverSizePt(opts.pageCount)
@@ -418,9 +671,13 @@ export function buildCoverHtml(opts: CoverOptions): string {
   const spineTextHeight = Math.max(spineTextHeightPt(opts.pageCount), 4)
 
   const colors = paletteFor(opts.issueNumber)
+  const art = coverArt(opts.issueNumber, opts.issueName, colors)
 
   const values: Record<string, string> = {
-    ART_ORBIT: orbitGradient(colors),
+    ART_LAYERS: art.layers,
+    // Not printed — it names the figure for anyone looking at the HTML, and
+    // for the tests that check consecutive issues are not drawn alike.
+    ART_MOTIF: art.motif,
     // The accent picks up the first colour of this issue's rotation, so the
     // rules and the spine numeral belong to the same palette as the art.
     ACCENT: colors[0],

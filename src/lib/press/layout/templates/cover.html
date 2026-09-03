@@ -114,9 +114,16 @@
         margin-left: -{{SAFETY_INNER}}pt;
       }
 
-      /* Concentric bands struck from the outer bottom corner, in this issue's
-         rotation of the palette. */
-      .art-orbit { background: {{ART_ORBIT}}; }
+      /* The figure itself: a stack of hard-edged gradient layers, composed in
+         compose.ts. Every issue gets a different one of seven motifs, drawn
+         with its own numbers, in its own rotation of the palette — different
+         covers, one series. The layers are all the box has, so whatever they
+         leave transparent prints as paper. */
+      .art-figure {
+        background-image: {{ART_LAYERS}};
+        background-repeat: no-repeat;
+        background-size: 100% 100%;
+      }
 
       /* ── Front type ── */
 
@@ -257,7 +264,7 @@
         <hr class="hair" />
       </div>
 
-      <div class="art art--bleed art-orbit"></div>
+      <div class="art art--bleed art-figure" data-motif="{{ART_MOTIF}}"></div>
 
       <div class="theme">
         <hr class="accent-rule" />

@@ -9,6 +9,9 @@ import {
   buildCoverHtml,
   contentsClass,
   COVER_PALETTE,
+  COVER_MOTIFS,
+  coverArt,
+  motifFor,
   issueDateline,
   paletteFor,
   mergePdfs,
@@ -337,7 +340,7 @@ describe('buildCoverHtml', () => {
     // Lulu wants 300 PPI on a cover; extracted article art is web-sized. The
     // art has to be resolution-free, which means gradients rather than <img>.
     const html = buildCoverHtml({ ...base, pageCount: 100 })
-    expect(html).toContain('radial-gradient')
+    expect(html).toMatch(/(?:radial|linear|conic)-gradient\(/)
     expect(html).not.toContain('<img')
     expect(html).not.toMatch(/url\(/)
   })
@@ -350,6 +353,61 @@ describe('buildCoverHtml', () => {
     expect(new Set(paletteFor(3))).toEqual(new Set(COVER_PALETTE))
     // A number below the first issue must not index off the front.
     expect(paletteFor(0).every((c) => COVER_PALETTE.includes(c as never))).toBe(true)
+  })
+
+  it('draws every issue a different figure, and never two alike in a row', () => {
+    // Two issues side by side on a shelf must not look like a reprint of each
+    // other: the motif steps with the number, so neighbours never share one.
+    for (let n = 1; n <= 24; n++) {
+      expect(motifFor(n)).not.toBe(motifFor(n + 1))
+    }
+    // Seven motifs against six palette rotations: the pairing repeats only
+    // after 42 issues, and every motif gets used.
+    const pairs = new Set<string>()
+    for (let n = 1; n <= 42; n++) pairs.add(`${motifFor(n)}/${paletteFor(n)[0]}`)
+    expect(pairs.size).toBe(42)
+    expect(new Set(Array.from({ length: 42 }, (_, i) => motifFor(i + 1)))).toEqual(
+      new Set(COVER_MOTIFS),
+    )
+    // A number below the first issue must not index off the front.
+    expect(COVER_MOTIFS).toContain(motifFor(0))
+  })
+
+  it('draws two issues on the same motif with different numbers', () => {
+    // 1 and 43 come round to the same figure and the same colours; what is
+    // left to tell them apart is the issue's name driving the dials.
+    expect(motifFor(1)).toBe(motifFor(43))
+    expect(paletteFor(1)).toEqual(paletteFor(43))
+    expect(coverArt(1, 'Winter Light').layers).not.toBe(coverArt(43, 'Salt and Ash').layers)
+    // Same issue, same cover: re-composing must not redraw it.
+    expect(coverArt(7, 'Winter Light')).toEqual(coverArt(7, 'Winter Light'))
+    // The name alone changes the drawing.
+    expect(coverArt(7, 'Winter Light').layers).not.toBe(coverArt(7, 'Salt and Ash').layers)
+  })
+
+  it('draws each motif from the issue palette, in hard stops, off nothing remote', () => {
+    for (let n = 1; n <= COVER_MOTIFS.length; n++) {
+      const art = coverArt(n, `Issue ${n}`)
+      const colors = paletteFor(n)
+      expect(art.layers).toMatch(/(?:radial|linear|conic)-gradient\(/)
+      // Balanced parens, so a layer cannot swallow the declaration after it.
+      expect(art.layers.split('(').length).toBe(art.layers.split(')').length)
+      // Every colour it uses is one of this issue's, the paper, or the paper
+      // showing through: nothing invents a colour outside the series.
+      const used = art.layers.match(/#[0-9A-Fa-f]{3,8}/g) ?? []
+      expect(used.every((c) => colors.includes(c))).toBe(true)
+      expect(used.length).toBeGreaterThan(0)
+      expect(art.layers).not.toMatch(/url\(|https?:|@import/)
+      // No NaN or undefined leaking out of a dial into a stop position.
+      expect(art.layers).not.toMatch(/NaN|undefined/)
+    }
+  })
+
+  it("puts the issue's figure on the front panel", () => {
+    const html = buildCoverHtml({ ...base, pageCount: 100 })
+    const art = coverArt(base.issueNumber, base.issueName)
+    expect(html).toContain(`background-image: ${art.layers};`)
+    expect(html).toContain(`data-motif="${art.motif}"`)
   })
 
   it('prints spine text only once the spine can hold it', () => {
