@@ -73,6 +73,23 @@ export function OrdersPanel({
     }
   }
 
+  const release = async (orderId: string) => {
+    setBusy(true)
+    onError(null)
+    try {
+      const res = await fetch('/api/press/orders', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'release', orderId }),
+      })
+      const body = await readJson(res)
+      if (!res.ok) onError(body.error ?? 'Could not release it.')
+      onRefresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (orders === null) {
     return (
       <p className="text-muted-foreground rounded-lg border border-dashed p-6 text-center text-xs">
@@ -146,6 +163,27 @@ export function OrdersPanel({
                     </div>
                     {order.message && (
                       <p className="text-muted-foreground mt-1 text-xs">{order.message}</p>
+                    )}
+                    {/* A row claimed before Lulu was called and never given a
+                        job: the issue counts it as an order in progress and
+                        cannot be ordered again until it is let go. Offered only
+                        here, because a row that names a job is a real order and
+                        releasing it would allow a second one. */}
+                    {!order.lulu_job_id && !isFinished(order) && (
+                      <div className="mt-1.5 flex items-baseline gap-2">
+                        <p className="text-muted-foreground min-w-0 flex-1 text-xs">
+                          Held, but Lulu never took it — this is blocking a new order for #
+                          {order.issue_number}.
+                        </p>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() => void release(order.id)}
+                        >
+                          Release
+                        </Button>
+                      </div>
                     )}
                   </li>
                 ))}

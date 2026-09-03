@@ -82,6 +82,10 @@ export function OrderDialog({
    * whole flow is built to avoid.
    */
   const [approveUrl, setApproveUrl] = useState<string | null>(null)
+  /** The same token, so the last act can happen here rather than in a new tab. */
+  const [approveToken, setApproveToken] = useState<string | null>(null)
+  const [printing, setPrinting] = useState(false)
+  const [outcome, setOutcome] = useState<{ ok: boolean; text: string } | null>(null)
 
   // The identity of the selection, not the array — a new array of the same
   // issues must not re-price the bundle, which is N+1 calls to Lulu.
@@ -116,14 +120,19 @@ export function OrderDialog({
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ issues: issueNumbers }),
       })
-      const body = await readJson<{ sentTo: string | null; approveUrl: string | null }>(res)
+      const body = await readJson<{
+        sentTo: string | null
+        approveUrl: string | null
+        approveToken: string | null
+      }>(res)
       if (!res.ok) {
         setFailure(body.error ?? 'Could not prepare the approval.')
         return
       }
       if (body.approveUrl) {
-        // Nowhere to post it, so it stays here and the dialog stays open.
+        // Nowhere to post it, so the last act happens here.
         setApproveUrl(body.approveUrl)
+        setApproveToken(body.approveToken ?? null)
         return
       }
       onNote(
@@ -132,6 +141,40 @@ export function OrderDialog({
       onClose()
     } finally {
       setSending(false)
+    }
+  }
+
+  /**
+   * Claim the token and place the job, without leaving the dialog.
+   *
+   * This used to be a link to /press/confirm/<token> in a new tab, which is
+   * the right shape for an email — the reader is in their inbox and the page
+   * has to reintroduce the whole decision. Reached from the dialog that just
+   * priced it, a second tab is a worse version of the panel already on screen,
+   * and it hid the outcome on a page nobody returns from.
+   */
+  const print = async () => {
+    if (!approveToken) return
+    setPrinting(true)
+    setFailure(null)
+    try {
+      const res = await fetch(`/api/press/action/${encodeURIComponent(approveToken)}`, {
+        method: 'POST',
+      })
+      const body = await readJson<{ status?: string; jobId?: string }>(res)
+      if (!res.ok) {
+        // The reason, in full. A refused job now says which field Lulu
+        // objected to rather than "something went wrong (500)".
+        setOutcome({ ok: false, text: body.error ?? `Lulu refused it (${res.status}).` })
+        return
+      }
+      setOutcome({
+        ok: true,
+        text: `Ordered${body.jobId ? ` — Lulu job ${body.jobId}` : ''}. It appears under Orders, with tracking once it ships.`,
+      })
+      onNote('Ordered. Tracking will appear under Orders.')
+    } finally {
+      setPrinting(false)
     }
   }
 
@@ -277,21 +320,39 @@ export function OrderDialog({
           </>
         )}
 
-        {approveUrl && (
+        {approveUrl && !outcome && (
           <div className="mt-4 rounded-md border p-3">
-            <p className="text-sm font-medium">Your approval link is ready.</p>
-            <p className="text-muted-foreground mt-1 text-xs">
-              It is single-use and expires. Opening it shows the price once more and asks you to
-              confirm — that is the click that places the order.
+            <p className="text-sm font-medium">What pressing Print does</p>
+            <ol className="text-muted-foreground mt-2 list-decimal space-y-1 pl-4 text-xs">
+              <li>Sends the interior and cover PDFs to Lulu as one print job.</li>
+              <li>
+                Charges {preview?.quote ? money(preview.quote.totalCents, currency) : 'the quoted amount'}{' '}
+                to the card on your Lulu account.
+              </li>
+              <li>Moves the issue from “locked” to “ordered” and records the job against it.</li>
+              <li>
+                If Lulu refuses the files, nothing is charged and the reason is shown here — the
+                issue goes back to being orderable.
+              </li>
+              <li>Afterwards, Orders polls Lulu for status and tracking until it ships.</li>
+            </ol>
+            <Button size="lg" className="mt-3 w-full" disabled={printing} onClick={() => void print()}>
+              {printing
+                ? 'Sending it to Lulu…'
+                : `Print it${preview?.quote ? ` — ${money(preview.quote.totalCents, currency)}` : ''}`}
+            </Button>
+          </div>
+        )}
+
+        {outcome && (
+          <div
+            className={`mt-4 rounded-md border p-3 ${outcome.ok ? '' : 'border-destructive'}`}
+            role="status"
+          >
+            <p className={`text-sm font-medium ${outcome.ok ? '' : 'text-destructive'}`}>
+              {outcome.ok ? 'Printing.' : 'Lulu would not take it.'}
             </p>
-            <a
-              href={approveUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="bg-foreground text-background mt-3 inline-flex h-9 items-center rounded-md px-3 text-sm font-medium"
-            >
-              Open the approval page →
-            </a>
+            <p className="text-muted-foreground mt-1 text-xs break-words">{outcome.text}</p>
           </div>
         )}
 

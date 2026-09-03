@@ -19,6 +19,19 @@ export const runtime = 'nodejs'
 export const maxDuration = 60
 
 export async function POST(_request: Request, context: { params: Promise<{ token: string }> }) {
+  try {
+    return await act(context)
+  } catch (err) {
+    // This route had no catch at all, so anything that threw inside it — a
+    // print job Lulu refused, most of all — reached the confirmation page as
+    // a bare Next 500 with no body, and the page could only say "something
+    // went wrong (500)". The reason was recorded in `press_events` and shown
+    // to nobody. It is the reader's money; the reason is theirs to read.
+    return NextResponse.json({ error: (err as Error).message ?? 'Something went wrong.' }, { status: 500 })
+  }
+}
+
+async function act(context: { params: Promise<{ token: string }> }) {
   const { token } = await context.params
 
   const lookup = await claimToken(token)

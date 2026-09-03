@@ -10,7 +10,7 @@
  */
 
 import { NextResponse } from 'next/server'
-import { listOrders, refreshOrders } from '@/lib/press/orders'
+import { listOrders, refreshOrders, releaseOrder } from '@/lib/press/orders'
 import { NOT_FOUND, asResponse, pressUiEnabled } from '../_lib/guard'
 
 export const runtime = 'nodejs'
@@ -28,7 +28,28 @@ export async function GET() {
 export async function POST(request: Request) {
   if (!pressUiEnabled()) return NOT_FOUND()
 
-  const body = (await request.json().catch(() => null)) as { action?: string } | null
+  const body = (await request.json().catch(() => null)) as
+    | { action?: string; orderId?: string }
+    | null
+
+  // Let go of a row Lulu never accepted, so the issue can be ordered again.
+  // Only ever reaches rows with no job id; see `releaseOrder`.
+  if (body?.action === 'release') {
+    if (!body.orderId) return NextResponse.json({ error: 'no order named' }, { status: 400 })
+    try {
+      const released = await releaseOrder(body.orderId)
+      if (!released) {
+        return NextResponse.json(
+          { error: 'That order is at Lulu, or was already released. Nothing changed.' },
+          { status: 409 },
+        )
+      }
+      return NextResponse.json({ ok: true, orders: await listOrders() })
+    } catch (err) {
+      return asResponse(err)
+    }
+  }
+
   if (body?.action !== 'refresh') {
     return NextResponse.json({ error: 'bad request' }, { status: 400 })
   }

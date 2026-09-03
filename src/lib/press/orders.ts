@@ -58,6 +58,71 @@ export interface OrderWithIssue extends PressOrder {
  */
 export const LULU_TERMINAL = ['SHIPPED', 'CANCELED', 'REJECTED'] as const
 
+/**
+ * Let go of a row that is holding an issue hostage.
+ *
+ * `placeOrder` claims the row before Lulu is called, so a job Lulu refuses
+ * outright leaves a `pending` row with no job id. `openOrder` counts that as
+ * an order in progress, so the issue could never be ordered again — the reader
+ * fixes whatever Lulu objected to and the workbench still says "an order for
+ * this issue is already in progress", for ever.
+ *
+ * The `is('lulu_job_id', null)` is the whole safety of this. A row that names
+ * a job is a real order at Lulu whatever our column says, and releasing it
+ * would let a second one be placed for the same issue. The filter is in the
+ * query rather than in a check above it so that a row which acquires a job id
+ * between the read and the write is not released either.
+ */
+export async function releaseOrder(orderId: string, db: SupabaseClient = pressDb()): Promise<boolean> {
+  const { data, error } = await db
+    .from('press_orders')
+    .update({ status: 'REJECTED', message: 'Released: Lulu never accepted this job.' })
+    .eq('id', orderId)
+    .is('lulu_job_id', null)
+    .neq('status', 'REJECTED')
+    .select('id, issue_id')
+  if (error) throw new Error(error.message)
+  const released = (data ?? [])[0]
+  if (!released) return false
+
+  // Claiming the row also moves the issue to `approved`, which is not one of
+  // the states that can be ordered — so releasing the row alone left the issue
+  // with no order in progress and no Order button either, which is a second
+  // dead end rather than a fix.
+  //
+  // Only ever `approved`. `ordered` and `shipped` mean a job exists at Lulu,
+  // and winding those back would offer to buy a book that is already printing.
+  const { data: issue } = await db
+    .from('press_issues')
+    .select('id, state')
+    .eq('id', released.issue_id)
+    .maybeSingle()
+
+  if (issue?.state === 'approved') {
+    const { data: live } = await db
+      .from('press_orders')
+      .select('id')
+      .eq('issue_id', released.issue_id)
+      .not('lulu_job_id', 'is', null)
+      .limit(1)
+
+    // A sibling row that DID reach Lulu keeps the issue where it is.
+    if (!(live ?? []).length) {
+      await db
+        .from('press_issues')
+        .update({ state: 'closed', ordered_at: null, lulu_job_id: null })
+        .eq('id', released.issue_id)
+        .eq('state', 'approved')
+    }
+  }
+
+  await recordEvent(
+    { issue_id: released.issue_id, kind: 'order_failed', detail: { orderId, reason: 'released by hand' } },
+    db,
+  )
+  return true
+}
+
 export function isFinished(order: Pick<PressOrder, 'status' | 'shipped_at'>): boolean {
   return Boolean(order.shipped_at) || (LULU_TERMINAL as readonly string[]).includes(order.status)
 }
