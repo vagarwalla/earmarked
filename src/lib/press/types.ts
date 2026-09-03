@@ -157,7 +157,13 @@ export function describePackage(packageId: string = LULU_PACKAGE_ID): PackageSpe
 
 // ── Items ────────────────────────────────────────────────────────────────────
 
-export type ItemSource = 'raindrop' | 'email_link' | 'newsletter' | 'pdf' | 'x'
+/**
+ * How an article got here.
+ *
+ * `paste` is the only one that does not need a credential of V's, and is
+ * therefore the whole ingestion story for everybody else (019).
+ */
+export type ItemSource = 'raindrop' | 'email_link' | 'newsletter' | 'pdf' | 'x' | 'paste'
 
 export type ItemState =
   | 'queued'

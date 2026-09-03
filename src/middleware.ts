@@ -90,6 +90,7 @@ export const config = {
     // one, so every new /api/press/* route belongs here unless it is
     // deliberately public like action/ and email-in/.
     '/api/press/item/:path*',
+    '/api/press/paste',
     '/api/press/job',
     '/api/press/job/:path*',
     '/api/press/settings',

@@ -128,6 +128,8 @@ export interface WorkbenchIssue {
 interface Props {
   issues: WorkbenchIssue[]
   pool: PoolItem[]
+  /** Queued and extracted — pasted or dropped, not yet measured into the pool. */
+  arriving: PoolItem[]
   failed: PoolItem[]
   skipped: PoolItem[]
   dropped: PoolItem[]
@@ -842,6 +844,7 @@ export function Workbench(props: Props) {
           <div className="max-h-[22rem] overflow-y-auto lg:max-h-none lg:overflow-visible">
             <PoolPanel
               pool={pool}
+              arriving={props.arriving}
               failed={props.failed}
               skipped={props.skipped}
               dropped={props.dropped}

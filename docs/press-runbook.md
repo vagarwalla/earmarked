@@ -89,6 +89,29 @@ file, so a friend's finish line is the PDFs.
 | Auth → redirect URLs | `…/press/auth/callback` for localhost, the production domain, and `https://*-<team>.vercel.app` | Supabase only honours redirects on this list; without it a magic link goes nowhere but `site_url` |
 | Auth → email | built-in sender | Rate limited to a couple an hour. Fine at this size; configure SMTP if "too many links requested" ever becomes routine |
 
+### Filling a friend's pool
+
+Raindrop and the email door run on V's credentials, so neither is a way in for
+anybody else. A textarea is: paste a block of links into the pool panel and
+they land `queued`, which the worker's existing extraction picks up on its next
+pass — the same path a Raindrop drop takes.
+
+It reports everything: what was added, what this press already had, what was
+repeated in the paste, and what was not a link at all. A paste that quietly
+absorbs half its input is the same failure as the dedupe key that used to
+swallow somebody's article.
+
+Markdown links, `<angle brackets>` and trailing punctuation are all unwrapped,
+because that is how a link arrives when somebody copies one out of a
+newsletter. Fifty links a paste, two hundred a day per account — the pipeline
+is one machine shared by everyone, and the cost of a runaway paste is
+everybody else's issues waiting behind it.
+
+The **arriving** chip in the pool panel is everything queued or extracted but
+not yet measured. It exists because a paste of ten links otherwise leaves the
+pool looking untouched for a couple of minutes, and a pool that looks untouched
+is a paste somebody makes twice.
+
 ---
 
 ## Configuration
