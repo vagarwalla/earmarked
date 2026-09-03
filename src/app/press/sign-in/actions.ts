@@ -3,21 +3,25 @@
 /**
  * press — asking for a magic link.
  *
- * The invite check happens here, before Supabase is asked to send anything.
- * Doing it the other way round — send the link, refuse at the door — would
- * mean anybody who found the URL could have this app email an address of their
- * choosing, and would fill `auth.users` with people who have no press.
+ * Open: any address gets one, and following it makes a press if there is not
+ * one already. The account is created on the far side, in `attachAccount`,
+ * rather than here — so a link that is never followed leaves nothing behind.
  *
- * "That address is not on the list" is deliberately plain rather than the
- * usual "if that address has an account, we have sent a link". The audience is
- * about six people who know whether they were invited; being coy at them would
- * cost a support message every time and protect nothing.
+ * `PRESS_INVITE_ONLY=1` closes it. Then the address is checked against
+ * `press_accounts` *before* Supabase is asked to send anything, because doing
+ * it the other way round — send the link, refuse at the door — would let
+ * anybody who found this page have the app email an address of their choosing.
+ *
+ * "That address is not on the list" is deliberately plain rather than the usual
+ * "if that address has an account, we have sent a link". Being coy at a handful
+ * of people who know whether they were invited costs a support message every
+ * time and protects nothing.
  */
 
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { accountByEmail } from '@/lib/press/accounts'
-import { sessionClient } from '@/lib/press/auth'
+import { inviteOnly, sessionClient } from '@/lib/press/auth'
 
 export interface SignInState {
   error?: string
@@ -30,8 +34,7 @@ export async function requestLink(_prev: SignInState, form: FormData): Promise<S
     return { error: 'That does not look like an email address.' }
   }
 
-  const account = await accountByEmail(email)
-  if (!account) {
+  if (inviteOnly() && !(await accountByEmail(email))) {
     return {
       error: 'That address is not on the list for this press. Ask whoever runs it for an invite.',
     }
@@ -48,11 +51,16 @@ export async function requestLink(_prev: SignInState, form: FormData): Promise<S
     email,
     options: {
       emailRedirectTo: `${origin}/press/auth/callback`,
-      // Never. `press:invite` creates the Supabase user alongside the account
-      // row, and the project runs with signups disabled — so an address that
-      // has not been invited cannot be made to receive a link, from here or
-      // from anywhere else holding the anon key.
-      shouldCreateUser: false,
+      // A first sign-in is a new reader, so Supabase has to be allowed to
+      // make them a user. What it does *not* do is make them a press — that
+      // happens in `attachAccount` when the link is actually followed, so an
+      // address someone typed by mistake leaves nothing behind.
+      //
+      // Closed mode still relies on the check above rather than on this: the
+      // anon key is in the page, so anybody could send this request straight
+      // to GoTrue. Turn signups off in the Supabase project as well as setting
+      // PRESS_INVITE_ONLY if that ever matters.
+      shouldCreateUser: true,
     },
   })
   if (error) {
