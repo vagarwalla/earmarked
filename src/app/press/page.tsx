@@ -47,10 +47,40 @@ function toPoolItem(item: PressItem): PoolItem {
 const sameOrder = (a: string[], b: string[]) =>
   a.length === b.length && a.every((id, i) => id === b[i])
 
+/**
+ * How many times an issue has been printed.
+ *
+ * Orders, not copies: one order for three copies is one trip to the printer,
+ * and the question the workbench is answering is "have I had this made
+ * before?". Refusals and cancellations do not count — nothing was printed —
+ * and an issue can legitimately have several, which is why `press_orders` is
+ * a table rather than four columns on the issue.
+ */
+function printCounts(orders: OrderWithIssue[] | null): Map<number, number> {
+  const counts = new Map<number, number>()
+  for (const order of orders ?? []) {
+    if (order.status === 'CANCELED' || order.status === 'REJECTED') continue
+    if (order.line_item_status === 'REJECTED') continue
+    counts.set(order.issue_number, (counts.get(order.issue_number) ?? 0) + 1)
+  }
+  return counts
+}
+
 export default async function PressPage() {
   if (!pressUiEnabled()) notFound()
 
   const rows = await listIssueRows()
+
+  // Orders and the settings row live in tables migration 013 creates. Until it
+  // is applied the rest of the workbench still works, and those two panels say
+  // what is missing rather than taking the page down with them.
+  let orders: OrderWithIssue[] | null = null
+  try {
+    orders = await listOrders()
+  } catch {
+    orders = null
+  }
+  const printed = printCounts(orders)
 
   const issues: WorkbenchIssue[] = []
   for (const row of rows) {
@@ -72,6 +102,8 @@ export default async function PressPage() {
       dirty: !row.interior_path || !sameOrder(order, row.built_order ?? []),
       luluJobId: row.lulu_job_id,
       rejectionReason: row.rejection_reason,
+      printCount: printed.get(row.number) ?? 0,
+      updatedAt: row.updated_at,
     })
   }
 
@@ -83,16 +115,6 @@ export default async function PressPage() {
   ])
 
   const settings = await loadEffectiveSettings()
-
-  // Orders and the settings row live in tables migration 013 creates. Until it
-  // is applied the rest of the workbench still works, and those two panels say
-  // what is missing rather than taking the page down with them.
-  let orders: OrderWithIssue[] | null = null
-  try {
-    orders = await listOrders()
-  } catch {
-    orders = null
-  }
   const settingsRow = await readSettingsRow().catch(() => null)
 
   const env = loadSettings()
