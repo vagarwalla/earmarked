@@ -123,6 +123,7 @@ async function resolve(
       minPages: PRINT_SPEC.minPages,
       hasAddress: Boolean(settings.shipping),
       hasEmail: Boolean(settings.mailTo),
+      canSendMail: Boolean(settings.resendApiKey && settings.mailFrom),
       openOrder: orders.some((o) => !isFinished(o)),
       orderingEnabled: ORDERING_ENABLED,
     })
