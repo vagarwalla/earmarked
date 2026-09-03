@@ -10,7 +10,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { quoteBundle } from '../bundle'
 import { groupByBundle, type OrderWithIssue } from '../orders'
-import { bundleBlockers, orderBlockers } from '../workbench'
+import { bundleBlockers, orderBlockers, reorderBlockers } from '../workbench'
 import { bundleApprovalHtml, bundleApprovalSubject } from '../approval'
 import type { QuoteLine, ShippingAddress } from '../lulu'
 import type { PressIssue, PressItem, PrintQuote } from '../types'
@@ -167,6 +167,32 @@ const ready = {
   orderingEnabled: true,
 }
 const items: PressItem[] = []
+
+describe('reorderBlockers', () => {
+  /**
+   * Found live: issue 1 sat at `ordered` with Lulu job 3022098 UNPAID — no
+   * book printed, no money taken — and the bundle preview for it reported no
+   * blockers at all. `isReorder` counts `ordered` as well as `shipped`, and
+   * the filter then removed the one reason that mattered, so the workbench
+   * would have sold a second copy and a second parcel of an issue whose first
+   * order had not even been paid for.
+   */
+  it('still refuses an issue whose order is live', () => {
+    expect(reorderBlockers(['An order for this issue is already in progress.'])).toEqual([
+      'An order for this issue is already in progress.',
+    ])
+  })
+
+  /**
+   * And costs a real reorder nothing: a shipped issue's orders are finished,
+   * so `openOrder` is false and that blocker was never in the list.
+   */
+  it('lets a genuinely finished issue be ordered again', () => {
+    expect(reorderBlockers(['Lock the issue first — only a locked issue can be printed.'])).toEqual(
+      [],
+    )
+  })
+})
 
 describe('bundleBlockers', () => {
   it('reads exactly like a single order when there is one issue', () => {
