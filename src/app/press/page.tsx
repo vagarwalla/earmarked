@@ -168,6 +168,7 @@ export default async function PressPage() {
         // account's — false for everybody who is not her, because ordering
         // bills the one Lulu account on file (plan §6).
         orderingEnabled={process.env.PRESS_ORDER_ENABLED === '1' && account.can_order}
+        canOrder={account.can_order}
         issues={issues}
         pool={pool.map(toPoolItem)}
         arriving={[...queued, ...extracted].map(toPoolItem)}

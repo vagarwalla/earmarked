@@ -16,6 +16,7 @@
  */
 
 import { NextResponse } from 'next/server'
+import { pressDb } from '@/lib/press/db'
 import { itemsForIssue, signedUrl } from '@/lib/press/db'
 import { isReorder, issueByNumber, orderBlockers, reorderBlockers } from '@/lib/press/workbench'
 import { loadEffectiveSettings } from '@/lib/press/settings-db'
@@ -23,7 +24,7 @@ import { createLuluClient } from '@/lib/press/lulu'
 import { isFinished, ordersForIssue } from '@/lib/press/orders'
 import { issueActionTokens, sendApprovalEmail } from '@/lib/press/approval'
 import { LULU_PACKAGE_ID, PRINT_SPEC } from '@/lib/press/types'
-import { NOT_FOUND, asResponse, issueNumber, ownerDb, pressUiEnabled } from '../../../_lib/guard'
+import { NOT_FOUND, asResponse, issueNumber, orderingAccount, ownerDb, pressUiEnabled } from '../../../_lib/guard'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -132,7 +133,10 @@ export async function POST(_request: Request, context: { params: Promise<{ numbe
   if (number === null) return NextResponse.json({ error: 'bad issue' }, { status: 400 })
 
   try {
-    const db = await ownerDb()
+    // Before anything is read: this route mints the token that buys a book,
+    // and a button the workbench does not render for a friend is not a check.
+    const account = await orderingAccount()
+    const db = pressDb(account.id)
     const issue = await issueByNumber(number, db)
     if (!issue) return NextResponse.json({ error: 'no such issue' }, { status: 404 })
 

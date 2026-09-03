@@ -23,7 +23,7 @@
  */
 
 import { NextResponse } from 'next/server'
-import { itemsForIssue, signedUrl } from '@/lib/press/db'
+import { itemsForIssue, pressDb, signedUrl } from '@/lib/press/db'
 import {
   bundleBlockers,
   isReorder,
@@ -37,7 +37,7 @@ import { quoteBundle } from '@/lib/press/bundle'
 import { isFinished, ordersForIssue } from '@/lib/press/orders'
 import { issueBundleTokens, sendBundleApprovalEmail } from '@/lib/press/approval'
 import { LULU_PACKAGE_ID, PRINT_SPEC, type PressIssue, type PressItem } from '@/lib/press/types'
-import { NOT_FOUND, asResponse, ownerDb, pressUiEnabled } from '../_lib/guard'
+import { NOT_FOUND, asResponse, orderingAccount, pressUiEnabled } from '../_lib/guard'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 export const runtime = 'nodejs'
@@ -164,7 +164,8 @@ export async function GET(request: Request) {
   if ('error' in parsed) return NextResponse.json({ error: parsed.error }, { status: 400 })
 
   try {
-    const db = await ownerDb()
+    const account = await orderingAccount()
+    const db = pressDb(account.id)
     const resolved = await resolve(parsed.numbers, db)
     if (!resolved.ok) {
       return NextResponse.json({ error: resolved.error }, { status: resolved.status })
@@ -237,7 +238,8 @@ export async function POST(request: Request) {
   if ('error' in parsed) return NextResponse.json({ error: parsed.error }, { status: 400 })
 
   try {
-    const db = await ownerDb()
+    const account = await orderingAccount()
+    const db = pressDb(account.id)
     const resolved = await resolve(parsed.numbers, db)
     if (!resolved.ok) {
       return NextResponse.json({ error: resolved.error }, { status: resolved.status })

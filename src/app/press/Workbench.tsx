@@ -145,8 +145,24 @@ interface Props {
   threshold: number
   /** Lulu POD package id, decoded for the print-spec panel. */
   packageId: string
-  /** PRESS_ORDER_ENABLED. Shown, never set, from here. */
+  /**
+   * Whether this account may order at all.
+   *
+   * Two gates and-ed together upstream: PRESS_ORDER_ENABLED, which is V's own
+   * safety catch on a button that spends money, and press_accounts.can_order,
+   * which is false for everybody who is not her — ordering bills the one Lulu
+   * account on file. Shown, never set, from here.
+   */
   orderingEnabled: boolean
+  /**
+   * Whether this account could ever order, ignoring the env flag.
+   *
+   * Separate because the two mean different things to a reader. "Ordering is
+   * switched off" is a thing V can turn back on; for a friend it is simply not
+   * how their press works, and telling them to set an environment variable
+   * would be telling them to fix something that is not broken.
+   */
+  canOrder: boolean
 }
 
 /** `open` and `closed` are the schema's words; these are the reader's. */
@@ -931,6 +947,8 @@ export function Workbench(props: Props) {
                     issue={issue}
                     locked={locked}
                     orderingEnabled={props.orderingEnabled}
+                    canOrder={props.canOrder}
+                    packageId={props.packageId}
                     onOrder={() => setOrdering([issue.number])}
                   />
                   <IssueActions
@@ -1189,17 +1207,86 @@ function PageMeter({
  * address, the email and the orders already in flight, which only the server
  * can see.
  */
+/**
+ * What an issue is, for somebody who will print it themselves.
+ *
+ * The finish line for every account but V's. Ordering through Lulu bills the
+ * one account on file, so a friend's press stops at two print-ready PDFs and a
+ * spec — which is genuinely enough: it is what she uploads by hand when the
+ * API is not involved.
+ */
+function TakeItToAPrinter({ issue, packageId }: { issue: WorkbenchIssue; packageId: string }) {
+  if (issue.state === 'open') {
+    return (
+      <div className="bg-muted/40 mt-3 rounded-lg border p-3">
+        <p className="text-sm font-medium">To get this printed</p>
+        <p className="text-muted-foreground mt-0.5 text-xs">
+          Lock it first. Locking freezes the contents and builds the two PDFs a printer needs —
+          you can unlock again afterwards.
+        </p>
+      </div>
+    )
+  }
+  if (!issue.built) return null
+
+  const href = (file: string) =>
+    `/api/press/file/${issue.number}/${file}?v=${encodeURIComponent(issue.updatedAt)}`
+
+  return (
+    <div className="bg-muted/40 mt-3 rounded-lg border p-3">
+      <p className="text-sm font-medium">Ready for a printer</p>
+      <p className="text-muted-foreground mt-0.5 mb-2.5 text-xs">
+        Two files: the pages, and the wrap. Upload both to Lulu — or any printer who takes a PDF —
+        with the spec below.
+      </p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <a
+          className="bg-foreground text-background flex h-9 items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-medium"
+          href={href('interior.pdf')}
+          target="_blank"
+          rel="noreferrer"
+        >
+          <FileText className="size-4" />
+          Interior
+        </a>
+        <a
+          className="hover:bg-muted flex h-9 items-center justify-center gap-1.5 rounded-lg border px-3 text-sm font-medium"
+          href={href('cover.pdf')}
+          target="_blank"
+          rel="noreferrer"
+          aria-disabled={!issue.hasCover}
+        >
+          <BookImage className="size-4" />
+          Cover
+        </a>
+      </div>
+      <div className="mt-3">
+        <PrintSpec packageId={packageId} pageCount={issue.pageTotal} />
+      </div>
+    </div>
+  )
+}
+
 function OrderCta({
   issue,
   locked,
   orderingEnabled,
+  canOrder,
+  packageId,
   onOrder,
 }: {
   issue: WorkbenchIssue
   locked: boolean
   orderingEnabled: boolean
+  canOrder: boolean
+  packageId: string
   onOrder: () => void
 }) {
+  // No Lulu account, so no order button — absent rather than disabled with a
+  // tooltip, because a button that exists and refuses is a support question.
+  // What replaces it is the thing a friend actually wants: the two files, and
+  // enough of a spec to hand them to a printer.
+  if (!canOrder) return <TakeItToAPrinter issue={issue} packageId={packageId} />
   // The built count where there is one: it is the number Lulu will bind.
   const pages = issue.built && !issue.dirty ? issue.pageTotal : issue.pages
   const reasons: string[] = []
