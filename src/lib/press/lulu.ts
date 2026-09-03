@@ -94,6 +94,13 @@ export interface LuluClient {
     address: ShippingAddress
     externalId: string
     idempotencyKey: string
+    /**
+     * `contact_email`, which Lulu requires on every print job — "an email
+     * address for questions regarding the Print-Job", theirs, meaning the
+     * person who placed it rather than the recipient. We never sent it, which
+     * is one of the three reasons /print-jobs/ answered 400.
+     */
+    contactEmail: string
   }): Promise<PrintJob>
   getPrintJob(jobId: string): Promise<PrintJob>
 }
@@ -226,9 +233,10 @@ export function createLuluClient(options: LuluClientOptions = {}): LuluClient {
     return body
   }
 
-  function addressPayload(address: ShippingAddress) {
+  function addressPayload(address: ShippingAddress, email?: string) {
     return {
       name: address.name,
+      ...(email ? { email } : {}),
       street1: address.street1,
       ...(address.street2 ? { street2: address.street2 } : {}),
       city: address.city,
@@ -279,9 +287,10 @@ export function createLuluClient(options: LuluClientOptions = {}): LuluClient {
       }
     },
 
-    async createPrintJob({ item, items, address, externalId, idempotencyKey }) {
+    async createPrintJob({ item, items, address, externalId, idempotencyKey, contactEmail }) {
       const lines = items ?? (item ? [item] : [])
       if (lines.length === 0) throw new Error('lulu: a print job needs at least one line item')
+      if (!contactEmail) throw new Error('lulu: a print job needs a contact_email')
 
       const body = (await call('/print-jobs/', {
         method: 'POST',
@@ -291,17 +300,26 @@ export function createLuluClient(options: LuluClientOptions = {}): LuluClient {
           'idempotency-key': idempotencyKey,
         },
         body: JSON.stringify({
+          contact_email: contactEmail,
           external_id: externalId,
           line_items: lines.map((line) => ({
             title: line.title,
             ...(line.externalId ? { external_id: line.externalId } : {}),
-            cover_source_url: line.coverUrl,
-            interior_source_url: line.interiorUrl,
+            // `cover` / `interior`, not `cover_source_url` /
+            // `interior_source_url`. Those two field names appear nowhere in
+            // Lulu's current OpenAPI spec — the shorthand is an object with a
+            // `source_url`, and anything else is silently not a file, which is
+            // the second reason this endpoint answered 400.
+            cover: { source_url: line.coverUrl },
+            interior: { source_url: line.interiorUrl },
             pod_package_id: line.packageId || LULU_PACKAGE_ID,
-            page_count: line.pageCount,
+            // No `page_count`: it is `readOnly` on creation. Lulu counts the
+            // pages of the PDF it fetches, and telling it the answer is the
+            // third reason. It stays on `LineItem` because the cost
+            // calculation endpoint does need it.
             quantity: line.quantity,
           })),
-          shipping_address: addressPayload(address),
+          shipping_address: addressPayload(address, contactEmail),
           shipping_level: SHIPPING_LEVEL,
         }),
       })) as Record<string, unknown>

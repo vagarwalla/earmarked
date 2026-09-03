@@ -209,8 +209,50 @@ describe('createLuluClient', () => {
       address,
       externalId: 'press-issue-iss1',
       idempotencyKey: 'press-issue-iss1',
+      contactEmail: 'v@example.com',
     })
     expect(headers!.get('idempotency-key')).toBe('press-issue-iss1')
+  })
+
+  /**
+   * The three defects that made every real order 400.
+   *
+   * The client was written against field names that are not in Lulu's current
+   * spec — `cover_source_url` and `interior_source_url` appear nowhere in it —
+   * it sent `page_count`, which is `readOnly` on creation, and it omitted
+   * `contact_email`, which is required. None of that is visible from our side:
+   * the endpoint answers 400 and the reason was being thrown away, so this is
+   * pinned here rather than discovered again the next time someone orders.
+   */
+  it('sends a print job in the shape the API documents', async () => {
+    let sent: Record<string, unknown> = {}
+    const fetchImpl = luluFetch((_url, init) => {
+      sent = JSON.parse(String(init.body)) as Record<string, unknown>
+      return { id: 42, status: { name: 'CREATED' } }
+    })
+    await createLuluClient({ settings: settings(), fetchImpl: fetchImpl as never }).createPrintJob({
+      item: {
+        title: 'Winter Light',
+        packageId: 'pkg',
+        pageCount: 100,
+        interiorUrl: 'https://signed/interior',
+        coverUrl: 'https://signed/cover',
+        quantity: 1,
+      },
+      address,
+      externalId: 'press-issue-iss1',
+      idempotencyKey: 'press-issue-iss1',
+      contactEmail: 'v@example.com',
+    })
+
+    expect(sent.contact_email).toBe('v@example.com')
+
+    const line = (sent.line_items as Record<string, unknown>[])[0]
+    expect(line.cover).toEqual({ source_url: 'https://signed/cover' })
+    expect(line.interior).toEqual({ source_url: 'https://signed/interior' })
+    expect(line).not.toHaveProperty('cover_source_url')
+    expect(line).not.toHaveProperty('interior_source_url')
+    expect(line).not.toHaveProperty('page_count')
   })
 
   it('raises a typed error carrying the status', async () => {

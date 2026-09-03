@@ -122,6 +122,7 @@ async function main(): Promise<void> {
 
   console.log('\n   placing the order…')
   const job = await lulu.createPrintJob({
+    contactEmail: settings.mailTo,
     item: {
       title,
       packageId: settings.luluPackageId,
