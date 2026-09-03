@@ -59,7 +59,6 @@ export async function GET(_request: Request, context: { params: Promise<{ number
       minPages: PRINT_SPEC.minPages,
       hasAddress: Boolean(settings.shipping),
       hasEmail: Boolean(settings.mailTo),
-      canSendMail: Boolean(settings.resendApiKey && settings.mailFrom),
       openOrder: orders.some((o) => !isFinished(o)),
       orderingEnabled: ORDERING_ENABLED,
     })
@@ -146,7 +145,6 @@ export async function POST(_request: Request, context: { params: Promise<{ numbe
       minPages: PRINT_SPEC.minPages,
       hasAddress: Boolean(settings.shipping),
       hasEmail: Boolean(settings.mailTo),
-      canSendMail: Boolean(settings.resendApiKey && settings.mailFrom),
       openOrder: orders.some((o) => !isFinished(o)),
       orderingEnabled: ORDERING_ENABLED,
     })

@@ -123,7 +123,6 @@ async function resolve(
       minPages: PRINT_SPEC.minPages,
       hasAddress: Boolean(settings.shipping),
       hasEmail: Boolean(settings.mailTo),
-      canSendMail: Boolean(settings.resendApiKey && settings.mailFrom),
       openOrder: orders.some((o) => !isFinished(o)),
       orderingEnabled: ORDERING_ENABLED,
     })
@@ -212,6 +211,7 @@ export async function GET(request: Request) {
       sandbox: settings.luluSandbox,
       shipTo: settings.shipping,
       approveAt: settings.mailTo || null,
+      canEmail: Boolean(settings.resendApiKey && settings.mailFrom && settings.mailTo),
     })
   } catch (err) {
     return asResponse(err)
@@ -281,6 +281,14 @@ export async function POST(request: Request) {
     const approve = tokens.find((t) => t.action === 'approve')
     if (!approve) throw new Error('could not issue an approval token')
 
+    // Resend is optional. Where it is configured the link goes to the inbox,
+    // which is the point — approving from a phone, away from the machine that
+    // built the issue. Where it is not, the link is returned to the dialog and
+    // opened from there. Both end at the same confirm page and neither places
+    // an order: that is still a second, deliberate act on a page that names
+    // the price. What changes is the postman, not the decision.
+    const canEmail = Boolean(settings.resendApiKey && settings.mailFrom && settings.mailTo)
+
     await sendBundleApprovalEmail(
       issues.map((r) => r.issue.id),
       {
@@ -303,9 +311,19 @@ export async function POST(request: Request) {
         approveUrl: approve.url,
         skipUrl: tokens.find((t) => t.action === 'skip')?.url,
       },
+      { deliver: canEmail },
     )
 
-    return NextResponse.json({ ok: true, sentTo: settings.mailTo, issues: parsed.numbers })
+    return NextResponse.json({
+      ok: true,
+      emailed: canEmail,
+      sentTo: canEmail ? settings.mailTo : null,
+      // Only when it could not be emailed. A link that both arrives in the
+      // inbox and sits on the screen is a single-use token with two places to
+      // spend it, and the second one to be clicked is a dead link.
+      approveUrl: canEmail ? null : approve.url,
+      issues: parsed.numbers,
+    })
   } catch (err) {
     return asResponse(err)
   }

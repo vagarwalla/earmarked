@@ -460,9 +460,21 @@ export async function sendMail(
 export async function sendBundleApprovalEmail(
   issueIds: string[],
   input: BundleApprovalEmailInput,
-  deps: MailerDeps & { db?: SupabaseClient; now?: Date } = {},
+  /**
+   * `deliver: false` records the approval without sending anything.
+   *
+   * The email was never the decision — it is transport for a link, and the
+   * confirm page it points at is where the order is actually placed. On an
+   * environment with no Resend key there is nothing to carry the link, but the
+   * link is still perfectly good; the caller hands it over directly and says
+   * so here, so the issue's `approval_sent_at` and its event still describe
+   * what happened.
+   */
+  deps: MailerDeps & { db?: SupabaseClient; now?: Date; deliver?: boolean } = {},
 ): Promise<void> {
-  await sendMail({ subject: bundleApprovalSubject(input), html: bundleApprovalHtml(input) }, deps)
+  if (deps.deliver !== false) {
+    await sendMail({ subject: bundleApprovalSubject(input), html: bundleApprovalHtml(input) }, deps)
+  }
   const sentAt = (deps.now ?? new Date()).toISOString()
   for (const [i, issueId] of issueIds.entries()) {
     await updateIssue(issueId, { approval_sent_at: sentAt }, deps.db)
