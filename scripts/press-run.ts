@@ -96,7 +96,18 @@ export function isReferencePage(title: string | null): boolean {
 async function poll(state: PressState): Promise<number> {
   const settings = loadSettings()
   const client = createRaindropClient({ token: settings.raindropToken })
-  const drops: Raindrop[] = await client.listRaindrops(settings.raindropCollectionId, { perPage: 50 })
+  // Every page, not the first one. The client sorts oldest-first so the poll
+  // walks forward, but the poll never asked for page two — so with more than
+  // PER_PAGE items in `hw` the newest saves sat past the end of the only page
+  // read and were never seen again. Saving 66 articles at once is what made it
+  // visible; 33 of them were invisible on every subsequent run.
+  const PER_PAGE = 50
+  const drops: Raindrop[] = []
+  for (let page = 0; ; page++) {
+    const batch = await client.listRaindrops(settings.raindropCollectionId, { page, perPage: PER_PAGE })
+    drops.push(...batch)
+    if (batch.length < PER_PAGE) break
+  }
 
   let added = 0
   for (const drop of drops) {
