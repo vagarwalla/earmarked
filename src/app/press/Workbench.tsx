@@ -42,10 +42,13 @@ import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSo
 import {
   ArrowLeft,
   BookImage,
+  Copy,
   ExternalLink,
   Eye,
   EyeOff,
   FileText,
+  Link2,
+  Link2Off,
   Lock,
   LockOpen,
   Package,
@@ -111,6 +114,8 @@ export interface WorkbenchIssue {
   pageTotal: number
   built: boolean
   hasCover: boolean
+  /** Readable by anyone with the link at /press/i/<handle>/<number>. */
+  shared: boolean
   dirty: boolean
   luluJobId: string | null
   rejectionReason: string | null
@@ -134,6 +139,8 @@ interface Props {
   skipped: PoolItem[]
   dropped: PoolItem[]
   orders: OrderWithIssue[] | null
+  /** The owner's handle, which is half of a shared issue's URL. */
+  handle: string
   settings: SettingsProps
   threshold: number
   /** Lulu POD package id, decoded for the print-spec panel. */
@@ -938,6 +945,13 @@ export function Workbench(props: Props) {
                     onLock={() => void compose('lock', issue.number, { action: 'lock' })}
                     onUnlock={() => void unlock(issue.number)}
                   />
+                  <ShareControls
+                    issue={issue}
+                    handle={props.handle}
+                    onError={setError}
+                    onNote={setNote}
+                    onRefresh={refresh}
+                  />
                   <PreviewControls
                     issue={issue}
                     sheet={issue.hasCover ? sheet : 'interior'}
@@ -1357,6 +1371,97 @@ function IssueActions({
  * viewer nothing, and the cover finally has a button that both shows it and
  * links to it, which is what it lacked for weeks.
  */
+/**
+ * Hand the issue to somebody.
+ *
+ * One switch, not two. "Anyone with the link" and "listed on my shelf" sound
+ * like different settings and are not — the shelf at /press/by/<handle> is a
+ * page anyone can open — so offering both would be a privacy control that does
+ * not do what it says.
+ *
+ * Only for a built issue: a shared draft is a page offering a PDF that does
+ * not exist, and the reader cannot tell that from a broken link. The route
+ * refuses it too; this is so the button is not there to be pressed.
+ */
+function ShareControls({
+  issue,
+  handle,
+  onError,
+  onNote,
+  onRefresh,
+}: {
+  issue: WorkbenchIssue
+  handle: string
+  onError: (m: string | null) => void
+  onNote: (m: string | null) => void
+  onRefresh: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  if (!issue.built) return null
+
+  const path = `/press/i/${handle}/${issue.number}`
+
+  const toggle = async () => {
+    setBusy(true)
+    onError(null)
+    onNote(null)
+    try {
+      const res = await fetch(`/api/press/issue/${issue.number}/share`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ shared: !issue.shared }),
+      })
+      const body = await readJson(res)
+      if (!res.ok) onError(body.error ?? 'Could not change that.')
+      else {
+        onNote(issue.shared ? 'No longer readable.' : 'Anyone with the link can read it.')
+        onRefresh()
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}${path}`)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard blocked — the link is written out below either way, so
+      // there is always something to select by hand.
+      onError('Could not copy. The link is below.')
+    }
+  }
+
+  return (
+    <div className="mt-3 grid gap-2 rounded-lg border p-3">
+      <Toggle active={issue.shared} onClick={() => void toggle()} disabled={busy} className="w-full justify-start">
+        {issue.shared ? <Link2 className="size-4" /> : <Link2Off className="size-4" />}
+        {issue.shared ? 'Anyone with the link' : 'Share this issue'}
+      </Toggle>
+      {issue.shared && (
+        <>
+          <button
+            type="button"
+            onClick={() => void copy()}
+            className="hover:bg-muted text-muted-foreground hover:text-foreground flex h-9 items-center gap-1.5 rounded-lg border px-3 text-left text-xs font-medium"
+          >
+            <Copy className="size-4 shrink-0" />
+            <span className="truncate">{copied ? 'Copied' : path}</span>
+          </button>
+          <p className="text-muted-foreground text-xs">
+            The contents and the PDF, and nothing else — no pool, no drafts, and nothing anyone
+            can change.
+          </p>
+        </>
+      )}
+    </div>
+  )
+}
+
 function PreviewControls({
   issue,
   sheet,

@@ -112,6 +112,7 @@ export default async function PressPage() {
       pageTotal: row.page_total,
       built: Boolean(row.interior_path),
       hasCover: Boolean(row.cover_path),
+      shared: row.visibility === 'shared',
       // The PDFs on file were rendered from `built_order`; if the running
       // order has moved since, the page numbers in them belong to an
       // arrangement that no longer exists and the panel has to say so.
@@ -192,6 +193,7 @@ export default async function PressPage() {
           },
         }}
         threshold={settings.pageThreshold}
+        handle={account.handle}
       />
     </main>
   )
