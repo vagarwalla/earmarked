@@ -22,6 +22,7 @@
 
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { FIELD } from './controls'
 import { readJson } from './readJson'
 import type { PressSettingsRow } from '@/lib/press/settings-db'
 
@@ -103,7 +104,7 @@ export function SettingsPanel({
       <input
         value={(draft[key] as string | null) ?? ''}
         onChange={(e) => set(key, e.target.value as never)}
-        className="bg-background focus-visible:ring-ring/50 mt-0.5 w-full rounded-md border px-2 py-1 text-xs focus-visible:ring-3 focus-visible:outline-none"
+        className={`${FIELD} mt-1`}
       />
     </label>
   )
@@ -131,7 +132,7 @@ export function SettingsPanel({
             value={draft.contact_email ?? ''}
             onChange={(e) => set('contact_email', e.target.value)}
             placeholder={env.mailTo ?? 'you@example.com'}
-            className="bg-background focus-visible:ring-ring/50 mt-0.5 w-full rounded-md border px-2 py-1 text-xs focus-visible:ring-3 focus-visible:outline-none"
+            className={`${FIELD} mt-1`}
           />
         </label>
         {!draft.contact_email && env.mailTo && (
@@ -165,7 +166,7 @@ export function SettingsPanel({
               min={1}
               value={draft.copies}
               onChange={(e) => set('copies', Number(e.target.value))}
-              className="bg-background mt-0.5 w-full rounded-md border px-2 py-1 text-xs"
+              className={`${FIELD} mt-1`}
             />
           </label>
           <label className="block">
@@ -175,7 +176,7 @@ export function SettingsPanel({
               min={1}
               value={draft.page_threshold}
               onChange={(e) => set('page_threshold', Number(e.target.value))}
-              className="bg-background mt-0.5 w-full rounded-md border px-2 py-1 text-xs"
+              className={`${FIELD} mt-1`}
             />
           </label>
         </div>
@@ -185,7 +186,7 @@ export function SettingsPanel({
             value={draft.lulu_package_id ?? ''}
             onChange={(e) => set('lulu_package_id', e.target.value)}
             placeholder={env.luluPackageId ?? ''}
-            className="bg-background mt-0.5 w-full rounded-md border px-2 py-1 font-mono text-xs"
+            className={`${FIELD} mt-1 font-mono`}
           />
         </label>
 
@@ -205,7 +206,7 @@ export function SettingsPanel({
                 type="button"
                 onClick={() => set('lulu_sandbox', sandbox)}
                 aria-pressed={draft.lulu_sandbox === sandbox}
-                className={`flex-1 rounded-md border px-2 py-1.5 text-xs ${
+                className={`h-9 flex-1 rounded-lg border px-3 text-sm font-medium ${
                   draft.lulu_sandbox === sandbox
                     ? sandbox
                       ? 'border-foreground bg-accent'
@@ -231,7 +232,7 @@ export function SettingsPanel({
         </fieldset>
       </section>
 
-      <Button size="sm" className="w-full" disabled={busy} onClick={() => void save()}>
+      <Button size="lg" className="w-full" disabled={busy} onClick={() => void save()}>
         {busy ? 'Saving…' : 'Save settings'}
       </Button>
     </div>

@@ -41,12 +41,19 @@ export function ArticleRow({
   item,
   index,
   draggable,
+  dense = false,
   trailing,
 }: {
   item: PoolItem
   /** Position in the running order. Absent in the pool, which has no order. */
   index?: number
   draggable: boolean
+  /**
+   * The pool's rows, which are a list to scan rather than a list to read.
+   * Same two lines, tighter — enough to see several more articles at once
+   * without dropping the byline that tells them apart.
+   */
+  dense?: boolean
   trailing?: React.ReactNode
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -58,7 +65,7 @@ export function ArticleRow({
     <li
       ref={setNodeRef}
       style={{ transform: CSS.Translate.toString(transform), transition }}
-      className={`bg-background flex items-baseline gap-2 px-2 py-2.5 ${
+      className={`bg-background flex items-baseline gap-2 px-2 ${dense ? 'py-1' : 'py-1.5'} ${
         isDragging ? 'relative z-10 rounded-md opacity-40' : ''
       }`}
     >
@@ -78,15 +85,22 @@ export function ArticleRow({
         <span className="text-muted-foreground w-5 shrink-0 text-right text-xs tabular-nums">{index}</span>
       )}
 
-      <span className="min-w-0 flex-1">
+      <span className="min-w-0 flex-1 leading-snug">
         {item.url ? (
-          <a href={item.url} target="_blank" rel="noreferrer" className="font-serif text-sm hover:underline">
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noreferrer"
+            className="block truncate font-serif text-sm hover:underline"
+          >
             {item.title}
           </a>
         ) : (
-          <span className="font-serif text-sm">{item.title}</span>
+          <span className="block truncate font-serif text-sm">{item.title}</span>
         )}
-        <span className="text-muted-foreground block truncate text-xs">
+        <span
+          className={`text-muted-foreground block truncate ${dense ? 'text-[0.7rem] leading-snug' : 'text-xs'}`}
+        >
           {item.reason ? item.reason : articleMeta(item)}
         </span>
       </span>

@@ -262,10 +262,10 @@ export function OrderDialog({
         )}
 
         <div className="mt-5 flex justify-end gap-2">
-          <Button size="sm" variant="outline" onClick={onClose}>
+          <Button size="lg" variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button size="sm" disabled={!ready || sending} onClick={() => void send()}>
+          <Button size="lg" disabled={!ready || sending} onClick={() => void send()}>
             {sending ? 'Sending…' : 'Send approval →'}
           </Button>
         </div>

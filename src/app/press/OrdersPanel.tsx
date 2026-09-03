@@ -94,7 +94,7 @@ export function OrdersPanel({
           {orders.length} order{orders.length === 1 ? '' : 's'}
           {groups.length !== orders.length && ` in ${groups.length} job${groups.length === 1 ? '' : 's'}`}
         </span>
-        <Button size="xs" variant="ghost" disabled={busy} onClick={() => void refresh()}>
+        <Button variant="outline" disabled={busy} onClick={() => void refresh()}>
           <RefreshCw data-icon="inline-start" />
           {busy ? 'Refreshing…' : 'Refresh'}
         </Button>

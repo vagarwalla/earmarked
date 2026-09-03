@@ -23,6 +23,7 @@ import { useDroppable } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { RotateCcw, Undo2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { FIELD, Toggle } from './controls'
 import { readJson } from './readJson'
 import { ArticleRow } from './ArticleRow'
 import type { PoolItem } from './Workbench'
@@ -105,24 +106,19 @@ export function PoolPanel({
 
   return (
     <div ref={setNodeRef}>
-      <div className="mb-2 flex flex-wrap gap-1">
+      <div className="mb-2 flex flex-wrap gap-1.5">
         {(['failed', 'skipped', 'dropped'] as const).map((p) => (
-          <button
+          <Toggle
             key={p}
-            type="button"
             // Clicking the chip that is already on goes back to the pool, so
             // there is always a way out that is not a second "pool" control.
+            active={pile === p}
             onClick={() => setPile(pile === p ? null : p)}
-            aria-pressed={pile === p}
             disabled={piles[p].length === 0 && pile !== p}
-            className={`rounded-md border px-2 py-1 text-xs capitalize disabled:opacity-40 ${
-              pile === p
-                ? 'bg-accent border-foreground/20'
-                : 'text-muted-foreground hover:bg-muted hover:text-foreground border-transparent'
-            }`}
+            className="flex-1 capitalize"
           >
             {p} · {piles[p].length}
-          </button>
+          </Toggle>
         ))}
       </div>
 
@@ -131,7 +127,7 @@ export function PoolPanel({
         onChange={(e) => setQuery(e.target.value)}
         placeholder="search…"
         aria-label="Search the pool"
-        className="bg-background focus-visible:ring-ring/50 mb-2 w-full rounded-md border px-2.5 py-1.5 text-xs focus-visible:ring-3 focus-visible:outline-none"
+        className={`${FIELD} mb-2`}
       />
 
       {/* No scroller of its own: the pool now sits under the issues in one
@@ -144,12 +140,13 @@ export function PoolPanel({
               <ArticleRow
                 key={item.id}
                 item={item}
+                dense
                 draggable={pile === null && editable}
                 trailing={
                   <>
                     {pile === 'failed' && (
                       <Button
-                        size="icon-sm"
+                        size="icon"
                         variant="ghost"
                         disabled={busy === item.id}
                         onClick={() => void act(item, 'retry')}
@@ -161,7 +158,7 @@ export function PoolPanel({
                     )}
                     {pile === 'skipped' && (
                       <Button
-                        size="icon-sm"
+                        size="icon"
                         variant="ghost"
                         disabled={busy === item.id}
                         onClick={() => void act(item, 'unskip')}
@@ -173,7 +170,7 @@ export function PoolPanel({
                     )}
                     {pile !== 'dropped' && (
                       <Button
-                        size="icon-sm"
+                        size="icon"
                         variant="ghost"
                         disabled={busy === item.id}
                         onClick={() => setConfirming(item)}
@@ -214,11 +211,11 @@ export function PoolPanel({
               where to find it if you change your mind.
             </p>
             <div className="mt-5 flex justify-end gap-2">
-              <Button size="sm" variant="outline" onClick={() => setConfirming(null)}>
+              <Button size="lg" variant="outline" onClick={() => setConfirming(null)}>
                 Cancel
               </Button>
               <Button
-                size="sm"
+                size="lg"
                 variant="destructive"
                 disabled={busy === confirming.id}
                 onClick={() => void destroy(confirming)}

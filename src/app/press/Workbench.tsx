@@ -39,10 +39,25 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core'
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { ArrowLeft, FileText, Lock, LockOpen, Package, Plus, RefreshCw, Sparkles } from 'lucide-react'
+import {
+  ArrowLeft,
+  BookImage,
+  ExternalLink,
+  Eye,
+  EyeOff,
+  FileText,
+  Lock,
+  LockOpen,
+  Package,
+  Plus,
+  RefreshCw,
+  Sparkles,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { readJson } from './readJson'
 import { ArticleRow, articleLabel } from './ArticleRow'
+import { IssuePreview, type Sheet } from './IssuePreview'
+import { FIELD, Toggle } from './controls'
 import { PoolPanel } from './PoolPanel'
 import { OrdersPanel } from './OrdersPanel'
 import { SettingsPanel, type SettingsProps } from './SettingsPanel'
@@ -74,6 +89,15 @@ export interface WorkbenchIssue {
   dirty: boolean
   luluJobId: string | null
   rejectionReason: string | null
+  /**
+   * How many times this issue has actually gone to the printer — orders
+   * placed and not refused, copies included. An issue can be printed more
+   * than once (`press_place_order` was built for exactly that), and until
+   * this was on the row there was nowhere on the workbench that said so.
+   */
+  printCount: number
+  /** When the row last changed; what busts the preview's cache. */
+  updatedAt: string
 }
 
 interface Props {
@@ -173,6 +197,16 @@ export function Workbench(props: Props) {
   const [selected, setSelected] = useState<number | null>(props.issues[0]?.number ?? null)
   const [tab, setTab] = useState<'issue' | 'orders' | 'settings'>('issue')
   const [railFilter, setRailFilter] = useState<RailFilter>('all')
+  /**
+   * Which sheet the middle column is showing, and whether it is showing one.
+   *
+   * Up here rather than in the preview because the buttons that set it are in
+   * the right-hand column with every other control — the middle column is the
+   * issue itself, and a row of chrome across the top of it was costing the
+   * viewer an inch of height on every screen.
+   */
+  const [sheet, setSheet] = useState<Sheet>('interior')
+  const [previewOpen, setPreviewOpen] = useState(true)
   const [railQuery, setRailQuery] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
@@ -571,22 +605,18 @@ export function Workbench(props: Props) {
             onChange={(e) => setRailQuery(e.target.value)}
             placeholder="search…"
             aria-label="Search issues"
-            className="bg-background focus-visible:ring-ring/50 mb-2 w-full rounded-md border px-2.5 py-1.5 text-xs focus-visible:ring-3 focus-visible:outline-none"
+            className={`${FIELD} mb-2`}
           />
-          <div className="mb-2 flex flex-wrap gap-1">
+          <div className="mb-2 flex flex-wrap gap-1.5">
             {RAIL_FILTERS.map((f) => (
-              <button
+              <Toggle
                 key={f}
-                type="button"
+                active={railFilter === f}
                 onClick={() => setRailFilter(f)}
-                className={`rounded-md border px-2 py-1 text-xs capitalize ${
-                  railFilter === f
-                    ? 'bg-foreground text-background border-foreground'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                }`}
+                className="flex-1 capitalize"
               >
                 {f}
-              </button>
+              </Toggle>
             ))}
           </div>
           <ul className="space-y-0.5">
@@ -598,7 +628,7 @@ export function Workbench(props: Props) {
                 {orderable(i.state) ? (
                   <input
                     type="checkbox"
-                    className="size-3.5 shrink-0"
+                    className="size-4 shrink-0"
                     checked={bundle.includes(i.number)}
                     onChange={(e) =>
                       setBundle((b) =>
@@ -608,13 +638,13 @@ export function Workbench(props: Props) {
                     aria-label={`Order issue ${i.number} with others`}
                   />
                 ) : (
-                  <span className="w-3.5 shrink-0" />
+                  <span className="w-4 shrink-0" />
                 )}
                 <button
                   type="button"
                   onClick={() => setSelected(i.number)}
                   aria-current={i.number === selected}
-                  className={`flex min-w-0 flex-1 items-baseline gap-1.5 rounded-md border px-2 py-2 text-left text-xs ${
+                  className={`flex min-w-0 flex-1 items-baseline gap-1.5 rounded-lg border px-2.5 py-2 text-left text-xs ${
                     i.number === selected
                       ? 'bg-accent border-foreground/20'
                       : 'hover:bg-accent/50 border-transparent'
@@ -624,6 +654,18 @@ export function Workbench(props: Props) {
                   <span className="text-muted-foreground shrink-0">{STATE_LABEL[i.state] ?? i.state}</span>
                   <span className="truncate">{i.name}</span>
                   <span className="text-muted-foreground ml-auto shrink-0 tabular-nums">{i.pages}pp</span>
+                  {/* Beside the page count, because they are the two numbers
+                      that describe the object: how thick, and how many times
+                      it has been made. Absent rather than “×0” — most issues
+                      have never been printed and a column of zeroes is noise. */}
+                  {i.printCount > 0 && (
+                    <span
+                      className="bg-muted text-foreground shrink-0 rounded px-1 tabular-nums"
+                      title={`Printed ${i.printCount} time${i.printCount === 1 ? '' : 's'}`}
+                    >
+                      ×{i.printCount}
+                    </span>
+                  )}
                 </button>
               </li>
             ))}
@@ -645,11 +687,11 @@ export function Workbench(props: Props) {
                   : `${selection.map((n) => `#${n}`).join(', ')} — one job, one shipping charge.`}
               </p>
               <div className="mt-2 flex gap-2">
-                <Button size="sm" onClick={() => setOrdering(selection)}>
+                <Button size="lg" className="flex-1" onClick={() => setOrdering(selection)}>
                   <Package data-icon="inline-start" />
                   Order {selection.length === 1 ? 'it' : `these ${selection.length}`}
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => setBundle([])}>
+                <Button size="lg" variant="outline" onClick={() => setBundle([])}>
                   Clear
                 </Button>
               </div>
@@ -679,17 +721,19 @@ export function Workbench(props: Props) {
         </aside>
 
         {/* ── The issue ────────────────────────────────────────────── */}
-        <section className="min-w-0">
+        {/* Its own column-height scroll, like the other two: the preview is
+            the top half and the running order the bottom, and neither is worth
+            much without the other in view. */}
+        <section className="flex min-w-0 flex-col lg:sticky lg:top-6 lg:h-[calc(100vh-3rem)] lg:overflow-y-auto">
           {issue ? (
             <IssuePanel
               issue={issue}
               editable={editable}
               locked={locked}
               working={working?.message ?? null}
+              sheet={issue.hasCover ? sheet : 'interior'}
+              previewOpen={previewOpen}
               onRemove={(itemId) => returnToPool(issue, itemId)}
-              onLock={() => void stream('lock', `/api/press/issue/${issue.number}/lock`, { action: 'lock' })}
-              onOrder={() => setOrdering([issue.number])}
-              orderingEnabled={props.orderingEnabled}
             />
           ) : (
             <p className="text-muted-foreground rounded-lg border border-dashed p-10 text-center text-sm">
@@ -710,21 +754,12 @@ export function Workbench(props: Props) {
         </section>
 
         {/* ── Making an issue · orders · settings ──────────────────── */}
-        <aside className="min-w-0 lg:sticky lg:top-6 lg:self-start">
-          <div className="mb-3 flex gap-1">
+        <aside className="min-w-0 lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto lg:pl-1">
+          <div className="mb-3 flex gap-1.5">
             {(['issue', 'orders', 'settings'] as const).map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setTab(t)}
-                className={`rounded-md border px-2.5 py-1.5 text-xs font-medium capitalize ${
-                  tab === t
-                    ? 'bg-foreground text-background border-foreground'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                }`}
-              >
+              <Toggle key={t} active={tab === t} onClick={() => setTab(t)} className="flex-1 capitalize">
                 {t}
-              </button>
+              </Toggle>
             ))}
           </div>
 
@@ -733,6 +768,7 @@ export function Workbench(props: Props) {
               {/* `busy`, not `locked`: opening an issue is not an edit to the
                   one being built, and a four-minute rebuild should not stop it. */}
               <Button
+                size="lg"
                 variant="outline"
                 className="w-full justify-start"
                 onClick={() => void newIssue()}
@@ -744,6 +780,16 @@ export function Workbench(props: Props) {
 
               {issue ? (
                 <>
+                  {/* The one action the workbench is for, at the top of the
+                      column that holds every other action. It was a card in
+                      the middle, where it competed with the pages themselves
+                      for the space they both wanted. */}
+                  <OrderCta
+                    issue={issue}
+                    locked={locked}
+                    orderingEnabled={props.orderingEnabled}
+                    onOrder={() => setOrdering([issue.number])}
+                  />
                   <IssueActions
                     issue={issue}
                     editable={editable}
@@ -758,13 +804,23 @@ export function Workbench(props: Props) {
                     }
                     onUnlock={() => void unlock(issue.number)}
                   />
+                  <PreviewControls
+                    issue={issue}
+                    sheet={issue.hasCover ? sheet : 'interior'}
+                    open={previewOpen}
+                    onSheet={(s) => {
+                      setSheet(s)
+                      setPreviewOpen(true)
+                    }}
+                    onToggle={() => setPreviewOpen((v) => !v)}
+                  />
                   {/* The built count is the true one; while the draft has moved
                       since, its measured pages are the better guess at how
                       thick this will come out. */}
                   <PageMeter
                     pages={issue.pages}
                     threshold={props.threshold}
-                    printed={['approved', 'ordered', 'shipped'].includes(issue.state)}
+                    printCount={issue.printCount}
                   />
                   <PrintSpec
                     packageId={props.packageId}
@@ -811,10 +867,9 @@ function IssuePanel({
   editable,
   locked,
   working,
+  sheet,
+  previewOpen,
   onRemove,
-  onLock,
-  onOrder,
-  orderingEnabled,
 }: {
   issue: WorkbenchIssue
   editable: boolean
@@ -822,43 +877,32 @@ function IssuePanel({
   locked: boolean
   /** What the buttons on the right are doing, if anything. */
   working: string | null
+  /** Which PDF to show. Set from the right-hand column. */
+  sheet: Sheet
+  /** Whether to show one at all, so the list can have the whole column. */
+  previewOpen: boolean
   /** Send one article back to the pool, by id. */
   onRemove: (itemId: string) => void
-  /** Freeze the contents for printing. Deliberately the same handler the
-      right-hand column uses — two buttons, one action. */
-  onLock: () => void
-  /** Open the order dialog on this issue alone. */
-  onOrder: () => void
-  /** PRESS_ORDER_ENABLED, so the card can say when nothing can be ordered. */
-  orderingEnabled: boolean
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: 'issue', disabled: !editable })
 
   return (
-    <div>
-      <div className="mb-3 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-        <div className="min-w-0">
-          <h2 className="font-serif text-2xl">{issue.name}</h2>
-          {/* Two page counts, and they mean different things: the articles as
-              they stand right now, which every add and remove changes, and the
-              PDF on file, which only a build changes. Showing one number for
-              both is what made editing look like it did nothing. */}
-          <p className="text-muted-foreground mt-1 text-xs">
-            Issue {issue.number} · {STATE_LABEL[issue.state] ?? issue.state} ·{' '}
-            <span className="text-foreground tabular-nums">{issue.pages}pp</span> of articles ·{' '}
-            {issue.built ? `${issue.pageTotal}pp built${issue.dirty ? ', out of date' : ''}` : 'never built'}
-          </p>
-        </div>
-
+    <div className="flex flex-col lg:min-h-0 lg:flex-1">
+      {/* Beside the title, not under it: it is one line of facts about the
+          same thing, and stacking it cost a row of height the preview wanted.
+          Two page counts, and they mean different things — the articles as
+          they stand right now, which every add and remove changes, and the PDF
+          on file, which only a build changes. Then how many times this has
+          been printed, which is what says a reorder is a reorder. */}
+      <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h2 className="font-serif text-2xl">{issue.name}</h2>
+        <p className="text-muted-foreground text-xs">
+          Issue {issue.number} · {STATE_LABEL[issue.state] ?? issue.state} ·{' '}
+          <span className="text-foreground tabular-nums">{issue.pages}pp</span> of articles ·{' '}
+          {issue.built ? `${issue.pageTotal}pp built${issue.dirty ? ', out of date' : ''}` : 'never built'} ·{' '}
+          <span className="text-foreground tabular-nums">printed {issue.printCount}×</span>
+        </p>
       </div>
-
-      <OrderCta
-        issue={issue}
-        locked={locked}
-        orderingEnabled={orderingEnabled}
-        onLock={onLock}
-        onOrder={onOrder}
-      />
 
       {issue.state === 'rejected' && (
         <p className="border-destructive/50 text-destructive mb-3 border-l-2 py-1 pl-3 text-xs">
@@ -878,9 +922,24 @@ function IssuePanel({
         </p>
       )}
 
+      {/* The top half: what it will look like printed. */}
+      {previewOpen && (
+        <div className="mb-3 flex flex-col lg:min-h-0 lg:flex-[1.6]">
+          <IssuePreview
+            issueNumber={issue.number}
+            version={issue.updatedAt}
+            sheet={sheet}
+            built={issue.built}
+          />
+        </div>
+      )}
+
+      {/* The bottom half: what is in it, in order. */}
       <div
         ref={setNodeRef}
-        className={`rounded-lg border ${isOver ? 'border-foreground border-dashed' : ''}`}
+        className={`rounded-lg border lg:min-h-0 lg:flex-1 lg:overflow-y-auto ${
+          isOver ? 'border-foreground border-dashed' : ''
+        }`}
       >
         <SortableContext id="issue" items={issue.contents.map((e) => e.id)} strategy={verticalListSortingStrategy}>
           <ol className="divide-y">
@@ -897,7 +956,7 @@ function IssuePanel({
                   // both where the article goes and where the panel sits.
                   editable ? (
                     <Button
-                      size="icon-sm"
+                      size="icon"
                       variant="ghost"
                       disabled={locked}
                       onClick={() => onRemove(entry.id)}
@@ -939,12 +998,12 @@ function IssuePanel({
 function PageMeter({
   pages,
   threshold,
-  printed,
+  printCount,
 }: {
   pages: number
   threshold: number
-  /** Already at the printer, so the threshold is history rather than a target. */
-  printed: boolean
+  /** How many orders have been placed for it and not refused. */
+  printCount: number
 }) {
   return (
     <div className="mt-3 rounded-lg border p-3">
@@ -952,7 +1011,7 @@ function PageMeter({
         <span className="text-muted-foreground text-xs">Length</span>
         <span className="text-xs tabular-nums">
           {pages} / {threshold} pages
-          {printed && ' · printed'}
+          {printCount > 0 && ` · printed ${printCount}×`}
         </span>
       </div>
       <div className="bg-muted mt-2 h-1.5 overflow-hidden rounded-full">
@@ -970,30 +1029,27 @@ function PageMeter({
 /**
  * Ordering, stated as a step rather than hidden as a button.
  *
- * The order button used to be the last control in the right-hand column,
- * which below `lg` stacks under the pool — and it only existed at all once an
- * issue was locked, so a workbench of drafts had no order button anywhere and
- * nothing saying what would produce one. Both of those read as "you cannot
- * order from here", which was wrong in the first case and unexplained in the
- * second.
+ * It began as the last control in the right-hand column, where nothing said
+ * what would produce one on a draft; then as a card at the top of the middle
+ * column, where it said so plainly but took a quarter of the height the pages
+ * themselves wanted. Now it is the first thing in the column of actions —
+ * still always present, still saying why when it cannot go ahead, and no
+ * longer competing with the issue for the same space.
  *
- * So: always present, directly under the issue's name, and when it cannot go
- * ahead it says why in the same place. The reasons are the client-side half of
- * `orderBlockers` — the three an issue carries on its face. The dialog remains
- * the authority and still checks the address, the email and the orders already
- * in flight, which only the server can see.
+ * The reasons are the client-side half of `orderBlockers` — the ones an issue
+ * carries on its face. The dialog remains the authority and still checks the
+ * address, the email and the orders already in flight, which only the server
+ * can see.
  */
 function OrderCta({
   issue,
   locked,
   orderingEnabled,
-  onLock,
   onOrder,
 }: {
   issue: WorkbenchIssue
   locked: boolean
   orderingEnabled: boolean
-  onLock: () => void
   onOrder: () => void
 }) {
   // The built count where there is one: it is the number Lulu will bind.
@@ -1014,34 +1070,18 @@ function OrderCta({
 
   const blocked = reasons.length > 0
 
-  // A draft is not blocked, it is unfinished: locking is the next step and it
-  // is a different button, so it does not belong in the list above.
+  // A draft is not blocked, it is unfinished: locking is the next step, and
+  // that button is directly below this — one Lock, in the list of actions,
+  // rather than a second one dressed as an order.
   if (issue.state === 'open') {
     return (
-      <div className="bg-muted/40 mb-4 rounded-lg border p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-sm font-medium">Order a printed copy</p>
-            <p className="text-muted-foreground mt-0.5 text-xs">
-              Lock it first. Locking freezes the contents and builds the PDF that gets printed —
-              you can unlock again afterwards.
-            </p>
-          </div>
-          {/* Not disabled by `blocked`: locking is worth doing for the PDF
-              alone, and a Lock here that is dead while the identical Lock in
-              the right-hand column works would be the worse confusion. The
-              reasons below say what still stands between this and an order. */}
-          <Button
-            size="lg"
-            className="shrink-0"
-            disabled={locked || issue.contents.length === 0}
-            onClick={onLock}
-          >
-            <Lock data-icon="inline-start" />
-            Lock for printing
-          </Button>
-        </div>
-        {blocked && <Reasons reasons={reasons} heading="Before it can be ordered:" />}
+      <div className="bg-muted/40 mt-3 rounded-lg border p-3">
+        <p className="text-sm font-medium">To order a printed copy</p>
+        <p className="text-muted-foreground mt-0.5 text-xs">
+          Lock it first. Locking freezes the contents and builds the PDF that gets printed — you
+          can unlock again afterwards.
+        </p>
+        {blocked && <Reasons reasons={reasons} heading="And before it can be ordered:" />}
       </div>
     )
   }
@@ -1049,22 +1089,20 @@ function OrderCta({
   if (!orderable(issue.state)) return null
 
   return (
-    <div className="bg-muted/40 mb-4 rounded-lg border p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm font-medium">
-            {issue.state === 'shipped' ? 'Order another copy' : 'Order a printed copy'}
-          </p>
-          <p className="text-muted-foreground mt-0.5 text-xs">
-            The next screen prices it and sends an approval email. Nothing is ordered until you
-            follow the link in that email.
-          </p>
-        </div>
-        <Button size="lg" className="shrink-0" disabled={locked || blocked} onClick={onOrder}>
-          <Package data-icon="inline-start" />
-          {issue.state === 'shipped' ? 'Order another copy' : 'Order a copy'}
-        </Button>
-      </div>
+    <div className="bg-muted/40 mt-3 rounded-lg border p-3">
+      <Button
+        size="lg"
+        className="w-full justify-start"
+        disabled={locked || blocked}
+        onClick={onOrder}
+      >
+        <Package data-icon="inline-start" />
+        {issue.state === 'shipped' ? 'Order another copy' : 'Order a copy'}
+      </Button>
+      <p className="text-muted-foreground mt-2 text-xs">
+        The next screen prices it and sends an approval email. Nothing is ordered until you follow
+        the link in that email.
+      </p>
       {blocked && <Reasons reasons={reasons} />}
     </div>
   )
@@ -1123,6 +1161,7 @@ function IssueActions({
       {editable && (
         <>
           <Button
+            size="lg"
             variant="outline"
             className="w-full justify-start"
             disabled={locked || poolCount === 0}
@@ -1135,6 +1174,7 @@ function IssueActions({
           {/* The one button whose weight should change: a draft that has moved
               since its last build is the whole reason to press it. */}
           <Button
+            size="lg"
             variant={issue.dirty ? 'default' : 'outline'}
             className="w-full justify-start"
             disabled={locked || empty}
@@ -1145,6 +1185,7 @@ function IssueActions({
             {working?.what === 'rebuild' ? 'Rebuilding…' : issue.dirty ? 'Rebuild' : 'Rebuild anyway'}
           </Button>
           <Button
+            size="lg"
             variant={issue.dirty ? 'outline' : 'default'}
             className="w-full justify-start"
             disabled={locked || empty}
@@ -1161,23 +1202,82 @@ function IssueActions({
           the column that stacks last. What stays is its opposite — the way
           back out of a locked issue. */}
       {issue.state === 'closed' && (
-        <Button variant="outline" className="w-full justify-start" disabled={locked} onClick={onUnlock}>
+        <Button size="lg" variant="outline" className="w-full justify-start" disabled={locked} onClick={onUnlock}>
           <LockOpen data-icon="inline-start" />
           {working?.what === 'unlock' ? 'Unlocking…' : 'Unlock to edit'}
         </Button>
       )}
 
-      {issue.built && (
-        <a
-          className="hover:bg-muted flex h-8 w-full items-center gap-1.5 rounded-lg border px-2 text-sm font-medium"
-          href={`/api/press/file/${issue.number}/interior.pdf`}
-          target="_blank"
-          rel="noreferrer"
-        >
-          <FileText className="size-4" />
-          Interior PDF
-        </a>
-      )}
+    </div>
+  )
+}
+
+// ── What the middle column is showing ────────────────────────────────────────
+
+/**
+ * The preview's controls, stacked in the column where the controls live.
+ *
+ * They were a row across the top of the preview — two sheet tabs, a note, an
+ * open-in-a-tab link and a hide toggle — which is a strip of chrome sitting
+ * exactly where the pages want to be. Vertical and over here they cost the
+ * viewer nothing, and the cover finally has a button that both shows it and
+ * links to it, which is what it lacked for weeks.
+ */
+function PreviewControls({
+  issue,
+  sheet,
+  open,
+  onSheet,
+  onToggle,
+}: {
+  issue: WorkbenchIssue
+  sheet: Sheet
+  open: boolean
+  onSheet: (sheet: Sheet) => void
+  onToggle: () => void
+}) {
+  if (!issue.built) return null
+
+  const href = (file: string) =>
+    `/api/press/file/${issue.number}/${file}?v=${encodeURIComponent(issue.updatedAt)}`
+
+  return (
+    <div className="mt-3 grid gap-2 rounded-lg border p-3">
+      <Toggle
+        active={open && sheet === 'interior'}
+        onClick={() => onSheet('interior')}
+        className="w-full justify-start"
+      >
+        <FileText className="size-4" />
+        Interior
+      </Toggle>
+      <Toggle
+        active={open && sheet === 'cover'}
+        onClick={() => onSheet('cover')}
+        disabled={!issue.hasCover}
+        className="w-full justify-start"
+        title={issue.hasCover ? 'The wrap — back, spine, front' : 'No cover built yet'}
+      >
+        <BookImage className="size-4" />
+        Cover
+      </Toggle>
+      <a
+        className="hover:bg-muted text-muted-foreground hover:text-foreground flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm font-medium"
+        href={href(sheet === 'cover' && issue.hasCover ? 'cover.pdf' : 'interior.pdf')}
+        target="_blank"
+        rel="noreferrer"
+      >
+        <ExternalLink className="size-4" />
+        Open in a new tab
+      </a>
+      <Toggle active={false} onClick={onToggle} className="w-full justify-start">
+        {open ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+        {open ? 'Hide the preview' : 'Show the preview'}
+      </Toggle>
+      <p className="text-muted-foreground text-xs">
+        {sheet === 'cover' ? 'One spread — back, spine, front.' : 'Contents and articles.'}
+        {issue.dirty && ' Older than the list beside it.'}
+      </p>
     </div>
   )
 }
