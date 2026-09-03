@@ -129,14 +129,21 @@ export async function currentAccount(): Promise<PressAccount> {
   // Imported here rather than at the top: `auth.ts` reaches for `next/headers`,
   // which does not exist in the worker or in a script, and both of those call
   // `ownerAccount` from this file.
-  const { signedInUser, attachAccount } = await import('./auth')
+  const { signedInUser, attachAccount, runningLocally } = await import('./auth')
 
   const user = await signedInUser()
-  if (!user) throw new NotSignedInError()
+  if (user) {
+    const account = await attachAccount(user)
+    if (!account) throw new NotInvitedError()
+    return account
+  }
 
-  const account = await attachAccount(user)
-  if (!account) throw new NotInvitedError()
-  return account
+  // A laptop is the owner's, and asking it to prove that is ceremony: getting
+  // this far needed `.env.local`, which holds the service-role key — every
+  // account's everything, session or no session. See `runningLocally`.
+  if (await runningLocally()) return ownerAccount()
+
+  throw new NotSignedInError()
 }
 
 /** The id alone, for the many callers that only need it to scope a client. */

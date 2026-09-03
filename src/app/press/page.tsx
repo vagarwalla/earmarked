@@ -22,6 +22,7 @@
 import { notFound, redirect } from 'next/navigation'
 import { pressUiEnabled } from '@/lib/press/local'
 import { NotInvitedError, NotSignedInError, currentAccount } from '@/lib/press/accounts'
+import { signedInUser } from '@/lib/press/auth'
 import { itemsForIssue, pressDb } from '@/lib/press/db'
 import { itemsInState, listIssueRows, poolItems } from '@/lib/press/workbench'
 import { loadEffectiveSettings, readSettingsRow, SETTINGS_DEFAULTS } from '@/lib/press/settings-db'
@@ -84,6 +85,9 @@ export default async function PressPage() {
     throw err
   }
   const db = pressDb(account.id)
+  // On a laptop there is no session, so there is nothing to sign out of and a
+  // button offering it would put you on a sign-in page you cannot use.
+  const signedIn = (await signedInUser()) !== null
 
   const rows = await listIssueRows(db)
 
@@ -151,7 +155,7 @@ export default async function PressPage() {
           <span className="text-muted-foreground hidden text-sm sm:inline">
             {account.display_name ?? `@${account.handle}`}
           </span>
-          <SignOut />
+          {signedIn && <SignOut />}
           <ThemeToggle />
         </div>
       </header>

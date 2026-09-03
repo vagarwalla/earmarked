@@ -22,6 +22,14 @@
  *   because the answer needs the service-role key and belongs next to the
  *   query it scopes.
  *
+ * And skipped entirely on a laptop. `isLoopback` on the Host header, and not
+ * on Vercel: press was frictionless on localhost for its whole life before
+ * sign-in existed, and it should stay that way, because reaching it at all
+ * needs `.env.local` and `.env.local` holds the service-role key. Asking
+ * somebody holding that to prove who they are is ceremony, not security.
+ * `currentAccount()` is what actually decides, and PRESS_REQUIRE_SIGN_IN=1
+ * turns the laptop case off there.
+ *
  * Deliberately NOT covered, exactly as before: /press/confirm/[token] and
  * /api/press/action/[token] carry their own signed one-time tokens and are
  * opened from an email on a phone, and /api/press/email-in authenticates with
@@ -32,6 +40,7 @@
 
 import { NextResponse, type NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
+import { isLoopback } from '@/lib/press/auth'
 
 /** JSON for the API, a page for a person. Both say the same thing. */
 function refuse(request: NextRequest): NextResponse {
@@ -43,6 +52,21 @@ function refuse(request: NextRequest): NextResponse {
 }
 
 export async function middleware(request: NextRequest) {
+  // The laptop case, before anything else: there is no session here to refresh
+  // and nothing to refuse, because the decision is made on the far side of
+  // this by `currentAccount()` — which reads PRESS_REQUIRE_SIGN_IN at runtime
+  // and, without it, answers with the owner.
+  //
+  // The flag is deliberately not checked here. Middleware runs on the edge and
+  // Next inlines `process.env.X` into it at build time, so a variable set when
+  // the server starts has no effect on this file — and an escape hatch that
+  // silently does nothing is worse than none. `process.env.VERCEL` is fine
+  // because it is set during the build too; the Host check is what actually
+  // carries this, and it is a runtime value.
+  if (!process.env.VERCEL && isLoopback(request.headers.get('host'))) {
+    return NextResponse.next()
+  }
+
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
