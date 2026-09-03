@@ -9,7 +9,7 @@
  */
 
 import { inspectToken } from '@/lib/press/approval'
-import { getIssue } from '@/lib/press/db'
+import { getIssue, pressDbAsService } from '@/lib/press/db'
 import ConfirmButton from './ConfirmButton'
 
 export const dynamic = 'force-dynamic'
@@ -54,7 +54,10 @@ const EXPLAIN: Record<string, string> = {
 
 export default async function ConfirmPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params
-  const lookup = await inspectToken(token)
+  // Unscoped: this page is reached from an approval email by somebody who is
+  // not signed in, and the token is the authority. See the sibling route.
+  const db = pressDbAsService()
+  const lookup = await inspectToken(token, { db })
 
   if (!lookup.ok) {
     return (
@@ -68,7 +71,7 @@ export default async function ConfirmPage({ params }: { params: Promise<{ token:
   // one it has always been. Read here rather than in the button because this
   // page is the last description of what is about to be bought.
   const issueIds = lookup.token.issue_ids?.length ? lookup.token.issue_ids : [lookup.token.issue_id]
-  const issues = (await Promise.all(issueIds.map((id) => getIssue(id)))).filter((i) => i !== null)
+  const issues = (await Promise.all(issueIds.map((id) => getIssue(id, db)))).filter((i) => i !== null)
   const bundled = lookup.token.action === 'approve' && issues.length > 1
   const copy = (bundled ? COPY['approve-bundle'] : COPY[lookup.token.action]) ?? COPY.approve
 

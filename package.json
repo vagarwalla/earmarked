@@ -15,7 +15,8 @@
     "press:linkposts": "node --env-file=.env.local ./node_modules/.bin/tsx scripts/press-linkposts.ts",
     "press:sync": "node --env-file=.env.local ./node_modules/.bin/tsx scripts/press-sync.ts",
     "press:substack": "node --env-file=.env.local ./node_modules/.bin/tsx scripts/press-substack.ts",
-    "press:order": "node --env-file=.env.local ./node_modules/.bin/tsx scripts/press-order.ts"
+    "press:order": "node --env-file=.env.local ./node_modules/.bin/tsx scripts/press-order.ts",
+    "press:invite": "node --env-file=.env.local ./node_modules/.bin/tsx scripts/press-invite.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

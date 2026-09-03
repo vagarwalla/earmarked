@@ -9,7 +9,24 @@
  *
  * The machine is stateless — all state is in Supabase — so it can be killed
  * and restarted at any point. Every step below is written to be resumable.
+ *
+ * This is the one runtime that legitimately sees everybody's press: it runs the
+ * pipeline for every account, so it holds the unscoped service client and each
+ * step carries the owner it is acting for. The exception is the Raindrop poll,
+ * which runs on one person's token and so is scoped to that one person.
  */
+
+/**
+ * Every account's everything. Named `pressDbAsService` at its definition for
+ * exactly this reason — a grep for it should find the four places that are
+ * allowed to, and this is one of them.
+ *
+ * A function rather than a const because this module is imported by the tests
+ * for `isWeeklyTick`, and building a client at import time turns a missing
+ * SUPABASE_SERVICE_ROLE_KEY into a test suite that will not load. The client
+ * itself is memoised, so calling this is free after the first time.
+ */
+const db = () => pressDbAsService()
 
 import {
   failItem,
@@ -18,12 +35,15 @@ import {
   insertItem,
   itemsInState,
   issuesInState,
+  pressDb,
+  pressDbAsService,
   putObject,
   recordEvent,
   storagePath,
   updateItem,
   updateIssue,
 } from '../src/lib/press/db'
+import { currentOwnerId } from '../src/lib/press/accounts'
 import { loadSettings, missingSettings } from '../src/lib/press/settings'
 import { pollRaindrops } from '../src/lib/press/raindrop'
 import { extractFromUrl, extractFromNewsletterHtml, ExtractionError } from '../src/lib/press/extract'
@@ -36,7 +56,7 @@ import { sendWeeklyDigest } from '../src/lib/press/digest'
 import { getObject } from '../src/lib/press/db'
 import { claimJob, reapStaleJobs } from '../src/lib/press/jobs'
 import { runComposeJob } from '../src/lib/press/run-job'
-import type { Article, LinkpostTarget } from '../src/lib/press/types'
+import type { Article, LinkpostTarget, PressItem } from '../src/lib/press/types'
 
 const SECOND = 1_000
 const MINUTE = 60_000
@@ -59,7 +79,7 @@ function log(step: string, detail: Record<string, unknown> = {}): void {
 
 /** queued → extracted. A failure here is recorded, never silent. */
 async function extractQueued(): Promise<number> {
-  const items = await itemsInState(['queued'], undefined, 25)
+  const items = await itemsInState(['queued'], db(), 25)
   let done = 0
 
   const settings = loadSettings()
@@ -70,7 +90,7 @@ async function extractQueued(): Promise<number> {
       let links: OutboundLink[]
       if (item.source === 'newsletter') {
         if (!item.content_path) throw new ExtractionError('newsletter has no stored html', ['newsletter'])
-        const html = new TextDecoder().decode(await getObject(item.content_path))
+        const html = new TextDecoder().decode(await getObject(item.content_path, db()))
         ;({ article, links } = await extractFromNewsletterHtml({
           itemId: item.id,
           html,
@@ -87,7 +107,7 @@ async function extractQueued(): Promise<number> {
 
       // A piece a linkpost named says so on its own opener, so the relationship
       // survives into print rather than living only in the database.
-      const parent = item.linkpost_parent_id ? await getItem(item.linkpost_parent_id) : null
+      const parent = item.linkpost_parent_id ? await getItem(item.linkpost_parent_id, db()) : null
       if (parent) {
         article.linkpostOf = {
           title: parent.title ?? parent.url ?? 'a linkpost',
@@ -117,25 +137,29 @@ async function extractQueued(): Promise<number> {
       }
 
       const path = storagePath.articleJson(item.id)
-      await putObject(path, JSON.stringify(article), 'application/json')
-      await updateItem(item.id, {
-        state: 'extracted',
-        content_path: path,
-        title: article.title,
-        byline: article.byline,
-        source_name: article.sourceName ?? item.source_name,
-        published_at: article.publishedAt ?? item.published_at,
-        is_linkpost: Boolean(judgement?.isLinkpost),
-        linkpost_scanned_at: new Date().toISOString(),
-      })
+      await putObject(path, JSON.stringify(article), 'application/json', db())
+      await updateItem(
+        item.id,
+        {
+          state: 'extracted',
+          content_path: path,
+          title: article.title,
+          byline: article.byline,
+          source_name: article.sourceName ?? item.source_name,
+          published_at: article.publishedAt ?? item.published_at,
+          is_linkpost: Boolean(judgement?.isLinkpost),
+          linkpost_scanned_at: new Date().toISOString(),
+        },
+        db(),
+      )
 
       if (judgement?.isLinkpost) {
-        const added = await queueLinkpostTargets(item.id, judgement.targets)
+        const added = await queueLinkpostTargets(item, judgement.targets)
         log('linkpost', { item: item.id, named: judgement.targets.length, queued: added })
       }
       done++
     } catch (err) {
-      await failItem(item.id, (err as Error).message)
+      await failItem(item.id, (err as Error).message, db())
     }
   }
 
@@ -150,19 +174,27 @@ async function extractQueued(): Promise<number> {
  * the same week — is one article, and re-running this adds nothing.
  */
 async function queueLinkpostTargets(
-  parentId: string,
+  parent: PressItem,
   targets: readonly LinkpostTarget[],
 ): Promise<number> {
   let added = 0
   for (const target of targets) {
-    const inserted = await insertItem({
-      source: 'raindrop',
-      url: target.url,
-      title: target.anchor || null,
-      state: 'queued',
-      linkpost_parent_id: parentId,
-      linkpost_anchor: target.anchor || null,
-    })
+    const inserted = await insertItem(
+      {
+        // The pieces a roundup names belong to whoever saved the roundup.
+        // Taken from the parent rather than from a session, because nobody is
+        // signed in here — the worker is acting on somebody's behalf, hours
+        // after they went to bed.
+        owner_id: parent.owner_id,
+        source: 'raindrop',
+        url: target.url,
+        title: target.anchor || null,
+        state: 'queued',
+        linkpost_parent_id: parent.id,
+        linkpost_anchor: target.anchor || null,
+      },
+      db(),
+    )
     if (inserted) added++
   }
   return added
@@ -174,13 +206,15 @@ async function queueLinkpostTargets(
  * pages — compose re-renders everything.
  */
 async function layoutExtracted(): Promise<number> {
-  const items = await itemsInState(['extracted'], undefined, 25)
+  const items = await itemsInState(['extracted'], db(), 25)
   let done = 0
 
   for (const item of items) {
     try {
       if (!item.content_path) throw new Error('extracted item has no article')
-      const article = JSON.parse(new TextDecoder().decode(await getObject(item.content_path))) as Article
+      const article = JSON.parse(
+        new TextDecoder().decode(await getObject(item.content_path, db())),
+      ) as Article
       const result = await renderArticle(article, {
         // A measurement render is thrown away — only its page count is kept —
         // and an item no longer belongs to an issue when it is measured, so
@@ -191,11 +225,15 @@ async function layoutExtracted(): Promise<number> {
         measurement: true,
       })
       const path = storagePath.fragment(item.id)
-      await putObject(path, result.pdf, 'application/pdf')
-      await updateItem(item.id, { state: 'laid_out', fragment_path: path, page_count: result.pageCount })
+      await putObject(path, result.pdf, 'application/pdf', db())
+      await updateItem(
+        item.id,
+        { state: 'laid_out', fragment_path: path, page_count: result.pageCount },
+        db(),
+      )
       done++
     } catch (err) {
-      await failItem(item.id, `layout failed: ${(err as Error).message}`)
+      await failItem(item.id, `layout failed: ${(err as Error).message}`, db())
     }
   }
 
@@ -223,10 +261,10 @@ async function layoutExtracted(): Promise<number> {
  */
 async function runJobs(): Promise<void> {
   for (;;) {
-    const job = await claimJob()
+    const job = await claimJob(db())
     if (!job) return
     log('job_started', { job: job.id, issue: job.issue_id, intent: job.intent })
-    const result = await runComposeJob(job)
+    const result = await runComposeJob(job, db())
     log(result ? 'job_done' : 'job_failed', { job: job.id, ...(result ?? {}) })
   }
 }
@@ -245,26 +283,34 @@ async function followOrders(): Promise<void> {
   const settings = loadSettings()
   const lulu = createLuluClient({ settings })
 
-  for (const issue of await issuesInState(['ordered'])) {
+  for (const issue of await issuesInState(['ordered'], db())) {
     if (!issue.lulu_job_id || issue.lulu_job_id === 'pending') continue
 
     try {
       const job = await lulu.getPrintJob(issue.lulu_job_id)
       if (isRejected(job)) {
-        await updateIssue(issue.id, { state: 'rejected', rejection_reason: job.message, lulu_status: job.status })
+        await updateIssue(
+          issue.id,
+          { state: 'rejected', rejection_reason: job.message, lulu_status: job.status },
+          db(),
+        )
         log('order_rejected', { issue: issue.number, message: job.message })
         continue
       }
       if (isShipped(job) && !issue.shipped_at) {
-        await updateIssue(issue.id, {
-          state: 'shipped',
-          shipped_at: new Date().toISOString(),
-          lulu_status: job.status,
-          tracking_url: job.trackingUrls[0] ?? null,
-        })
+        await updateIssue(
+          issue.id,
+          {
+            state: 'shipped',
+            shipped_at: new Date().toISOString(),
+            lulu_status: job.status,
+            tracking_url: job.trackingUrls[0] ?? null,
+          },
+          db(),
+        )
         log('shipped', { issue: issue.number })
       } else if (job.status !== issue.lulu_status) {
-        await updateIssue(issue.id, { lulu_status: job.status })
+        await updateIssue(issue.id, { lulu_status: job.status }, db())
       }
     } catch (err) {
       log('order_poll_failed', { issue: issue.number, reason: (err as Error).message })
@@ -273,9 +319,9 @@ async function followOrders(): Promise<void> {
     // Archival is idempotent, so re-running it costs nothing and a missed tick
     // is self-healing.
     try {
-      const fresh = await getIssue(issue.id)
+      const fresh = await getIssue(issue.id, db())
       if (fresh && (fresh.state === 'ordered' || fresh.state === 'shipped')) {
-        const result = await archiveIssue(fresh)
+        const result = await archiveIssue(fresh, { db: db() })
         if (!result.alreadyDone) log('archived', { issue: fresh.number, ...result })
       }
     } catch (err) {
@@ -287,7 +333,11 @@ async function followOrders(): Promise<void> {
 // ── Schedules ────────────────────────────────────────────────────────────────
 
 export async function runPoll(): Promise<void> {
-  const result = await pollRaindrops()
+  // Raindrop is one person's account and one person's token, so what it brings
+  // in is one person's reading. Scoped, unlike everything else in this file:
+  // a service client here would insert items with no owner and the NOT NULL
+  // would refuse them, which is the constraint doing exactly its job.
+  const result = await pollRaindrops({ db: pressDb(await currentOwnerId()) })
   log('polled', { scanned: result.scanned, ingested: result.ingested.length })
   log('extracted', { count: await extractQueued() })
   log('laid_out', { count: await layoutExtracted() })
@@ -295,7 +345,7 @@ export async function runPoll(): Promise<void> {
   // panel has a Refresh button of its own, and this is what keeps it right
   // when nobody is looking at it.
   try {
-    const refreshed = await refreshOrders()
+    const refreshed = await refreshOrders(db())
     if (refreshed.refreshed || refreshed.errors.length) log('orders_refreshed', refreshed)
   } catch (err) {
     log('order_refresh_failed', { reason: (err as Error).message })
@@ -305,7 +355,7 @@ export async function runPoll(): Promise<void> {
   // way out but the SQL editor. Reaping on the poll is often enough: the row
   // has to be half an hour stale before it counts.
   try {
-    const reaped = await reapStaleJobs()
+    const reaped = await reapStaleJobs(db())
     if (reaped) log('jobs_reaped', { count: reaped })
   } catch (err) {
     log('job_reap_failed', { reason: (err as Error).message })
@@ -334,7 +384,7 @@ export async function runWeeklyTick(now = new Date()): Promise<void> {
   await followOrders()
 
   const since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-  const digest = await sendWeeklyDigest(since)
+  const digest = await sendWeeklyDigest(since, { db: db() })
   log('digest', digest)
   log('weekly_tick_done')
 }
@@ -359,7 +409,9 @@ async function main(): Promise<void> {
     } catch (err) {
       // A thrown scheduler is a stopped pipeline; log and wait for the next one.
       log('step_failed', { name, reason: (err as Error).message })
-      await recordEvent({ kind: 'worker_error', detail: { step: name, reason: (err as Error).message } })
+      // No owner: a scheduler that threw belongs to nobody's press, and
+      // press_events.owner_id is nullable for precisely these (018).
+      await recordEvent({ kind: 'worker_error', detail: { step: name, reason: (err as Error).message } }, db())
     }
   }
 

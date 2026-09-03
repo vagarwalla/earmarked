@@ -20,9 +20,11 @@
  * not the default, and the quote is always printed first.
  */
 
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { type SupabaseClient } from '@supabase/supabase-js'
 import { createLuluClient, formatQuote, type ShippingAddress } from '../src/lib/press/lulu'
 import { loadSettings } from '../src/lib/press/settings'
+import { OWNER_ACCOUNT_ID } from '../src/lib/press/accounts'
+import { pressDb } from '../src/lib/press/db'
 import { PRINT_SPEC } from '../src/lib/press/types'
 
 /**
@@ -33,11 +35,11 @@ import { PRINT_SPEC } from '../src/lib/press/types'
 const FILE_URL_TTL_SECONDS = 24 * 60 * 60
 
 function db(): SupabaseClient {
-  const { supabaseUrl, supabaseServiceKey } = loadSettings()
-  if (!supabaseUrl || !supabaseServiceKey) throw new Error('Supabase is not configured')
-  return createClient(supabaseUrl, supabaseServiceKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  })
+  // The owner's own client, not a raw one. These scripts are V's local tools
+  // acting for V, and since 018 an insert with no `owner_id` is refused by the
+  // column rather than landing unowned — so going through `pressDb` is both
+  // the scoping and the thing that makes the write work at all.
+  return pressDb(OWNER_ACCOUNT_ID)
 }
 
 async function main(): Promise<void> {

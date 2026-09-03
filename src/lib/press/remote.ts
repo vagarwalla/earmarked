@@ -17,7 +17,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { itemsForIssue, pressDb, signedUrl, storagePath } from './db'
+import { itemsForIssue, signedUrl, storagePath } from './db'
 import type { IssueEntry, LocalIssue } from './local'
 import type { PressIssue, PressItem } from './types'
 
@@ -25,7 +25,7 @@ import type { PressIssue, PressItem } from './types'
 const PDF_URL_TTL_SECONDS = 60 * 60
 
 /** The waiting pool: extracted and measured, not claimed by any issue. */
-export async function remotePendingItems(db: SupabaseClient = pressDb()): Promise<PressItem[]> {
+export async function remotePendingItems(db: SupabaseClient): Promise<PressItem[]> {
   const { data, error } = await db
     .from('press_items')
     .select('*')
@@ -38,7 +38,7 @@ export async function remotePendingItems(db: SupabaseClient = pressDb()): Promis
 
 export async function remoteItemsInState(
   state: PressItem['state'],
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<PressItem[]> {
   const { data, error } = await db
     .from('press_items')
@@ -81,7 +81,7 @@ function toEntry(item: PressItem, linkpostTitles: Map<string, string> = new Map(
  */
 export async function remoteLinkpostTitles(
   items: readonly PressItem[],
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<Map<string, string>> {
   const ids = [...new Set(items.map((i) => i.linkpost_parent_id).filter((id): id is string => Boolean(id)))]
   if (ids.length === 0) return new Map()
@@ -101,7 +101,7 @@ export async function remoteLinkpostTitles(
  * would make": membership is a column, so an issue with no items simply has
  * none, and the waiting pool is the rest.
  */
-export async function remoteListIssues(db: SupabaseClient = pressDb()): Promise<LocalIssue[]> {
+export async function remoteListIssues(db: SupabaseClient): Promise<LocalIssue[]> {
   const { data, error } = await db
     .from('press_issues')
     .select('*')
@@ -142,7 +142,7 @@ export async function remoteListIssues(db: SupabaseClient = pressDb()): Promise<
 export async function remoteIssueFileUrl(
   issueNumber: number,
   file: 'interior.pdf' | 'cover.pdf',
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<string | null> {
   const { data, error } = await db
     .from('press_issues')
@@ -162,7 +162,7 @@ export async function remoteIssueFileUrl(
 export async function recordBuiltOrder(
   issueId: string,
   itemIds: string[],
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<void> {
   const { error } = await db
     .from('press_issues')

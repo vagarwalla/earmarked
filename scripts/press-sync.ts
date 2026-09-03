@@ -33,10 +33,12 @@ import { spawnSync } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { type SupabaseClient } from '@supabase/supabase-js'
 import { buildIssue, withBuildLock, BuildError, BuildBusyError } from '../src/lib/press/build'
 import { withStateLock, type PressState } from '../src/lib/press/issues'
 import { loadSettings } from '../src/lib/press/settings'
+import { OWNER_ACCOUNT_ID } from '../src/lib/press/accounts'
+import { pressDb } from '../src/lib/press/db'
 
 const ROOT = path.join(process.cwd(), '.press')
 const DRY = process.argv.includes('--dry-run')
@@ -45,13 +47,11 @@ const NO_POLL = process.argv.includes('--no-poll')
 const say = (line: string) => console.log(`${DRY ? '[dry] ' : ''}${line}`)
 
 function client(): SupabaseClient {
-  const { supabaseUrl, supabaseServiceKey } = loadSettings()
-  if (!supabaseUrl || !supabaseServiceKey) {
-    throw new Error('need NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env.local')
-  }
-  return createClient(supabaseUrl, supabaseServiceKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  })
+  // The owner's own client, not a raw one. These scripts are V's local tools
+  // acting for V, and since 018 an insert with no `owner_id` is refused by the
+  // column rather than landing unowned — so going through `pressDb` is both
+  // the scoping and the thing that makes the write work at all.
+  return pressDb(OWNER_ACCOUNT_ID)
 }
 
 const sameOrder = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i])

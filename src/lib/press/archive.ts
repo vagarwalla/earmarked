@@ -31,7 +31,7 @@ export interface ArchiveResult {
 }
 
 export interface ArchiveDeps {
-  db?: SupabaseClient
+  db: SupabaseClient
   settings?: PressSettings
   raindrop?: RaindropClient
   now?: Date
@@ -51,7 +51,7 @@ export function movableItems(items: PressItem[]): PressItem[] {
  */
 export async function archiveIssue(
   issue: PressIssue,
-  deps: ArchiveDeps = {},
+  deps: ArchiveDeps,
 ): Promise<ArchiveResult> {
   const settings = deps.settings ?? loadSettings()
   const db = deps.db

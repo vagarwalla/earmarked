@@ -118,7 +118,7 @@ export type ComposeEntry =
   | { kind: 'pdf'; item: PressItem; pdf: Uint8Array; pageCount: number }
 
 export interface ComposeDeps extends RenderDeps {
-  db?: SupabaseClient
+  db: SupabaseClient
   settings?: PressSettings
   /** Injected in tests; production names the issue with a small Claude model. */
   nameIssueFn?: typeof nameIssue
@@ -149,7 +149,7 @@ export interface ComposeDeps extends RenderDeps {
  */
 export async function loadEntries(
   items: PressItem[],
-  deps: ComposeDeps = {},
+  deps: ComposeDeps,
 ): Promise<{ entries: ComposeEntry[]; skipped: { item: PressItem; reason: string }[] }> {
   const db = deps.db
   const entries: ComposeEntry[] = []
@@ -521,7 +521,7 @@ export interface ComposeResult extends ComposedIssue {
 /**
  * Closed issue → print-ready interior + cover, stored and recorded.
  */
-export async function composeIssue(issue: PressIssue, deps: ComposeDeps = {}): Promise<ComposeResult> {
+export async function composeIssue(issue: PressIssue, deps: ComposeDeps): Promise<ComposeResult> {
   const settings = deps.settings ?? loadSettings()
   const db = deps.db
   const now = deps.now ?? new Date()

@@ -16,7 +16,6 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { pressDb } from './db'
 import type { JobIntent, JobResult, PressJob } from './types'
 
 /** A refusal worth showing the reader — not a bug. */
@@ -33,7 +32,7 @@ export class JobError extends Error {}
 export async function enqueueCompose(
   issueId: string,
   intent: JobIntent,
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<PressJob> {
   const { data, error } = await db
     .from('press_jobs')
@@ -53,7 +52,7 @@ export async function enqueueCompose(
 }
 
 /** Claim the oldest queued job, or null when there is nothing to do. */
-export async function claimJob(db: SupabaseClient = pressDb()): Promise<PressJob | null> {
+export async function claimJob(db: SupabaseClient): Promise<PressJob | null> {
   const { data, error } = await db.rpc('press_claim_job')
   if (error) throw new Error(`press/jobs: claimJob: ${error.message}`)
   return (data as PressJob) ?? null
@@ -69,7 +68,7 @@ export async function claimJob(db: SupabaseClient = pressDb()): Promise<PressJob
 export async function reportProgress(
   jobId: string,
   message: string,
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<void> {
   const { error } = await db
     .from('press_jobs')
@@ -83,7 +82,7 @@ export async function reportProgress(
 export async function finishJob(
   jobId: string,
   result: JobResult,
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<void> {
   const { error } = await db
     .from('press_jobs')
@@ -95,7 +94,7 @@ export async function finishJob(
 export async function failJob(
   jobId: string,
   message: string,
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<void> {
   const { error } = await db
     .from('press_jobs')
@@ -107,7 +106,7 @@ export async function failJob(
   if (error) console.error(`press/jobs: failJob: ${error.message}`)
 }
 
-export async function getJob(jobId: string, db: SupabaseClient = pressDb()): Promise<PressJob | null> {
+export async function getJob(jobId: string, db: SupabaseClient): Promise<PressJob | null> {
   const { data, error } = await db.from('press_jobs').select('*').eq('id', jobId).maybeSingle()
   if (error) throw new Error(`press/jobs: getJob: ${error.message}`)
   return (data as PressJob) ?? null
@@ -121,7 +120,7 @@ export async function getJob(jobId: string, db: SupabaseClient = pressDb()): Pro
  * reload shows an idle button over a machine that is four minutes into a
  * hundred pages.
  */
-export async function liveJobs(db: SupabaseClient = pressDb()): Promise<PressJob[]> {
+export async function liveJobs(db: SupabaseClient): Promise<PressJob[]> {
   const { data, error } = await db
     .from('press_jobs')
     .select('*')
@@ -134,7 +133,7 @@ export async function liveJobs(db: SupabaseClient = pressDb()): Promise<PressJob
 /** The most recent job for an issue, whatever became of it. */
 export async function latestJobForIssue(
   issueId: string,
-  db: SupabaseClient = pressDb(),
+  db: SupabaseClient,
 ): Promise<PressJob | null> {
   const { data, error } = await db
     .from('press_jobs')
@@ -148,7 +147,7 @@ export async function latestJobForIssue(
 }
 
 /** Fail whatever has been `running` longer than a render could honestly take. */
-export async function reapStaleJobs(db: SupabaseClient = pressDb()): Promise<number> {
+export async function reapStaleJobs(db: SupabaseClient): Promise<number> {
   const { data, error } = await db.rpc('press_reap_jobs')
   if (error) throw new Error(`press/jobs: reapStaleJobs: ${error.message}`)
   return (data as number) ?? 0

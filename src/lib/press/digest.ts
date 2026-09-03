@@ -71,7 +71,7 @@ export function digestHtml(lines: DigestLine[]): string {
  */
 export async function sendWeeklyDigest(
   since: Date,
-  deps: MailerDeps & { db?: SupabaseClient } = {},
+  deps: MailerDeps & { db: SupabaseClient },
 ): Promise<{ sent: boolean; count: number }> {
   const failed = await itemsInState(['failed'], deps.db, 500)
   const lines = digestLines(failed, since)

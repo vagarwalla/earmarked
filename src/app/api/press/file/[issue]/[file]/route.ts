@@ -16,6 +16,7 @@ import { NextResponse } from 'next/server'
 import { pressUiEnabled, resolveIssueFile } from '@/lib/press/local'
 import { remoteIssueFileUrl } from '@/lib/press/remote'
 import { reviewSource } from '@/lib/press/review'
+import { ownerDb } from '../../../_lib/guard'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -33,7 +34,7 @@ export async function GET(
   }
 
   if (reviewSource() === 'supabase') {
-    const url = await remoteIssueFileUrl(Number.parseInt(issue, 10), file)
+    const url = await remoteIssueFileUrl(Number.parseInt(issue, 10), file, await ownerDb())
     if (!url) return new NextResponse('not found', { status: 404 })
     // The signed URL is the response; it expires on its own.
     return NextResponse.redirect(url, { status: 307 })

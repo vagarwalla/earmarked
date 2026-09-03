@@ -28,7 +28,7 @@ import { JobError, enqueueCompose } from '@/lib/press/jobs'
 import { localItems, mirrorOrder, publishBuild } from '@/lib/press/handoff'
 import { issueByNumber, lockIssue, unlockIssue } from '@/lib/press/workbench'
 import { loadEffectiveSettings } from '@/lib/press/settings-db'
-import { NOT_FOUND, asResponse, issueNumber, pressUiEnabled } from '../../../_lib/guard'
+import { NOT_FOUND, asResponse, issueNumber, ownerDb, pressUiEnabled } from '../../../_lib/guard'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -44,11 +44,12 @@ export async function POST(request: Request, context: { params: Promise<{ number
   const body = (await request.json().catch(() => null)) as { action?: string } | null
 
   try {
-    const issue = await issueByNumber(number)
+    const db = await ownerDb()
+    const issue = await issueByNumber(number, db)
     if (!issue) return NextResponse.json({ error: 'no such issue' }, { status: 404 })
 
     if (body?.action === 'unlock') {
-      await unlockIssue(issue.id)
+      await unlockIssue(issue.id, db)
       return NextResponse.json({ ok: true, state: 'open' })
     }
     if (body?.action !== 'lock') {
@@ -67,7 +68,7 @@ export async function POST(request: Request, context: { params: Promise<{ number
       )
     }
 
-    const items = await itemsForIssue(issue.id)
+    const items = await itemsForIssue(issue.id, db)
     if (items.length === 0) {
       return NextResponse.json({ error: 'An empty issue cannot be locked.' }, { status: 409 })
     }
@@ -75,7 +76,7 @@ export async function POST(request: Request, context: { params: Promise<{ number
     // No browser here. The worker renders and then freezes, in that order.
     if (reviewSource() === 'supabase') {
       try {
-        const job = await enqueueCompose(issue.id, 'lock')
+        const job = await enqueueCompose(issue.id, 'lock', db)
         return NextResponse.json({ job }, { status: 202 })
       } catch (err) {
         if (err instanceof JobError) {
@@ -101,7 +102,7 @@ export async function POST(request: Request, context: { params: Promise<{ number
       )
     }
 
-    const settings = await loadEffectiveSettings()
+    const settings = await loadEffectiveSettings(db)
     const { BuildBusyError, BuildError, buildIssue, withBuildLock } = await import('@/lib/press/build')
 
     const encoder = new TextEncoder()
@@ -137,11 +138,15 @@ export async function POST(request: Request, context: { params: Promise<{ number
           // way, and "Lock failed" about a compose that succeeded sends you
           // looking at the renderer instead of at Storage.
           try {
-            await publishBuild(issue, {
-              name: result.name,
-              pageCount: result.pageCount,
-              itemIds: items.map((i) => i.id),
-            })
+            await publishBuild(
+              issue,
+              {
+                name: result.name,
+                pageCount: result.pageCount,
+                itemIds: items.map((i) => i.id),
+              },
+              db,
+            )
           } catch (err) {
             throw new BuildError(
               `Composed here, but the website was not updated: ${(err as Error).message}`,
@@ -150,7 +155,7 @@ export async function POST(request: Request, context: { params: Promise<{ number
 
           // Only now: a lock whose render failed would freeze contents against
           // PDFs that do not match them, which is the trap this avoids.
-          await lockIssue(issue.id, result.pageCount)
+          await lockIssue(issue.id, result.pageCount, db)
           send({
             done: {
               name: result.name,

@@ -21,7 +21,7 @@ import {
   type PressSettingsRow,
 } from '@/lib/press/settings-db'
 import { loadSettings } from '@/lib/press/settings'
-import { NOT_FOUND, asResponse, pressUiEnabled } from '../_lib/guard'
+import { NOT_FOUND, asResponse, ownerDb, pressUiEnabled } from '../_lib/guard'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -29,8 +29,12 @@ export const dynamic = 'force-dynamic'
 export async function GET() {
   if (!pressUiEnabled()) return NOT_FOUND()
   try {
-    const row = (await readSettingsRow()) ?? SETTINGS_DEFAULTS
-    const effective = await loadEffectiveSettings()
+    const db = await ownerDb()
+    // One settings row each since 018 — the address a friend's copy would be
+    // sent to is not V's, and the boolean primary key that made it one row in
+    // the world went with it.
+    const row = (await readSettingsRow(db)) ?? SETTINGS_DEFAULTS
+    const effective = await loadEffectiveSettings(db)
     const env = loadSettings()
 
     return NextResponse.json({
@@ -110,7 +114,7 @@ export async function PUT(request: Request) {
   }
 
   try {
-    const row = await writeSettingsRow(patch)
+    const row = await writeSettingsRow(patch, await ownerDb())
     return NextResponse.json({
       row,
       // The form disables Order with a reason when this is null, so it needs

@@ -12,7 +12,7 @@
 
 import { NextResponse } from 'next/server'
 import { claimToken } from '@/lib/press/approval'
-import { getIssue, skipIssue, updateItem, recordEvent } from '@/lib/press/db'
+import { getIssue, pressDbAsService, recordEvent, skipIssue, updateItem } from '@/lib/press/db'
 import { approveBundleByIds, approveIssueById } from '@/lib/press/order'
 
 export const runtime = 'nodejs'
@@ -34,14 +34,24 @@ export async function POST(_request: Request, context: { params: Promise<{ token
 async function act(context: { params: Promise<{ token: string }> }) {
   const { token } = await context.params
 
-  const lookup = await claimToken(token)
+  // Unscoped, and this is one of the four places that is right.
+  //
+  // An approval link is opened from an email on a phone by somebody who is not
+  // signed in to anything. The signed, single-use token *is* the authority —
+  // it names the issue, and the issue row carries its owner — so there is no
+  // session to scope by and demanding one would break the loop this route
+  // exists to serve. press_action_tokens is deliberately the one press table
+  // with no owner_id (018).
+  const db = pressDbAsService()
+
+  const lookup = await claimToken(token, { db })
   if (!lookup.ok) {
     const status = lookup.reason === 'unknown' ? 404 : 410
     return NextResponse.json({ error: lookup.reason }, { status })
   }
 
   const action = lookup.token
-  const issue = await getIssue(action.issue_id)
+  const issue = await getIssue(action.issue_id, db)
   if (!issue) return NextResponse.json({ error: 'unknown issue' }, { status: 404 })
 
   switch (action.action) {
@@ -51,7 +61,7 @@ async function act(context: { params: Promise<{ token: string }> }) {
       const issueIds = action.issue_ids?.length ? action.issue_ids : [action.issue_id]
 
       if (issueIds.length > 1) {
-        const result = await approveBundleByIds(issueIds)
+        const result = await approveBundleByIds(issueIds, { db })
         // 200 once the job exists, even if a line of it was refused, and the
         // per-issue verdicts are in the body.
         //
@@ -69,24 +79,32 @@ async function act(context: { params: Promise<{ token: string }> }) {
       // idempotencyKeyFor return the *first* order's key — so an extra copy of
       // a shipped issue found that order, reported 'already-ordered', and
       // returned HTTP 200 having bought nothing.
-      const result = await approveIssueById(issue.id)
+      const result = await approveIssueById(issue.id, { db })
       return NextResponse.json(result, { status: result.ok ? 200 : 409 })
     }
 
     case 'skip': {
-      const moved = await skipIssue(issue.id)
+      const moved = await skipIssue(issue.id, db)
       return NextResponse.json({ ok: true, action: 'skip', itemsReturned: moved })
     }
 
     case 'drop': {
       if (!action.item_id) return NextResponse.json({ error: 'no item on token' }, { status: 400 })
-      await updateItem(action.item_id, { state: 'failed', failure_reason: 'reader-dropped', issue_id: null })
-      await recordEvent({
-        issue_id: issue.id,
-        item_id: action.item_id,
-        kind: 'item_dropped',
-        detail: { by: 'reader' },
-      })
+      await updateItem(
+        action.item_id,
+        { state: 'failed', failure_reason: 'reader-dropped', issue_id: null },
+        db,
+      )
+      await recordEvent(
+        {
+          owner_id: issue.owner_id,
+          issue_id: issue.id,
+          item_id: action.item_id,
+          kind: 'item_dropped',
+          detail: { by: 'reader' },
+        },
+        db,
+      )
       // The worker re-composes and sends a fresh approval on the next tick;
       // doing it inline would hold the request open for a full render.
       return NextResponse.json({ ok: true, action: 'drop', itemId: action.item_id })

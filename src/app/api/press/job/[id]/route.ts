@@ -10,7 +10,7 @@
 
 import { NextResponse } from 'next/server'
 import { getJob } from '@/lib/press/jobs'
-import { NOT_FOUND, asResponse, pressUiEnabled } from '../../_lib/guard'
+import { NOT_FOUND, asResponse, ownerDb, pressUiEnabled } from '../../_lib/guard'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -26,7 +26,9 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   }
 
   try {
-    const job = await getJob(id)
+    // Scoped, so somebody else's render is not merely hidden from the UI —
+    // it is a 404, because for this caller it does not exist.
+    const job = await getJob(id, await ownerDb())
     if (!job) return NextResponse.json({ error: 'no such job' }, { status: 404 })
     return NextResponse.json({ job }, { headers: { 'cache-control': 'no-store' } })
   } catch (err) {

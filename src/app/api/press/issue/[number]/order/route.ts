@@ -23,7 +23,7 @@ import { createLuluClient } from '@/lib/press/lulu'
 import { isFinished, ordersForIssue } from '@/lib/press/orders'
 import { issueActionTokens, sendApprovalEmail } from '@/lib/press/approval'
 import { LULU_PACKAGE_ID, PRINT_SPEC } from '@/lib/press/types'
-import { NOT_FOUND, asResponse, issueNumber, pressUiEnabled } from '../../../_lib/guard'
+import { NOT_FOUND, asResponse, issueNumber, ownerDb, pressUiEnabled } from '../../../_lib/guard'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -45,13 +45,14 @@ export async function GET(_request: Request, context: { params: Promise<{ number
   if (number === null) return NextResponse.json({ error: 'bad issue' }, { status: 400 })
 
   try {
-    const issue = await issueByNumber(number)
+    const db = await ownerDb()
+    const issue = await issueByNumber(number, db)
     if (!issue) return NextResponse.json({ error: 'no such issue' }, { status: 404 })
 
     const [items, settings, orders] = await Promise.all([
-      itemsForIssue(issue.id),
-      loadEffectiveSettings(),
-      ordersForIssue(issue.id),
+      itemsForIssue(issue.id, db),
+      loadEffectiveSettings(db),
+      ordersForIssue(issue.id, db),
     ])
 
     const reorder = isReorder(issue.state)
@@ -131,13 +132,14 @@ export async function POST(_request: Request, context: { params: Promise<{ numbe
   if (number === null) return NextResponse.json({ error: 'bad issue' }, { status: 400 })
 
   try {
-    const issue = await issueByNumber(number)
+    const db = await ownerDb()
+    const issue = await issueByNumber(number, db)
     if (!issue) return NextResponse.json({ error: 'no such issue' }, { status: 404 })
 
     const [items, settings, orders] = await Promise.all([
-      itemsForIssue(issue.id),
-      loadEffectiveSettings(),
-      ordersForIssue(issue.id),
+      itemsForIssue(issue.id, db),
+      loadEffectiveSettings(db),
+      ordersForIssue(issue.id, db),
     ])
 
     const reorder = isReorder(issue.state)
@@ -162,7 +164,7 @@ export async function POST(_request: Request, context: { params: Promise<{ numbe
     // A locked issue's contents are fixed by definition, and the workbench is
     // where editing happens now, so offering it here would be offering a
     // button that has to refuse.
-    const tokens = await issueActionTokens(issue.id, [{ action: 'approve' }, { action: 'skip' }])
+    const tokens = await issueActionTokens(issue.id, [{ action: 'approve' }, { action: 'skip' }], { db })
     const approve = tokens.find((t) => t.action === 'approve')
     const skip = tokens.find((t) => t.action === 'skip')
     if (!approve || !skip) throw new Error('could not issue approval tokens')
@@ -201,19 +203,23 @@ export async function POST(_request: Request, context: { params: Promise<{ numbe
       // A quote is information, not a gate — the dialog already showed one.
     }
 
-    await sendApprovalEmail(issue.id, {
-      issueNumber: issue.number,
-      issueName: issue.name ?? `Issue ${issue.number}`,
-      pageCount: issue.page_total,
-      quote,
-      toc,
-      previewUrl: issue.interior_path
-        ? await signedUrl(issue.interior_path, 30 * 24 * 60 * 60)
-        : '',
-      approveUrl: approve.url,
-      skipUrl: skip.url,
-      dropUrls: new Map(),
-    })
+    await sendApprovalEmail(
+      issue.id,
+      {
+        issueNumber: issue.number,
+        issueName: issue.name ?? `Issue ${issue.number}`,
+        pageCount: issue.page_total,
+        quote,
+        toc,
+        previewUrl: issue.interior_path
+          ? await signedUrl(issue.interior_path, 30 * 24 * 60 * 60, db)
+          : '',
+        approveUrl: approve.url,
+        skipUrl: skip.url,
+        dropUrls: new Map(),
+      },
+      { db },
+    )
 
     return NextResponse.json({ ok: true, sentTo: settings.mailTo })
   } catch (err) {
