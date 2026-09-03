@@ -123,8 +123,13 @@ export default async function PressPage() {
     })
   }
 
-  const [pool, failed, skipped, dropped] = await Promise.all([
+  const [pool, queued, extracted, failed, skipped, dropped] = await Promise.all([
     poolItems(db),
+    // The waiting room. Without it a paste of ten links leaves the pool
+    // looking untouched for a couple of minutes, which is a paste somebody
+    // makes twice.
+    itemsInState('queued', db),
+    itemsInState('extracted', db),
     itemsInState('failed', db),
     itemsInState('skipped', db),
     itemsInState('dropped', db).catch(() => []),
@@ -164,6 +169,7 @@ export default async function PressPage() {
         orderingEnabled={process.env.PRESS_ORDER_ENABLED === '1' && account.can_order}
         issues={issues}
         pool={pool.map(toPoolItem)}
+        arriving={[...queued, ...extracted].map(toPoolItem)}
         failed={failed.map(toPoolItem)}
         skipped={skipped.map(toPoolItem)}
         dropped={dropped.map(toPoolItem)}

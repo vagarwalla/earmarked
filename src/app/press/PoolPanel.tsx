@@ -21,18 +21,27 @@
 import { useState } from 'react'
 import { useDroppable } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { RotateCcw, Undo2, X } from 'lucide-react'
+import { Plus, RotateCcw, Undo2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { FIELD, Toggle } from './controls'
 import { readJson } from './readJson'
 import { ArticleRow } from './ArticleRow'
 import type { PoolItem } from './Workbench'
 
-/** The exceptions. `null` is the pool, which is the panel's default state. */
-type Pile = 'failed' | 'skipped' | 'dropped'
+/**
+ * The exceptions. `null` is the pool, which is the panel's default state.
+ *
+ * `arriving` is not an exception in the same sense — it is the pool's own
+ * waiting room, everything queued or extracted but not yet measured. It has a
+ * chip because a paste of ten links leaves the pool looking untouched for a
+ * couple of minutes, and a pool that looks untouched is a paste somebody makes
+ * twice.
+ */
+type Pile = 'arriving' | 'failed' | 'skipped' | 'dropped'
 
 export function PoolPanel({
   pool,
+  arriving,
   failed,
   skipped,
   dropped,
@@ -42,6 +51,7 @@ export function PoolPanel({
   onRefresh,
 }: {
   pool: PoolItem[]
+  arriving: PoolItem[]
   failed: PoolItem[]
   skipped: PoolItem[]
   dropped: PoolItem[]
@@ -51,15 +61,56 @@ export function PoolPanel({
   onRefresh: () => void
 }) {
   const [pile, setPile] = useState<Pile | null>(null)
+  const [paste, setPaste] = useState('')
+  const [pasting, setPasting] = useState(false)
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<PoolItem | null>(null)
   const { setNodeRef, isOver } = useDroppable({ id: 'pool' })
 
-  const piles: Record<Pile, PoolItem[]> = { failed, skipped, dropped }
+  const piles: Record<Pile, PoolItem[]> = { arriving, failed, skipped, dropped }
   const items = (pile ? piles[pile] : pool).filter((i) =>
     query.trim() ? `${i.title} ${i.url ?? ''}`.toLowerCase().includes(query.trim().toLowerCase()) : true,
   )
+
+  /**
+   * Add a block of links.
+   *
+   * Reports all of it — what was added, what this press already had, what was
+   * repeated in the paste, what was not a link at all. A paste that quietly
+   * absorbs half its input is the same bug as a dedupe key that swallowed
+   * somebody's article, and the counts are how it stays visible.
+   */
+  const addPaste = async () => {
+    if (!paste.trim()) return
+    setPasting(true)
+    onError(null)
+    onNote(null)
+    try {
+      const res = await fetch('/api/press/paste', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: paste }),
+      })
+      const body = await readJson<{ message?: string; added?: number }>(res)
+      if (!res.ok) {
+        onError(body.error ?? 'Could not add those.')
+        return
+      }
+      onNote(body.message ?? null)
+      // Cleared only when something landed: a paste that added nothing is one
+      // you want to look at rather than one you want gone.
+      if (body.added) {
+        setPaste('')
+        // Straight to the waiting room, so the links just added are visible
+        // rather than absent from a pool they have not reached yet.
+        setPile('arriving')
+      }
+      onRefresh()
+    } finally {
+      setPasting(false)
+    }
+  }
 
   const act = async (item: PoolItem, action: 'retry' | 'unskip') => {
     setBusy(item.id)
@@ -107,7 +158,7 @@ export function PoolPanel({
   return (
     <div ref={setNodeRef}>
       <div className="mb-2 flex flex-wrap gap-1.5">
-        {(['failed', 'skipped', 'dropped'] as const).map((p) => (
+        {(['arriving', 'failed', 'skipped', 'dropped'] as const).map((p) => (
           <Toggle
             key={p}
             // Clicking the chip that is already on goes back to the pool, so
@@ -130,6 +181,28 @@ export function PoolPanel({
         className={`${FIELD} mb-2`}
       />
 
+      {editable && (
+        <div className="mb-2 grid gap-1.5">
+          <textarea
+            value={paste}
+            onChange={(e) => setPaste(e.target.value)}
+            rows={paste ? 4 : 2}
+            placeholder="paste links, one per line…"
+            aria-label="Add articles by pasting links"
+            className={`${FIELD} resize-y font-mono text-xs`}
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={pasting || !paste.trim()}
+            onClick={() => void addPaste()}
+          >
+            <Plus data-icon="inline-start" />
+            {pasting ? 'Adding…' : 'Add to the pool'}
+          </Button>
+        </div>
+      )}
+
       {/* No scroller of its own: the pool now sits under the issues in one
           column that scrolls as a whole, and a list that scrolled inside that
           would be two scrollbars deep and impossible to drag out of. */}
@@ -144,13 +217,14 @@ export function PoolPanel({
                 draggable={pile === null && editable}
                 trailing={
                   <>
-                    {pile === 'failed' && (
+                    {(pile === 'failed' || pile === 'arriving') && (
                       <Button
                         size="icon"
                         variant="ghost"
                         disabled={busy === item.id}
                         onClick={() => void act(item, 'retry')}
                         aria-label={`Retry ${item.title}`}
+                       
                         className="text-muted-foreground hover:text-foreground self-center"
                       >
                         <RotateCcw />
@@ -186,7 +260,11 @@ export function PoolPanel({
             ))}
             {items.length === 0 && (
               <li className="text-muted-foreground px-4 py-8 text-center text-xs">
-                {pile === null ? 'The pool is empty. Save something to hw.' : `Nothing ${pile}.`}
+                {pile === null
+                  ? 'The pool is empty. Paste some links, or save something to hw.'
+                  : pile === 'arriving'
+                    ? 'Nothing on its way in.'
+                    : `Nothing ${pile}.`}
               </li>
             )}
           </ul>
