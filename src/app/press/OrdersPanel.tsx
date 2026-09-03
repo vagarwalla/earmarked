@@ -32,7 +32,7 @@ import { formatMoney, groupByBundle, isFinished, type OrderWithIssue } from '@/l
 const STATUS_LABEL: Record<string, string> = {
   pending: 'Not sent yet',
   CREATED: 'Created',
-  UNPAID: 'Unpaid',
+  UNPAID: 'Waiting to be paid',
   PAYMENT_IN_PROGRESS: 'Paying',
   PRODUCTION_DELAYED: 'Delayed',
   PRODUCTION_READY: 'Ready to print',
@@ -164,6 +164,26 @@ export function OrdersPanel({
                     {order.message && (
                       <p className="text-muted-foreground mt-1 text-xs">{order.message}</p>
                     )}
+                    {/* Lulu took the files and is waiting for the money. Not a
+                        failure and not done: the book does not print until this
+                        is paid, and paying is the one step that cannot happen
+                        from here — no card number goes anywhere near this app. */}
+                    {order.status === 'UNPAID' && order.lulu_job_id && (
+                      <div className="mt-1.5 rounded-md border px-2.5 py-2">
+                        <p className="text-xs">
+                          Lulu accepted it and is waiting to be paid. It does not print until then.
+                        </p>
+                        <a
+                          className="mt-1.5 inline-block text-xs underline"
+                          href="https://developers.lulu.com/print-jobs"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Pay print job {order.lulu_job_id} at Lulu →
+                        </a>
+                      </div>
+                    )}
+
                     {/* A row claimed before Lulu was called and never given a
                         job: the issue counts it as an order in progress and
                         cannot be ordered again until it is let go. Offered only
