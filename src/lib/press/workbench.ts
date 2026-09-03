@@ -259,6 +259,17 @@ export function orderBlockers(
     minPages: number
     hasAddress: boolean
     hasEmail: boolean
+    /**
+     * The mailer can actually send — RESEND_API_KEY and PRESS_MAIL_FROM, not
+     * just an address to send to.
+     *
+     * `hasEmail` is the destination and was doing duty for both, so a machine
+     * with a `mail_to` row and no Resend key reported an issue as ready to
+     * order, offered the button, and then threw out of `sendMail` after it was
+     * pressed. Every other reason an order cannot go ahead is a sentence in
+     * this list; this one was a stack trace.
+     */
+    canSendMail: boolean
     openOrder: boolean
     /**
      * PRESS_ORDER_ENABLED=1. The switch that actually stands between this app
@@ -283,6 +294,11 @@ export function orderBlockers(
   }
   if (!opts.hasAddress) blockers.push('No complete shipping address — fill one in under Settings.')
   if (!opts.hasEmail) blockers.push('No email on file to send the approval link to.')
+  if (!opts.canSendMail) {
+    blockers.push(
+      'The approval email cannot be sent: RESEND_API_KEY and PRESS_MAIL_FROM are unset in this environment.',
+    )
+  }
   if (opts.openOrder) blockers.push('An order for this issue is already in progress.')
   if (!opts.orderingEnabled) {
     blockers.push('Ordering is off. Set PRESS_ORDER_ENABLED=1 to allow a real order.')
