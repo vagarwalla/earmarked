@@ -10,7 +10,7 @@
  */
 
 import { NextResponse } from 'next/server'
-import { listOrders, refreshOrders, releaseOrder } from '@/lib/press/orders'
+import { cancelOrder, listOrders, refreshOrders, releaseOrder } from '@/lib/press/orders'
 import { NOT_FOUND, asResponse, pressUiEnabled } from '../_lib/guard'
 
 export const runtime = 'nodejs'
@@ -44,6 +44,18 @@ export async function POST(request: Request) {
           { status: 409 },
         )
       }
+      return NextResponse.json({ ok: true, orders: await listOrders() })
+    } catch (err) {
+      return asResponse(err)
+    }
+  }
+
+  // Cancel an unpaid job, so its issue can go into a bundle instead.
+  if (body?.action === 'cancel') {
+    if (!body.orderId) return NextResponse.json({ error: 'no order named' }, { status: 400 })
+    try {
+      const result = await cancelOrder(body.orderId)
+      if (!result.ok) return NextResponse.json({ error: result.error }, { status: 409 })
       return NextResponse.json({ ok: true, orders: await listOrders() })
     } catch (err) {
       return asResponse(err)

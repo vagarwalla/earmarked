@@ -123,6 +123,76 @@ export async function releaseOrder(orderId: string, db: SupabaseClient = pressDb
   return true
 }
 
+/**
+ * Cancel an order Lulu has not been paid for, and give the issue back.
+ *
+ * The reason this exists is bundling. Several issues in ONE print job pay for
+ * one parcel; two jobs pay for two, however close together they are placed.
+ * That choice is made when the job is created and cannot be made afterwards —
+ * Lulu has no notion of merging two jobs — so an unpaid job for one issue is
+ * the thing standing between the reader and a cheaper parcel containing it
+ * and the next one. Cancelling is how they get to change their mind.
+ *
+ * Only `CREATED` and `UNPAID` can be cancelled; Lulu refuses anything later
+ * and so do we, rather than reporting a cancellation that did not happen.
+ */
+export async function cancelOrder(
+  orderId: string,
+  deps: { db?: SupabaseClient; lulu?: LuluClient } = {},
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const db = deps.db ?? pressDb()
+
+  const { data: order, error } = await db
+    .from('press_orders')
+    .select('id, issue_id, lulu_job_id, status')
+    .eq('id', orderId)
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!order) return { ok: false, error: 'No such order.' }
+  if (!order.lulu_job_id || order.lulu_job_id === 'pending') {
+    return { ok: false, error: 'That order never reached Lulu — release it instead.' }
+  }
+  if (!['CREATED', 'UNPAID'].includes(order.status)) {
+    return {
+      ok: false,
+      error: `Lulu will not cancel a job that is ${order.status}. Only an unpaid job can be cancelled.`,
+    }
+  }
+
+  const client = deps.lulu ?? createLuluClient({ settings: await loadEffectiveSettings(db) })
+  await client.cancelPrintJob(order.lulu_job_id)
+
+  await db
+    .from('press_orders')
+    .update({ status: 'CANCELED', message: 'Cancelled before payment.' })
+    .eq('id', orderId)
+
+  // Back to `closed`: locked, built, and free to be ticked into a bundle with
+  // whatever else is ready. Only from `ordered`/`approved`, and only when no
+  // other row for this issue still names a job.
+  const { data: live } = await db
+    .from('press_orders')
+    .select('id')
+    .eq('issue_id', order.issue_id)
+    .not('lulu_job_id', 'is', null)
+    .not('status', 'in', '("CANCELED","REJECTED")')
+    .limit(1)
+
+  if (!(live ?? []).length) {
+    await db
+      .from('press_issues')
+      .update({ state: 'closed', ordered_at: null, lulu_job_id: null })
+      .eq('id', order.issue_id)
+      .in('state', ['approved', 'ordered'])
+  }
+
+  await recordEvent(
+    { issue_id: order.issue_id, kind: 'order_rejected', detail: { orderId, reason: 'cancelled before payment' } },
+    db,
+  )
+  return { ok: true }
+}
+
 export function isFinished(order: Pick<PressOrder, 'status' | 'shipped_at'>): boolean {
   return Boolean(order.shipped_at) || (LULU_TERMINAL as readonly string[]).includes(order.status)
 }

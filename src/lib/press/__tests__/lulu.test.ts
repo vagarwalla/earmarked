@@ -761,11 +761,59 @@ function fakeLulu(job: Partial<{ id: string; status: string; lineItemStatus: str
         }
       },
       getPrintJob: async () => printJob('CREATED', []),
+      cancelPrintJob: async () => printJob('CANCELED', []),
     },
   }
 }
 
 describe('performApproval', () => {
+  /**
+   * The state a refused job used to leave behind.
+   *
+   * `placeOrder` claims the row before Lulu is called, and claiming moves the
+   * issue to `approved` — which is neither orderable nor unlockable. So a 400
+   * from Lulu stranded the issue: no way to order it again after fixing
+   * whatever was wrong, and no way to unlock and edit it either. Both buttons
+   * were gated on a state the failure had just left.
+   */
+  it('puts the issue back when Lulu refuses the job', async () => {
+    const db = orderDb()
+    const lulu = fakeLulu()
+    lulu.client.createPrintJob = async () => {
+      throw new LuluError('lulu POST /print-jobs/ failed (400)', 400, null)
+    }
+
+    await expect(performApproval(issue(), { db: db.client, lulu: lulu.client })).rejects.toThrow(
+      /400/,
+    )
+
+    // Locked, built and orderable again — where it stood a moment earlier.
+    expect(db.updates).toContainEqual(expect.objectContaining({ state: 'closed' }))
+    // And the row it was holding is terminal, so `openOrder` stops counting it.
+    expect(db.updates).toContainEqual(expect.objectContaining({ status: 'REJECTED' }))
+    expect(db.events).toContain('order_failed')
+  })
+
+  /**
+   * A 5xx is not a refusal. Lulu may have created the job and failed to tell
+   * us, so winding the issue back would offer a second purchase of a book that
+   * is already on its way — the one mistake worse than being stuck.
+   */
+  it('leaves the issue alone when the failure might have created a job', async () => {
+    const db = orderDb()
+    const lulu = fakeLulu()
+    lulu.client.createPrintJob = async () => {
+      throw new LuluError('lulu POST /print-jobs/ failed (503)', 503, null)
+    }
+
+    await expect(performApproval(issue(), { db: db.client, lulu: lulu.client })).rejects.toThrow(
+      /503/,
+    )
+
+    expect(db.updates).not.toContainEqual(expect.objectContaining({ state: 'closed' }))
+    expect(db.events).toContain('order_failed')
+  })
+
   it('creates exactly one print job', async () => {
     const db = orderDb()
     const lulu = fakeLulu()

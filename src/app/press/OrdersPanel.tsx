@@ -73,6 +73,23 @@ export function OrdersPanel({
     }
   }
 
+  const cancel = async (orderId: string) => {
+    setBusy(true)
+    onError(null)
+    try {
+      const res = await fetch('/api/press/orders', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'cancel', orderId }),
+      })
+      const body = await readJson(res)
+      if (!res.ok) onError(body.error ?? 'Could not cancel it.')
+      onRefresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const release = async (orderId: string) => {
     setBusy(true)
     onError(null)
@@ -181,6 +198,27 @@ export function OrdersPanel({
                         >
                           Pay print job {order.lulu_job_id} at Lulu →
                         </a>
+                        {/* The other way out, and the reason it is offered
+                            here: several issues in ONE job pay for one parcel,
+                            and that choice is made when the job is created.
+                            Lulu cannot merge two jobs afterwards, so an unpaid
+                            job for one issue is the thing standing between
+                            this and a cheaper parcel holding it and the next
+                            one. Cancelling is how you change your mind. */}
+                        <div className="mt-2 flex items-baseline gap-2 border-t pt-2">
+                          <p className="text-muted-foreground min-w-0 flex-1 text-xs">
+                            Want it in one parcel with another issue? Cancel this, then tick both in
+                            the rail — one job, one shipping charge.
+                          </p>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() => void cancel(order.id)}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
                       </div>
                     )}
 
