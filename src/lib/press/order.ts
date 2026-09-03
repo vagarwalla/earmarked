@@ -14,7 +14,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getIssue, itemsForIssue, recordEvent, signedUrl, updateIssue } from './db'
 import { loadEffectiveSettings } from './settings-db'
-import { createLuluClient, lineFor, type LineItem, type LuluClient } from './lulu'
+import { createLuluClient, lineFor, LuluError, type LineItem, type LuluClient } from './lulu'
 import { idempotencyKeyFor, placeOrder, updateOrder, type PressOrder } from './orders'
 import { allocateQuote, LULU_PACKAGE_ID, type PressIssue, type PrintQuote } from './types'
 
@@ -334,9 +334,20 @@ export async function performBundledApproval(
     return { ok: outcomes.every((o) => o.ok), jobId: job.id, bundleKey, issues: outcomes }
   } catch (err) {
     // The rows are held with no job id, so nothing else will claim these keys.
-    // Leave them for the worker to reconcile rather than deleting them, which
-    // is the only way to risk a double order.
+    // They are never deleted — that is the only way to risk a double order.
+    //
+    // But a 4xx from Lulu means the job was refused outright: no job exists,
+    // and none ever will for this payload. Leaving the row `pending` made
+    // `openOrder` true for ever, so the issue reported "an order is already in
+    // progress" and could not be retried after the thing that upset Lulu was
+    // fixed. A rejection is terminal, so the row is marked terminal and the
+    // issue is orderable again.
+    const status = err instanceof LuluError && err.status >= 400 && err.status < 500 ? 'REJECTED' : null
+
     for (const [i, issue] of issues.entries()) {
+      if (status) {
+        await updateOrder(orders[i].id, { status, message: (err as Error).message }, db)
+      }
       await recordEvent(
         {
           issue_id: issue.id,

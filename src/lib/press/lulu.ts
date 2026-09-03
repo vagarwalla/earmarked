@@ -209,7 +209,19 @@ export function createLuluClient(options: LuluClientOptions = {}): LuluClient {
       // Leave it as text; the error path prints it.
     }
     if (!res.ok) {
-      throw new LuluError(`lulu ${init.method ?? 'GET'} ${path} failed (${res.status})`, res.status, body)
+      // The body, in the message. It was already carried on the error as a
+      // field and every caller then recorded `err.message` alone — so a
+      // refused print job reached the reader as "failed (400)" and the one
+      // sentence saying WHICH field Lulu objected to was dropped on the floor.
+      // Trimmed, because Lulu's validation errors are a nested object and the
+      // useful part is at the front.
+      const detail = typeof body === 'string' ? body : JSON.stringify(body ?? '')
+      throw new LuluError(
+        `lulu ${init.method ?? 'GET'} ${path} failed (${res.status})` +
+          (detail && detail !== '""' ? `: ${detail.slice(0, 600)}` : ''),
+        res.status,
+        body,
+      )
     }
     return body
   }

@@ -322,6 +322,10 @@ export async function POST(request: Request) {
       // inbox and sits on the screen is a single-use token with two places to
       // spend it, and the second one to be clicked is a dead link.
       approveUrl: canEmail ? null : approve.url,
+      // The same token the confirm page would claim. Handed over so the dialog
+      // can carry the second act itself rather than sending the reader to
+      // another tab to perform it — see OrderDialog.
+      approveToken: canEmail ? null : approve.token,
       issues: parsed.numbers,
     })
   } catch (err) {
