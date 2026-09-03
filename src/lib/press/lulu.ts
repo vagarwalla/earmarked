@@ -103,6 +103,14 @@ export interface LuluClient {
     contactEmail: string
   }): Promise<PrintJob>
   getPrintJob(jobId: string): Promise<PrintJob>
+  /**
+   * Cancel a job Lulu has not been paid for.
+   *
+   * `PUT /print-jobs/{id}/status/` with `{ name: 'CANCELED' }`. Lulu allows
+   * `CREATED -> CANCELED` and `UNPAID -> CANCELED` and nothing later: once
+   * money has moved the job is on its way to a printer.
+   */
+  cancelPrintJob(jobId: string): Promise<PrintJob>
 }
 
 /**
@@ -327,6 +335,16 @@ export function createLuluClient(options: LuluClientOptions = {}): LuluClient {
     },
 
     async getPrintJob(jobId) {
+      return normalizeStatus((await call(`/print-jobs/${jobId}/`)) as Record<string, unknown>)
+    },
+
+    async cancelPrintJob(jobId) {
+      await call(`/print-jobs/${jobId}/status/`, {
+        method: 'PUT',
+        body: JSON.stringify({ name: 'CANCELED' }),
+      })
+      // The status endpoint answers with the status, not the job; re-read the
+      // job so the caller gets the same shape every other method returns.
       return normalizeStatus((await call(`/print-jobs/${jobId}/`)) as Record<string, unknown>)
     },
   }
