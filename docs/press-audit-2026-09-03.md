@@ -12,6 +12,15 @@ carries the reasoning behind its value, almost every workaround names the
 issue that produced it, and several comments name the specific printed
 magazine that went wrong. Most of what follows is small. Two findings are not.
 
+> **Since written:** press was parked on 2026-09-04 — see
+> [the handover](press-handover.md). The blocker there is deploying the Fly
+> worker, not code, so nothing below is superseded by the parking; the PRs this
+> document describes are cleanup that stands whenever press is picked up again.
+> `main` has moved several times since the read, and this document has been
+> kept level with it: the verification numbers were re-run, and one finding
+> (`ItemState`) was fixed on `main` in a better way than proposed here, which
+> is recorded at that entry.
+
 ---
 
 ## The two invariants
@@ -134,8 +143,17 @@ Five PRs, in this order. Each one keeps `npm test`, `npx tsc --noEmit` and
   `withStateLock` from the module that exports it.
 - **`ItemState`** was exported by both `issues.ts` (five states, the disk) and
   `types.ts` (eight states, Postgres), with both names in scope in the same
-  files. The local one is now `LocalItemState`, which is what `local.ts` was
-  already calling it.
+  files.
+
+  This audit proposed renaming the local one to `LocalItemState`, reasoning
+  that the disk and the database are different state machines and should not
+  share a type. `main` reached the same finding independently and fixed it the
+  other way — `issues.ts` now re-exports the unified type — and **that is the
+  right answer, not this one.** The five-state list was not a narrower correct
+  type; it omitted `in_issue`, which `.press/state.json` is full of. Keeping
+  the two apart would have preserved a type that does not describe its own
+  data. `main`'s resolution was taken on merge, and `local.ts` aliases
+  `LocalItemState` to it so its callers are untouched.
 - **`fetchAndStoreImages`** was hand-rolled twice — the same sequential loop
   with the same gap-free numbering — in `press-run.ts` and `press-compile.ts`.
   Both copies were cast `as never` to get past the type checker; neither cast
@@ -272,20 +290,21 @@ cleanup, and none of the rest of this work needed to touch it.
 
 ## Verification
 
-`npm ci`, then, with every branch brought up to `main` at `b8e470a`:
+`npm ci`, then, with every branch brought up to `main` at `c5fcfb7`:
 
 | | before | after |
 |---|---|---|
-| `npm test` | 925 passed, 1 skipped | 950 passed, 1 skipped |
+| `npm test` | 938 passed, 1 skipped | 963 passed, 1 skipped |
 | `npx tsc --noEmit` | 40 errors (12 in press) | 28 errors (**0** in press) |
 | `npm run lint` | 6 errors, 23 warnings | 6 errors, 23 warnings |
 
 The read was done against `main` at `544a181`, where the same commands gave
-923 / 40 / 6. `main` then gained three commits mid-audit — one of which
-re-measures article lengths on every build and writes them back — and they
-carry the two extra tests. Nothing they changed alters a finding above; the
-before column is the current `main`, re-run, so the two columns are
-comparable.
+923 / 40 / 6. `main` has moved several times since — re-measuring article
+lengths on every build, a `--force` rebuild flag, title cleaning, page-count
+balancing, nine covers — and those commits carry the extra tests. The before
+column is the current `main`, re-run, so the two columns are comparable. Only
+one of those commits touched a finding here, and it is noted at the
+`ItemState` entry.
 
 The 28 remaining type errors and all 6 lint errors are outside press —
 `src/app/api/cart/__tests__`, `src/lib/__tests__`, `src/components/*` and
