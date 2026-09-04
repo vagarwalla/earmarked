@@ -64,7 +64,14 @@ function fakeDb(seed: Seed = {}) {
 }
 
 function job(over: Partial<PressJob> = {}): PressJob {
-  return {
+  // A named, typed base rather than one literal: spreading a `Partial<T>`
+  // over a `T` widens every field the partial declares back to `| undefined`,
+  // so the result stops being a `T`. Annotating the base keeps the literal
+  // contextually typed, and Object.assign keeps the override behaviour.
+  const base: PressJob = {
+    // Owned, as every press row has been since migration 018. The factories
+    // carry it so a test row is the shape the database actually stores.
+    owner_id: '00000000-0000-0000-0000-000000000001',
     id: 'job-1',
     kind: 'compose',
     issue_id: 'iss1',
@@ -77,8 +84,8 @@ function job(over: Partial<PressJob> = {}): PressJob {
     started_at: null,
     finished_at: null,
     heartbeat_at: null,
-    ...over,
   }
+  return Object.assign(base, over)
 }
 
 describe('enqueueCompose', () => {
@@ -147,7 +154,18 @@ describe('finishJob', () => {
 // ── Running one ──────────────────────────────────────────────────────────────
 
 function issue(over: Partial<PressIssue> = {}): PressIssue {
-  return {
+  // A named, typed base rather than one literal: spreading a `Partial<T>`
+  // over a `T` widens every field the partial declares back to `| undefined`,
+  // so the result stops being a `T`. Annotating the base keeps the literal
+  // contextually typed, and Object.assign keeps the override behaviour.
+  const base: PressIssue = {
+    // Owned, as every press row has been since migration 018. The factories
+    // carry it so a test row is the shape the database actually stores.
+    owner_id: '00000000-0000-0000-0000-000000000001',
+    // Private until deliberately shared; the row has no implicit default,
+    // so neither does the factory.
+    visibility: 'private',
+    shared_at: null,
     id: 'iss1',
     number: 3,
     state: 'open',
@@ -171,8 +189,8 @@ function issue(over: Partial<PressIssue> = {}): PressIssue {
     shipped_at: null,
     approval_sent_at: null,
     updated_at: '2026-09-01T00:00:00Z',
-    ...over,
-  } as PressIssue
+  }
+  return Object.assign(base, over)
 }
 
 /** A db whose reads are seeded per table, for the runner's three lookups. */
