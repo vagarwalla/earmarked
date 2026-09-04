@@ -114,9 +114,13 @@
         margin-left: -{{SAFETY_INNER}}pt;
       }
 
-      /* Concentric bands struck from the outer bottom corner, in this issue's
-         rotation of the palette. */
-      .art-orbit { background: {{ART_ORBIT}}; }
+      /* This issue's composition, written by `coverArtFor` in compose.ts —
+         one of a family of nine, drawn in this issue's rotation of the
+         palette. Every value below is a palette colour or a number computed
+         there; nothing from an article reaches this stylesheet. */
+      .art-figure {
+        {{ART_STYLE}}
+      }
 
       /* ── Front type ── */
 
@@ -257,7 +261,7 @@
         <hr class="hair" />
       </div>
 
-      <div class="art art--bleed art-orbit"></div>
+      <div class="art art--bleed art-figure" data-art="{{ART_NAME}}"></div>
 
       <div class="theme">
         <hr class="accent-rule" />

@@ -27,6 +27,7 @@ import {
   type CandidateImage,
   type StoredImage,
 } from './images'
+import { cleanTitle } from './title'
 import { collectOutboundLinks, type OutboundLink } from './linkpost'
 import type { Article, ArticleBlock, ArticleFootnote, ArticleImage } from './types'
 
@@ -676,10 +677,11 @@ function buildRung(
   const links = collectOutboundLinks(root, url)
   const { blocks, images } = toBlocks(root)
   if (articleLength(blocks) < MIN_ARTICLE_CHARS) return null
+  const site = meta.site?.trim() || null
   return {
-    title: meta.title?.trim() || 'Untitled',
+    title: cleanTitle(meta.title, site, url) || 'Untitled',
     byline: meta.byline?.trim() || null,
-    sourceName: meta.site?.trim() || null,
+    sourceName: site,
     publishedAt: meta.published || null,
     dek: meta.dek?.trim() || null,
     blocks,
@@ -858,8 +860,8 @@ export async function extractFromNewsletterHtml(
   const doc = dom.window.document
 
   const title =
-    doc.querySelector('h1')?.textContent?.trim() ||
-    doc.title?.trim() ||
+    cleanTitle(doc.querySelector('h1')?.textContent, opts.senderName, url) ||
+    cleanTitle(doc.title, opts.senderName, url) ||
     'Untitled'
 
   const root = doc.body
@@ -905,8 +907,11 @@ async function finish(
 ): Promise<Article> {
   const stored = await storeImages(itemId, result.images)
 
-  // fetchAndStoreImages drops what did not survive, so re-align by source URL.
-  const byUrl = new Map(stored.map((s) => [s.sourceUrl, s]))
+  // fetchAndStoreImages drops what did not survive, so re-align by the URL the
+  // candidate *asked* for. Not by `sourceUrl`: since images.ts started looking
+  // for larger copies, the bytes usually come from a different address than the
+  // page displayed, and matching on that silently drops every upgraded plate.
+  const byUrl = new Map(stored.map((s) => [s.candidateUrl, s]))
   const aligned = result.images.map((c) => byUrl.get(c.url) ?? null)
 
   const blocks = attachImages(result.blocks, aligned)
