@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { PDFDocument } from 'pdf-lib'
 import { BuildError, buildIssue, type IssueMeta } from '../build'
 import { setPdfRenderer } from '../layout/render'
+import { PRESS_ROOT } from '../issues'
 import { MEDIA_HEIGHT_PT, MEDIA_WIDTH_PT, type Article } from '../types'
 
 function article(over: Partial<Article> = {}): Article {
@@ -91,6 +92,26 @@ describe('buildIssue', () => {
     ) as IssueMeta
     expect(meta.articles.map((a) => a.id)).toEqual(['b', 'c', 'a'])
     expect(meta.number).toBe(3)
+  })
+
+  it('measures the articles itself instead of trusting the count it was given', async () => {
+    // Every item goes in claiming 4 pages; the stub renders 1 per article.
+    const { root, result } = await build(['a', 'b', 'c'])
+    expect(result.pageCounts).toEqual([1, 1, 1])
+    expect(result.toc.map((t) => t.pageCount)).toEqual([1, 1, 1])
+    const meta = JSON.parse(
+      await readFile(path.join(root, 'issue-3', 'meta.json'), 'utf8'),
+    ) as IssueMeta
+    expect(meta.articles.map((a) => a.pageCount)).toEqual([1, 1, 1])
+  })
+
+  it('leaves the real state file alone when it is building into another root', async () => {
+    // The measured lengths are written back to `.press/state.json`, which a
+    // test root has no claim on: only a build of the real thing may touch it.
+    const before = existsSync(PRESS_ROOT) ? await readdir(PRESS_ROOT) : null
+    await build(['a', 'b'])
+    const after = existsSync(PRESS_ROOT) ? await readdir(PRESS_ROOT) : null
+    expect(after).toEqual(before)
   })
 
   it('writes both PDFs and the TOC beside them', async () => {

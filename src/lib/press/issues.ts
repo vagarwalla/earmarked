@@ -214,6 +214,26 @@ export function selectForIssue(state: PressState | null, threshold: number): Sta
   return sortForPrint(withChildren)
 }
 
+/**
+ * Record what a build actually measured, so the running total in the editor,
+ * the length printed against each article, and `selectForIssue`'s threshold
+ * all stop quoting a number from the previous stylesheet.
+ *
+ * `pageCount` is written at ingest, against whatever layout was current then,
+ * and is never revised — so a layout change silently makes every count on
+ * disk wrong, and by ~30% in the case of the plate-sizing change. `buildIssue`
+ * re-measures on every build; this is where those numbers land.
+ */
+export async function recordMeasuredPages(measured: Map<string, number>): Promise<void> {
+  if (measured.size === 0) return
+  await withStateLock((state) => {
+    for (const item of state.items) {
+      const pages = measured.get(item.id)
+      if (pages !== undefined) item.pageCount = pages
+    }
+  })
+}
+
 /** The order an issue prints in: whatever it is, with every linkpost's children behind it. */
 export function sortForPrint(items: readonly StateItem[]): StateItem[] {
   const byId = new Map(items.map((i) => [i.id, i]))
