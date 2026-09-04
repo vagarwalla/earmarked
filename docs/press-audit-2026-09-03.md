@@ -264,13 +264,20 @@ cleanup, and none of the rest of this work needed to touch it.
 
 ## Verification
 
-`npm ci`, then:
+`npm ci`, then, with every branch brought up to `main` at `b8e470a`:
 
 | | before | after |
 |---|---|---|
-| `npm test` | 923 passed, 1 skipped | 948 passed, 1 skipped |
-| `npx tsc --noEmit` | 40 errors | 28 errors |
+| `npm test` | 925 passed, 1 skipped | 950 passed, 1 skipped |
+| `npx tsc --noEmit` | 40 errors (12 in press) | 28 errors (**0** in press) |
 | `npm run lint` | 6 errors, 23 warnings | 6 errors, 23 warnings |
+
+The read was done against `main` at `544a181`, where the same commands gave
+923 / 40 / 6. `main` then gained three commits mid-audit — one of which
+re-measures article lengths on every build and writes them back — and they
+carry the two extra tests. Nothing they changed alters a finding above; the
+before column is the current `main`, re-run, so the two columns are
+comparable.
 
 The 28 remaining type errors and all 6 lint errors are outside press —
 `src/app/api/cart/__tests__`, `src/lib/__tests__`, `src/components/*` and
