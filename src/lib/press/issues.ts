@@ -20,6 +20,7 @@ import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/prom
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { orderWithLinkposts, withLinkpostChildren } from './linkpost'
+import type { ItemState } from './types'
 
 export const PRESS_ROOT = path.join(process.cwd(), '.press')
 
@@ -28,7 +29,13 @@ const LOCK_FILE = path.join(PRESS_ROOT, 'state.lock')
 
 // -- State shape -------------------------------------------------------------
 
-export type ItemState = 'queued' | 'laid_out' | 'printed' | 'failed' | 'skipped'
+/**
+ * Re-exported rather than restated. This file used to carry its own shorter
+ * list, which left out `in_issue` — the state most of `.press/state.json` is
+ * actually in — so nothing that reasoned about it could be type-checked, and
+ * `readyItems` looked total when it was not.
+ */
+export type { ItemState }
 
 export interface StateItem {
   id: string

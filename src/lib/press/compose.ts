@@ -359,17 +359,147 @@ export function paletteFor(issueNumber: number, length = COVER_PALETTE.length): 
   return Array.from({ length }, (_, i) => COVER_PALETTE[(offset + i) % n])
 }
 
-/** Concentric hard-stop bands radiating from the panel's outer bottom corner. */
-function orbitGradient(colors: string[]): string {
-  const stops = colors
+// ── Cover art ────────────────────────────────────────────────────────────────
+//
+// Nine issues had nine covers that were the same picture in a rotated palette,
+// which on a shelf reads as one magazine printed nine times. So the artwork is
+// a *family* now: a set of compositions, one picked per issue, each drawn in
+// that issue's rotation of the palette. Same grid, same type, same paper — a
+// series that is recognisably a series, with a different cover every time.
+//
+// Still drawn in CSS rather than placed as an image, for the reason the cover
+// template gives: Lulu wants 300 PPI on a cover, which is ~2100x3000px for one
+// 7x10 panel, and the art extraction pulls down is 424-1320px wide and would
+// print visibly soft. A gradient has no resolution to be wrong.
+
+/** Hard-stop colour stops across 0-100%, so bands meet without a blur. */
+function bands(colors: string[], from = 0, to = 100): string {
+  const span = to - from
+  return colors
     .map((c, i) => {
-      const from = (i / colors.length) * 100
-      const to = ((i + 1) / colors.length) * 100
-      return `${c} ${from.toFixed(1)}% ${to.toFixed(1)}%`
+      const a = from + (i / colors.length) * span
+      const b = from + ((i + 1) / colors.length) * span
+      return `${c} ${a.toFixed(1)}% ${b.toFixed(1)}%`
     })
     .join(', ')
-  // 118% so the outermost band still covers the far corner of the box.
-  return `radial-gradient(circle at 100% 100%, ${stops}, transparent 118%)`
+}
+
+/**
+ * Hard-stop stops at deliberately unequal widths.
+ *
+ * Six equal bands is what a gradient does by default, and it looks like it:
+ * flat, and obviously not chosen. These proportions are — wide, narrow, wide
+ * again — so a plain stack of colour reads as a composition.
+ */
+function unevenBands(colors: string[]): string {
+  const stops = [0, 9, 21, 39, 62, 80, 100]
+  return colors
+    .map((c, i) => `${c} ${stops[i] ?? 100}% ${stops[i + 1] ?? 100}%`)
+    .join(', ')
+}
+
+/**
+ * One composition. `css` is a complete declaration list dropped into the
+ * `.art` rule — every value in it is a palette colour or a number computed
+ * here, so nothing from an article can reach the stylesheet.
+ */
+interface CoverArt {
+  name: string
+  css: string
+}
+
+/**
+ * The compositions, in the order issues take them. Deliberately varied in
+ * *structure* rather than just in hue: an arc, a horizon, a stack of rules and
+ * a column of blocks look like different covers even in the same six colours.
+ */
+export const COVER_ARTS: ((c: string[]) => CoverArt)[] = [
+  // 1. Orbit — concentric arcs struck from the outer bottom corner.
+  (c) => ({
+    name: 'orbit',
+    css: `background: radial-gradient(circle at 100% 100%, ${bands(c)}, transparent 118%);`,
+  }),
+
+  // 2. Horizon — a low sun over a banded ground. The one that reads as a
+  //    landscape rather than as geometry.
+  (c) => ({
+    name: 'horizon',
+    css: [
+      `background:`,
+      `  radial-gradient(circle at 50% 78%, ${c[0]} 0 22%, transparent 22.4%),`,
+      `  linear-gradient(to bottom, ${bands(c.slice(1).reverse())});`,
+    ].join('\n        '),
+  }),
+
+  // 3. Column — vertical blocks at unequal widths.
+  (c) => ({
+    name: 'column',
+    css: `background: linear-gradient(to right, ${unevenBands(c)});`,
+  }),
+
+  // 4. Fan — a conic sweep from the outer corner. Same corner as the orbit,
+  //    entirely different figure. `from 270deg` because that is where the
+  //    panel actually is: measured from north, the quadrant visible above a
+  //    bottom-right origin runs 270deg to 360deg, and starting anywhere else
+  //    puts the whole fan off the page.
+  (c) => ({
+    name: 'fan',
+    css: `background: conic-gradient(from 270deg at 100% 100%, ${bands(c, 0, 25)}, transparent 25%);`,
+  }),
+
+  // 5. Stack — horizontal bands at unequal depths; the quietest of the set and
+  //    the one that lets the colour do all the work.
+  (c) => ({
+    name: 'stack',
+    css: `background: linear-gradient(to bottom, ${unevenBands(c)});`,
+  }),
+
+  // 6. Lens — concentric circles centred in the panel, ringed like a target.
+  (c) => ({
+    name: 'lens',
+    css: `background: radial-gradient(circle at 50% 46%, ${bands(c, 0, 62)}, ${c[c.length - 1]} 62%);`,
+  }),
+
+  // 7. Chevron — hard diagonal bands running corner to corner.
+  (c) => ({
+    name: 'chevron',
+    css: `background: linear-gradient(128deg, ${bands(c)});`,
+  }),
+
+  // 8. Nested — rectangles inside rectangles, weighted low the way Albers set
+  //    his squares. The quietest of the family and the most expensive-looking.
+  (c) => ({
+    name: 'nested',
+    css: [
+      `background:`,
+      `  linear-gradient(${c[4]}, ${c[4]}) 50% 66% / 30% 26% no-repeat,`,
+      `  linear-gradient(${c[3]}, ${c[3]}) 50% 64% / 52% 46% no-repeat,`,
+      `  linear-gradient(${c[2]}, ${c[2]}) 50% 62% / 74% 66% no-repeat,`,
+      `  ${c[0]};`,
+    ].join('\n        '),
+  }),
+
+  // 9. Arch — a half-round standing on a banded base. The most figurative of
+  //    them, and the one that reads as architecture.
+  (c) => ({
+    name: 'arch',
+    css: [
+      `background:`,
+      `  radial-gradient(circle at 50% 62%, transparent 0 30%, ${c[1]} 30% 44%, transparent 44.4%),`,
+      `  radial-gradient(circle at 50% 62%, ${c[3]} 0 30%, transparent 30.4%),`,
+      `  linear-gradient(to bottom, ${c[5]} 0 62%, ${c[0]} 62% 100%);`,
+    ].join('\n        '),
+  }),
+]
+
+/**
+ * The composition this issue's cover is drawn in. Deterministic, so a rebuild
+ * of Issue 4 is always the same cover, and adjacent issues never repeat.
+ */
+export function coverArtFor(issueNumber: number, colors: string[]): CoverArt {
+  const n = COVER_ARTS.length
+  const i = ((Math.trunc(issueNumber) - 1) % n + n) % n
+  return COVER_ARTS[i](colors)
 }
 
 /**
@@ -436,8 +566,11 @@ export function buildCoverHtml(opts: CoverOptions): string {
 
   const colors = paletteFor(opts.issueNumber)
 
+  const art = coverArtFor(opts.issueNumber, colors)
+
   const values: Record<string, string> = {
-    ART_ORBIT: orbitGradient(colors),
+    ART_STYLE: art.css,
+    ART_NAME: art.name,
     // The accent picks up the first colour of this issue's rotation, so the
     // rules and the spine numeral belong to the same palette as the art.
     ACCENT: colors[0],

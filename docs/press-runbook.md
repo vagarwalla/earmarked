@@ -290,7 +290,17 @@ these in Vercel, in `fly secrets`, and in a local `.env.local`.
 | `PRESS_EMAIL_WEBHOOK_SECRET` | Shared secret, `openssl rand -hex 32`. Must match the Cloudflare worker's copy. **The route returns 503 while this is unset** — it will not run open. |
 | `PRESS_NEWSLETTER_ALLOWLIST` | Comma-separated sender addresses whose newsletters get printed. Curated by hand — subscribing to something is not the same as wanting it printed (KTD4), and a blanket filter would let subscription volume set the print cadence and the spend. |
 
-### Mail out (worker)
+### Mail out (worker) — optional
+
+The worker boots without any of these. Nothing it exists to do needs a mailer:
+fetching saved links, laying them out and rendering an issue are the whole job,
+and a machine that will not start because it cannot send a summary of what it
+did is a machine that never does anything to summarise.
+
+Without them the log says `no_mailer` at boot and `digest_skipped` on the
+weekly tick, and ordering hands the approval link back in the response instead
+of emailing it (`d3f908f`).
+
 
 | Variable | What it is |
 |---|---|
