@@ -62,7 +62,6 @@ import {
   MEDIA_HEIGHT_PT,
   MEDIA_WIDTH_PT,
   type Article,
-  type ArticleImage,
   type ComposedIssue,
   type PressIssue,
   type PressItem,
@@ -672,9 +671,4 @@ export async function composeIssue(issue: PressIssue, deps: ComposeDeps): Promis
     preflight,
     archiveName: archiveCollectionName(now, name),
   }
-}
-
-/** Images referenced by every entry — used by the worker to warm storage reads. */
-export function allImages(entries: ComposeEntry[]): ArticleImage[] {
-  return entries.flatMap((e) => (e.kind === 'article' ? articleImages(e.article) : []))
 }

@@ -148,11 +148,8 @@ export function stripCommentSections(doc: Document): void {
  * ones that do not exist yet.
  */
 export function stripExternalReferences(root: Element | Document): void {
-  const doc = 'ownerDocument' in root && root.ownerDocument ? root.ownerDocument : (root as Document)
-  const scope = 'querySelectorAll' in root ? root : doc
-
   for (const selector of [...STRIP_SELECTORS, ...COMMENT_SELECTORS]) {
-    for (const el of safeQueryAll(scope, selector)) el.remove()
+    for (const el of safeQueryAll(root, selector)) el.remove()
   }
 
   // Attributes worth keeping, per tag. Everything else goes.
@@ -164,7 +161,7 @@ export function stripExternalReferences(root: Element | Document): void {
     figcaption: [],
   }
 
-  for (const el of Array.from(scope.querySelectorAll('*'))) {
+  for (const el of Array.from(root.querySelectorAll('*'))) {
     const tag = el.tagName.toLowerCase()
     const keep = KEEP[tag] ?? []
     for (const attr of Array.from(el.attributes)) {
@@ -514,7 +511,7 @@ export function toBlocks(root: Element): { blocks: ArticleBlock[]; images: Candi
   }
 
   walk(root)
-  return { blocks, images: images }
+  return { blocks, images }
 }
 
 /**

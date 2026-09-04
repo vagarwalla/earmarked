@@ -294,6 +294,18 @@ export async function listOrders(db: SupabaseClient): Promise<OrderWithIssue[]> 
 }
 
 /**
+ * Is this order the issue's print run, or an extra copy?
+ *
+ * The print run is the one whose key the issue recorded when it was claimed.
+ * idempotencyKeyFor gives a reorder a distinct, time-stamped key precisely so
+ * this question has an answer.
+ */
+export function isPrintRun(order: Pick<PressOrder, 'idempotency_key'>): boolean {
+  // A reorder's key carries a `-copy-` segment; the print run's never does.
+  return !order.idempotency_key.includes('-copy-')
+}
+
+/**
  * Ask Lulu where every unfinished order has got to.
  *
  * A button and a background pass, so the panel is right whether or not the
@@ -301,20 +313,6 @@ export async function listOrders(db: SupabaseClient): Promise<OrderWithIssue[]> 
  * Lulu has forgotten, or a sandbox job after a switch to live, would otherwise
  * freeze the whole panel.
  */
-/**
- * Is this order the issue's print run, or an extra copy?
- *
- * The print run is the one whose key the issue recorded when it was claimed.
- * idempotencyKeyFor gives a reorder a distinct, time-stamped key precisely so
- * this question has an answer.
- */
-export function isPrintRun(order: Pick<PressOrder, 'idempotency_key' | 'issue_id'> & {
-  issue_idempotency_key?: string | null
-}): boolean {
-  // A reorder's key carries a `-copy-` segment; the print run's never does.
-  return !order.idempotency_key.includes('-copy-')
-}
-
 export async function refreshOrders(
   db: SupabaseClient,
   lulu?: LuluClient,
