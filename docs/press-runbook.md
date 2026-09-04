@@ -88,9 +88,15 @@ the route does not work at all.
   which is the whole of "sign out everywhere".
 - A wrong key and an unset key both 404, so probing the URL says nothing about
   whether there is anything to find.
-- There is deliberately **no button on the sign-in page**. A button anybody can
-  press is not a gate, and a door only one person can open should not be
-  advertised to people who cannot open it.
+- The sign-in page has an **"I have an owner key"** button, shut by default,
+  that opens a single field. Paste the key, same cookie, same year — for a
+  browser that does not have the bookmark. What is deliberately *not* there is
+  the key itself: a button whose href carried it would put a permanent
+  credential in the HTML of a page anybody can open, which would make the
+  sign-in page it sits on pointless. It posts rather than using `?key=`, so the
+  secret stays out of the URL bar, history and referrers.
+- The button only appears where `PRESS_OWNER_KEY` is set. Advertising a door
+  that cannot be opened is worse than showing nothing.
 - Signing out clears this cookie too — otherwise it would put you straight
   back on the workbench.
 
