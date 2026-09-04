@@ -476,9 +476,12 @@ export interface ComposedIssue {
  *
  * Sequence, not membership: reordering two articles changes the page numbers
  * on the contents page, so a permutation is every bit as stale as an addition.
- * This is the comparison behind `dirty` in both readers and the workbench, and
- * it lives here — beside `tocMeta`, for the same reason — so the three of them
- * cannot answer it differently.
+ *
+ * Four callers ask it, and they had four copies: `dirty` in each of the two
+ * readers, the same flag on the workbench page, and — the one that actually
+ * spends minutes of Chromium on the answer — `press-sync`'s decision about
+ * whether an issue needs re-rendering. It lives here, beside `tocMeta` and for
+ * the same reason, so they cannot answer it differently.
  */
 export function sameOrder(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((id, i) => id === b[i])
