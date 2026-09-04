@@ -20,7 +20,14 @@
  * name is V's.
  */
 
-import { balance, pagesOf, availableFor, DEFAULT_MIN, DEFAULT_MAX } from '../src/lib/press/balance'
+import {
+  balance,
+  pagesOf,
+  availableFor,
+  DEFAULT_MIN,
+  DEFAULT_MAX,
+  FRONT_MATTER_PT,
+} from '../src/lib/press/balance'
 import { findDraft, withStateLock, type IssueDraft } from '../src/lib/press/issues'
 
 async function main(): Promise<void> {
@@ -40,14 +47,17 @@ async function main(): Promise<void> {
       .sort((a, b) => a - b)
     const drafts = numbers.map((n) => findDraft(state, n)!).filter(Boolean)
 
+    // `min`/`max` are the finished magazine's range; the passes below work in
+    // article pages, which is `FRONT_MATTER_PT` fewer.
+    const ceiling = max - FRONT_MATTER_PT
     const before = new Map(drafts.map((d) => [d.number, pagesOf(state, d)]))
-    const moves = balance(state, drafts, min, max)
+    const moves = balance(state, drafts, min, ceiling)
 
-    console.log(`target ${min}-${max}pp\n`)
+    console.log(`target ${min}-${max}pp printed (${min}-${ceiling}pp of articles)\n`)
     for (const d of drafts) {
       const was = before.get(d.number) ?? 0
       const now = pagesOf(state, d)
-      const flag = now < min ? '  UNDER' : now > max ? '  OVER' : ''
+      const flag = now < min ? '  UNDER' : now > ceiling ? '  OVER' : ''
       console.log(
         `issue ${String(d.number).padStart(2)}  ${String(was).padStart(4)}pp -> ${String(now).padStart(4)}pp` +
           `  (${d.itemIds.length} articles)${flag}  ${d.name ?? ''}`,

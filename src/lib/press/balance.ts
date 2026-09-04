@@ -22,6 +22,17 @@ import {
 export const DEFAULT_MIN = 100
 export const DEFAULT_MAX = 150
 
+/**
+ * Pages a finished interior carries beyond the articles in it: the contents
+ * page, plus up to one more from padding to an even leaf.
+ *
+ * The range a reader cares about is the printed magazine's, not the sum of its
+ * articles, and the two are not the same number — balancing to exactly 150
+ * articles produced a 152-page issue. So the ceiling the fill and shed passes
+ * work to is this much lower than the one asked for.
+ */
+export const FRONT_MATTER_PT = 2
+
 export function pagesOf(state: PressState, draft: IssueDraft): number {
   const byId = new Map(state.items.map((i) => [i.id, i]))
   return draft.itemIds.reduce((n, id) => n + (byId.get(id)?.pageCount ?? 0), 0)

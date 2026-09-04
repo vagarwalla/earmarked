@@ -385,6 +385,20 @@ function bands(colors: string[], from = 0, to = 100): string {
 }
 
 /**
+ * Hard-stop stops at deliberately unequal widths.
+ *
+ * Six equal bands is what a gradient does by default, and it looks like it:
+ * flat, and obviously not chosen. These proportions are — wide, narrow, wide
+ * again — so a plain stack of colour reads as a composition.
+ */
+function unevenBands(colors: string[]): string {
+  const stops = [0, 9, 21, 39, 62, 80, 100]
+  return colors
+    .map((c, i) => `${c} ${stops[i] ?? 100}% ${stops[i + 1] ?? 100}%`)
+    .join(', ')
+}
+
+/**
  * One composition. `css` is a complete declaration list dropped into the
  * `.art` rule — every value in it is a palette colour or a number computed
  * here, so nothing from an article can reach the stylesheet.
@@ -417,10 +431,10 @@ export const COVER_ARTS: ((c: string[]) => CoverArt)[] = [
     ].join('\n        '),
   }),
 
-  // 3. Column — unequal vertical blocks, widest last, like a spine of colour.
+  // 3. Column — vertical blocks at unequal widths.
   (c) => ({
     name: 'column',
-    css: `background: linear-gradient(to right, ${bands(c)});`,
+    css: `background: linear-gradient(to right, ${unevenBands(c)});`,
   }),
 
   // 4. Fan — a conic sweep from the outer corner. Same corner as the orbit,
@@ -433,11 +447,11 @@ export const COVER_ARTS: ((c: string[]) => CoverArt)[] = [
     css: `background: conic-gradient(from 270deg at 100% 100%, ${bands(c, 0, 25)}, transparent 25%);`,
   }),
 
-  // 5. Stack — horizontal bands, the plainest of the set and the one that lets
-  //    the colour do all the work.
+  // 5. Stack — horizontal bands at unequal depths; the quietest of the set and
+  //    the one that lets the colour do all the work.
   (c) => ({
     name: 'stack',
-    css: `background: linear-gradient(to bottom, ${bands(c)});`,
+    css: `background: linear-gradient(to bottom, ${unevenBands(c)});`,
   }),
 
   // 6. Lens — concentric circles centred in the panel, ringed like a target.
