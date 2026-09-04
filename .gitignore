@@ -47,3 +47,5 @@ next-env.d.ts
 # gitlinks with no .gitmodules entry, and every Vercel build fails to clone
 # them ("Failed to fetch one or more git submodules") then dies at upload.
 .claude/worktrees/
+# One-off rebuild helpers written during a session.
+scripts/.*.ts
