@@ -33,7 +33,7 @@ import {
   type ComposeEntry,
 } from './compose'
 import { nameIssue } from './naming'
-import { PRESS_ROOT } from './issues'
+import { PRESS_ROOT, recordMeasuredPages } from './issues'
 import type { Article, PressItem, TocEntry } from './types'
 
 /** The per-article facts a build needs; a subset of what state.json holds. */
@@ -261,6 +261,15 @@ export async function buildIssue(opts: BuildOptions): Promise<BuildResult> {
     articles: items.map((i, n) => ({ id: i.id, title: i.title, url: i.url, pageCount: pageCounts[n] })),
   }
   await writeFile(path.join(outDir, 'meta.json'), JSON.stringify(meta, null, 2))
+
+  // The lengths measured above are the only true ones; the state file is still
+  // carrying whatever ingest recorded. Selection and the editor's running
+  // total both read it, so leaving it stale under-fills the next issue.
+  // Only for a real build: a test or a scratch render passes its own root and
+  // has no business writing V's state.
+  if (root === PRESS_ROOT) {
+    await recordMeasuredPages(new Map(items.map((i, n) => [i.id, pageCounts[n]])))
+  }
 
   return { name, pageCount, pageCounts, toc, preflight, outDir }
 }
