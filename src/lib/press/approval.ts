@@ -25,6 +25,7 @@ import {
   updateIssue,
   recordEvent,
 } from './db'
+import { escapeHtml as escape } from './html'
 import { loadSettings, type PressSettings } from './settings'
 import { loadEffectiveSettings } from './settings-db'
 import { formatQuote } from './lulu'
@@ -204,14 +205,6 @@ export interface ApprovalEmailInput {
   skipUrl: string
   /** itemId → the link that drops that one article and re-composes. */
   dropUrls: Map<string, string>
-}
-
-function escape(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
 }
 
 export function approvalSubject(input: ApprovalEmailInput): string {

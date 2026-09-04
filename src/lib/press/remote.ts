@@ -19,7 +19,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { itemsForIssue, signedUrl, storagePath } from './db'
 import type { IssueEntry, LocalIssue } from './local'
-import type { PressIssue, PressItem } from './types'
+import { sameOrder, type PressIssue, type PressItem } from './types'
 
 /** How long a PDF link stays good. Long enough to read, short enough to expire. */
 const PDF_URL_TTL_SECONDS = 60 * 60
@@ -48,9 +48,6 @@ export async function remoteItemsInState(
   if (error) throw new Error(`press/remote: itemsInState: ${error.message}`)
   return (data as PressItem[]) ?? []
 }
-
-const sameOrder = (a: string[], b: string[]) =>
-  a.length === b.length && a.every((id, i) => id === b[i])
 
 function toEntry(item: PressItem, linkpostTitles: Map<string, string> = new Map()): IssueEntry {
   return {

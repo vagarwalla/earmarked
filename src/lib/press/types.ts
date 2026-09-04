@@ -466,6 +466,19 @@ export interface ComposedIssue {
   toc: TocEntry[]
 }
 
+/**
+ * Whether an issue's running order is the one its PDFs were rendered from.
+ *
+ * Sequence, not membership: reordering two articles changes the page numbers
+ * on the contents page, so a permutation is every bit as stale as an addition.
+ * This is the comparison behind `dirty` in both readers and the workbench, and
+ * it lives here — beside `tocMeta`, for the same reason — so the three of them
+ * cannot answer it differently.
+ */
+export function sameOrder(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i])
+}
+
 // ── Ordering (U6) ────────────────────────────────────────────────────────────
 
 export interface PrintQuote {

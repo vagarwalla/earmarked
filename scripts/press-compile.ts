@@ -41,7 +41,7 @@ import {
   type ComposeEntry,
 } from '../src/lib/press/compose'
 import { extractFromUrl, ExtractionError } from '../src/lib/press/extract'
-import { fetchAndStoreImage, type CandidateImage, type StoredImage } from '../src/lib/press/images'
+import { fetchAndStoreImages } from '../src/lib/press/images'
 import { nameIssue } from '../src/lib/press/naming'
 import { detectArticleLanguage, translateArticle } from '../src/lib/press/translate'
 import type { Article, PressItem, TocEntry } from '../src/lib/press/types'
@@ -168,18 +168,8 @@ async function main(): Promise<void> {
         url,
         deps: {
           // Images are stored locally instead of in the bucket.
-          storeImages: (async (itemId: string, candidates: CandidateImage[]) => {
-            const out: StoredImage[] = []
-            let n = 0
-            for (const candidate of candidates) {
-              const image = await fetchAndStoreImage(itemId, candidate, n, { store: storage.store })
-              if (image) {
-                out.push(image)
-                n++
-              }
-            }
-            return out
-          }) as never,
+          storeImages: (itemId, candidates) =>
+            fetchAndStoreImages(itemId, candidates, { store: storage.store }),
         },
       })
       // Translation happens here, before anything measures or names the

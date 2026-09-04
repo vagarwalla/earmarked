@@ -20,7 +20,7 @@
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
-import type { TocEntry } from './types'
+import { sameOrder, type TocEntry } from './types'
 import type { IssueMeta } from './build'
 import {
   PRESS_ROOT,
@@ -30,7 +30,7 @@ import {
   readyItems,
   selectForIssue,
   type IssueDraft,
-  type ItemState,
+  type LocalItemState,
   type PressState,
   type StateItem,
 } from './issues'
@@ -39,7 +39,7 @@ export { PRESS_ROOT, readState }
 export type { IssueMeta }
 
 /** Names kept from before `issues.ts` existed; the shapes are the same. */
-export type LocalItemState = ItemState
+export type { LocalItemState }
 export type LocalItem = StateItem
 export type LocalState = PressState
 
@@ -187,9 +187,6 @@ function resolveContents(
     }
   })
 }
-
-const sameOrder = (a: string[], b: string[]) =>
-  a.length === b.length && a.every((id, i) => id === b[i])
 
 /**
  * Every issue worth showing, newest first: each one that has been built, plus

@@ -31,7 +31,7 @@ import { loadSettings } from '@/lib/press/settings'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import SignOut from './SignOut'
 import { Workbench, type PoolItem, type WorkbenchIssue } from './Workbench'
-import type { PressItem } from '@/lib/press/types'
+import { sameOrder, type PressItem } from '@/lib/press/types'
 
 export const dynamic = 'force-dynamic'
 
@@ -46,9 +46,6 @@ function toPoolItem(item: PressItem): PoolItem {
     reason: item.failure_reason,
   }
 }
-
-const sameOrder = (a: string[], b: string[]) =>
-  a.length === b.length && a.every((id, i) => id === b[i])
 
 /**
  * How many times an issue has been printed.

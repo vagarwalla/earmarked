@@ -31,6 +31,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PDFDocument } from 'pdf-lib'
+import { escapeHtml } from '../html'
 import {
   BLEED_PT,
   MEDIA_HEIGHT_PT,
@@ -131,19 +132,10 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 
 // ── Escaping and sanitisation ────────────────────────────────────────────────
 
-const ESCAPES: Record<string, string> = {
-  '&': '&amp;',
-  '<': '&lt;',
-  '>': '&gt;',
-  '"': '&quot;',
-  "'": '&#39;',
-}
-
-/** Escape text for both element content and double-quoted attribute values. */
-export function escapeHtml(value: string | null | undefined): string {
-  if (value === null || value === undefined) return ''
-  return String(value).replace(/[&<>"']/g, (c) => ESCAPES[c])
-}
+// Re-exported so every existing `escapeHtml` import site keeps working; the
+// definition lives in `../html` because the email paths need it and must not
+// take pdf-lib and the filesystem with it.
+export { escapeHtml }
 
 /**
  * Inline tags a paragraph may keep. Note what is missing: `a` (an href is a

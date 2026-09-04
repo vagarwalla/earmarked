@@ -28,7 +28,8 @@ import { createRaindropClient, raindropToItem, type Raindrop } from '../src/lib/
 import { extractFromUrl, ExtractionError } from '../src/lib/press/extract'
 import { classifyLinkpost, MAX_TARGETS } from '../src/lib/press/linkpost'
 import { normalizeUrl } from '../src/lib/press/db'
-import { fetchAndStoreImage, type CandidateImage, type StoredImage } from '../src/lib/press/images'
+import { fetchAndStoreImages } from '../src/lib/press/images'
+import { isReferencePage, REFERENCE_PAGE_REASON } from '../src/lib/press/reference-page'
 import {
   articleImages,
   buildArticleSection,
@@ -71,27 +72,6 @@ const load = async (storagePath: string): Promise<Uint8Array> =>
   new Uint8Array(await readFile(path.join(ROOT, storagePath)))
 
 // ── Steps ─────────────────────────────────────────────────────────────────────
-
-/**
- * Reference pages, not reading. An org's About page or a docs index extracts
- * into several plausible pages of prose, then gets a full magazine opener
- * headlined "About" — which reads as a mistake in a printed contents list.
- * The tell is a bare generic noun where a title should be.
- *
- * Marked `skipped` rather than dropped, and always reported: the call is V's,
- * and un-skipping is a one-word edit in .press/state.json.
- */
-const GENERIC_TITLES = [
-  /^about(\s+us)?$/i, /^home$/i, /^index$/i, /^untitled$/i, /^overview$/i,
-  /^team$/i, /^our team$/i, /^contact(\s+us)?$/i, /^careers?$/i, /^jobs$/i,
-  /^faq$/i, /^docs?$/i, /^documentation$/i, /^mission$/i, /^welcome$/i,
-  /^getting started$/i, /^resources$/i,
-]
-
-export function isReferencePage(title: string | null): boolean {
-  if (!title) return false
-  return GENERIC_TITLES.some((re) => re.test(title.trim()))
-}
 
 async function poll(state: PressState): Promise<number> {
   const settings = loadSettings()
@@ -206,18 +186,9 @@ async function processQueued(
         url: item.url,
         raindropId: item.raindropId,
         deps: {
-          storeImages: (async (itemId: string, candidates: CandidateImage[]) => {
-            const out: StoredImage[] = []
-            let n = 0
-            for (const c of candidates) {
-              const image = await fetchAndStoreImage(itemId, c, n, { store })
-              if (image) {
-                out.push(image)
-                n++
-              }
-            }
-            return out
-          }) as never,
+          // Same walk as the deployed pipeline, writing into `.press/` instead
+          // of the storage bucket.
+          storeImages: (itemId, candidates) => fetchAndStoreImages(itemId, candidates, { store }),
         },
       })
 
@@ -273,7 +244,7 @@ async function processQueued(
           title: article.title,
           pageCount,
           state: 'skipped',
-          reason: 'reference page, not an article',
+          reason: REFERENCE_PAGE_REASON,
           ...scanned,
         })
         console.log(`  – ${String(pageCount).padStart(3)}pp  ${article.title}  (skipped: reference page)`)

@@ -28,14 +28,24 @@ const LOCK_FILE = path.join(PRESS_ROOT, 'state.lock')
 
 // -- State shape -------------------------------------------------------------
 
-export type ItemState = 'queued' | 'laid_out' | 'printed' | 'failed' | 'skipped'
+/**
+ * What a state.json item can be.
+ *
+ * Named apart from `ItemState` in types.ts, which is the *Postgres* item
+ * lifecycle and has members this one does not (`extracted`, `in_issue`,
+ * `dropped`). Two same-named types with different members, one imported here
+ * and one there, is exactly the confusion that makes a state machine hard to
+ * reason about; the disk and the database are genuinely different machines, so
+ * they get different names rather than one merged type.
+ */
+export type LocalItemState = 'queued' | 'laid_out' | 'printed' | 'failed' | 'skipped'
 
 export interface StateItem {
   id: string
   url: string
   raindropId: string
   title: string | null
-  state: ItemState
+  state: LocalItemState
   pageCount?: number
   reason?: string
   savedAt: string

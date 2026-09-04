@@ -29,11 +29,9 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { putObject, storagePath, updateIssue } from './db'
-import { withStateLock } from './issues'
+import { PRESS_ROOT, withStateLock } from './issues'
 import type { PressItem } from './types'
 import type { SupabaseClient } from '@supabase/supabase-js'
-
-const PRESS_ROOT = path.join(process.cwd(), '.press')
 
 /** One article, as `buildIssue` wants it. */
 export interface BuildItem {
