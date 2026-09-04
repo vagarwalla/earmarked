@@ -96,6 +96,15 @@ const COMMENT_SELECTORS = [
   '[class*="-comment"]',
   '[class*="comment_"]',
   '[class*="Comment"]',
+  // The plural, unanchored. The rules above anchor on a separator so that
+  // "commentary" and "commented" survive, and the singular has to — but the
+  // plural does not: no English word continues past "comments", so this is
+  // safe unanchored and it is the spelling the separator rules miss.
+  // WordPress's own theme markup is `<div id="comments" class="comments-area">`
+  // and a theme that drops the id — or names it `comments-section` — went
+  // through both stripping passes untouched.
+  '[class*="comments"]',
+  '[id*="comments"]',
   '[id*="comment-"]',
   '[data-testid*="omment"]',
   '.giscus',
