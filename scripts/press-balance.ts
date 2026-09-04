@@ -1,0 +1,85 @@
+/**
+ * press — bring every draft issue inside a page range.
+ *
+ *   npx tsx scripts/press-balance.ts                   # say what it would do
+ *   npx tsx scripts/press-balance.ts --write           # do it
+ *   npx tsx scripts/press-balance.ts --write --min 100 --max 150
+ *
+ * Two passes, in this order:
+ *
+ *   1. **Shed.** An issue over the maximum gives up articles from its end
+ *      until it fits, and they go back to the pool.
+ *   2. **Fill.** An issue under the minimum takes from the pool until it fits.
+ *
+ * Every move goes through `applyIssueAction`, so a linkpost still travels with
+ * the pieces it named and nothing is claimed by two issues at once.
+ *
+ * It moves articles; it does not rename issues. A name is generated from the
+ * contents, so an issue whose contents changed enough is worth renaming — this
+ * says which rather than doing it, because renaming is a model call and the
+ * name is V's.
+ */
+
+import { balance, pagesOf, availableFor, DEFAULT_MIN, DEFAULT_MAX } from '../src/lib/press/balance'
+import { findDraft, withStateLock, type IssueDraft } from '../src/lib/press/issues'
+
+async function main(): Promise<void> {
+  const argv = process.argv.slice(2)
+  const write = argv.includes('--write')
+  const num = (flag: string, fallback: number) => {
+    const i = argv.indexOf(flag)
+    return i === -1 ? fallback : Number(argv[i + 1]) || fallback
+  }
+  const min = num('--min', DEFAULT_MIN)
+  const max = num('--max', DEFAULT_MAX)
+
+  await withStateLock((state) => {
+    const numbers = (state.issues ?? [])
+      .filter((d) => d.state !== 'ordered')
+      .map((d) => d.number)
+      .sort((a, b) => a - b)
+    const drafts = numbers.map((n) => findDraft(state, n)!).filter(Boolean)
+
+    const before = new Map(drafts.map((d) => [d.number, pagesOf(state, d)]))
+    const moves = balance(state, drafts, min, max)
+
+    console.log(`target ${min}-${max}pp\n`)
+    for (const d of drafts) {
+      const was = before.get(d.number) ?? 0
+      const now = pagesOf(state, d)
+      const flag = now < min ? '  UNDER' : now > max ? '  OVER' : ''
+      console.log(
+        `issue ${String(d.number).padStart(2)}  ${String(was).padStart(4)}pp -> ${String(now).padStart(4)}pp` +
+          `  (${d.itemIds.length} articles)${flag}  ${d.name ?? ''}`,
+      )
+    }
+
+    if (moves.length) {
+      console.log('\nmoves:')
+      for (const m of moves) {
+        console.log(`  issue ${String(m.issue).padStart(2)}  ${m.action === 'add' ? '+' : '-'}${String(m.pages).padStart(3)}pp  ${m.title}`)
+      }
+    } else {
+      console.log('\nnothing to move.')
+    }
+
+    const pool = availableFor(state, { number: -1, itemIds: [], state: 'draft' } as IssueDraft)
+    console.log(`\n${pool.length} articles left in the pool (${pool.reduce((n, i) => n + (i.pageCount ?? 0), 0)}pp)`)
+
+    if (!write) {
+      console.log('\nreporting only — pass --write to keep these moves, then rebuild.')
+      // Throwing would be wrong (the lock writes on the way out), so undo by
+      // putting the drafts back exactly as they were.
+      for (const m of moves.slice().reverse()) {
+        const d = findDraft(state, m.issue)!
+        if (m.action === 'add') d.itemIds = d.itemIds.filter((id) => id !== m.id)
+        else d.itemIds.push(m.id)
+      }
+      return
+    }
+
+    console.log('\nwritten. Every issue that changed needs a rebuild.')
+  })
+}
+
+main()
