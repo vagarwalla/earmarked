@@ -30,7 +30,7 @@ import {
   readyItems,
   selectForIssue,
   type IssueDraft,
-  type LocalItemState,
+  type ItemState,
   type PressState,
   type StateItem,
 } from './issues'
@@ -39,7 +39,7 @@ export { PRESS_ROOT, readState }
 export type { IssueMeta }
 
 /** Names kept from before `issues.ts` existed; the shapes are the same. */
-export type { LocalItemState }
+export type LocalItemState = ItemState
 export type LocalItem = StateItem
 export type LocalState = PressState
 
