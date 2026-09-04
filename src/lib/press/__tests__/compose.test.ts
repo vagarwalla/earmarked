@@ -8,6 +8,8 @@ import {
   buildTocSection,
   buildCoverHtml,
   contentsClass,
+  COVER_ARTS,
+  coverArtFor,
   COVER_PALETTE,
   issueDateline,
   paletteFor,
@@ -336,10 +338,31 @@ describe('buildCoverHtml', () => {
   it('draws the art in CSS, with no image reference of any kind', () => {
     // Lulu wants 300 PPI on a cover; extracted article art is web-sized. The
     // art has to be resolution-free, which means gradients rather than <img>.
-    const html = buildCoverHtml({ ...base, pageCount: 100 })
-    expect(html).toContain('radial-gradient')
-    expect(html).not.toContain('<img')
-    expect(html).not.toMatch(/url\(/)
+    // Every composition in the family, not just whichever this issue drew.
+    for (let n = 1; n <= COVER_ARTS.length; n++) {
+      const html = buildCoverHtml({ ...base, issueNumber: n, pageCount: 100 })
+      expect(html).toMatch(/gradient\(|background:\s*#/)
+      expect(html).not.toContain('<img')
+      expect(html).not.toMatch(/url\(/)
+    }
+  })
+
+  it('gives every issue a different cover, not the same one recoloured', () => {
+    // Nine issues had nine covers that were one picture in a rotated palette.
+    const arts = new Set<string>()
+    for (let n = 1; n <= COVER_ARTS.length; n++) {
+      const art = coverArtFor(n, paletteFor(n))
+      arts.add(art.name)
+      // The composition is drawn in this issue's own colours.
+      expect(art.css).toContain(paletteFor(n)[0])
+    }
+    expect(arts.size).toBe(COVER_ARTS.length)
+    // Deterministic: a rebuild of issue 4 is always the same cover.
+    expect(coverArtFor(4, paletteFor(4))).toEqual(coverArtFor(4, paletteFor(4)))
+    // And it wraps rather than running off the end.
+    expect(coverArtFor(COVER_ARTS.length + 1, paletteFor(1)).name).toBe(
+      coverArtFor(1, paletteFor(1)).name,
+    )
   })
 
   it('rotates the palette per issue so consecutive covers differ', () => {

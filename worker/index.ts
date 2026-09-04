@@ -384,8 +384,16 @@ export async function runWeeklyTick(now = new Date()): Promise<void> {
   await followOrders()
 
   const since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-  const digest = await sendWeeklyDigest(since, { db: db() })
-  log('digest', digest)
+  // Skipped rather than attempted: without a mailer `sendMail` throws, and a
+  // thrown weekly tick is a stopped tick — `followOrders` above it would have
+  // run, but nothing after it ever would.
+  const missingMail = missingSettings('mail')
+  if (missingMail.length) {
+    log('digest_skipped', { missing: missingMail })
+  } else {
+    const digest = await sendWeeklyDigest(since, { db: db() })
+    log('digest', digest)
+  }
   log('weekly_tick_done')
 }
 
@@ -393,10 +401,22 @@ export async function runWeeklyTick(now = new Date()): Promise<void> {
 
 async function main(): Promise<void> {
   // Fail at boot on a missing secret rather than at 2am on the weekly tick.
-  for (const unit of ['db', 'ingest', 'mail'] as const) {
+  //
+  // `db` and `ingest` only. Mail used to be here too, and it was the wrong
+  // call: nothing this worker exists to do needs a mailer. Fetching saved
+  // links, laying them out, and rendering an issue are the whole job, and a
+  // missing RESEND_API_KEY was stopping all three at boot over a weekly digest
+  // — a machine that will not start because it cannot send a summary of what
+  // it did is a machine that never does anything to summarise.
+  for (const unit of ['db', 'ingest'] as const) {
     const missing = missingSettings(unit)
     if (missing.length) throw new Error(`press/worker: ${unit} is missing ${missing.join(', ')}`)
   }
+
+  // Said once, at boot, so an absent digest is a decision you can see in the
+  // log rather than a silence you have to go looking for.
+  const noMail = missingSettings('mail')
+  if (noMail.length) log('no_mailer', { missing: noMail, effect: 'the weekly digest will not send' })
 
   // No bootstrapIssue(): issues are opened by hand in the workbench now, and
   // there may legitimately be none at all. Arriving articles land in the pool,
