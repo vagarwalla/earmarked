@@ -21,11 +21,63 @@
 import { cookies, headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { accountByEmail } from '@/lib/press/accounts'
-import { OWNER_COOKIE, inviteOnly, sessionClient } from '@/lib/press/auth'
+import {
+  OWNER_COOKIE,
+  OWNER_COOKIE_MAX_AGE,
+  inviteOnly,
+  keysMatch,
+  ownerKey,
+  sessionClient,
+} from '@/lib/press/auth'
 
 export interface SignInState {
   error?: string
   sent?: string
+}
+
+export interface OwnerState {
+  error?: string
+}
+
+/**
+ * The owner's key, pasted rather than followed as a link.
+ *
+ * The button that opens this field is on the sign-in page, and the key is
+ * deliberately *not* in it. A link with the key in its href would put a
+ * permanent credential — every article, the shipping address, the button that
+ * spends money at Lulu — in the HTML of a page anybody can open, which would
+ * make the sign-in page it sits on pointless. So: a field, pasted once per
+ * browser, exchanged for the same year-long cookie `/press/enter` sets.
+ *
+ * A POST rather than a GET with `?key=`, so the secret does not end up in the
+ * URL bar, in browser history, or in a referrer header on the way out.
+ */
+export async function enterAsOwner(_prev: OwnerState, form: FormData): Promise<OwnerState> {
+  const expected = ownerKey()
+  const given = String(form.get('key') ?? '').trim()
+
+  // One message for a wrong key and for no key being configured, matching the
+  // route's matching 404s: guessing here should say nothing about whether
+  // there is anything to guess.
+  if (!expected || !given || !keysMatch(given, expected)) {
+    return { error: 'That key does not work.' }
+  }
+
+  const secure = (await headers()).get('x-forwarded-proto') === 'https'
+  ;(await cookies()).set(OWNER_COOKIE, expected, {
+    httpOnly: true,
+    secure,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: OWNER_COOKIE_MAX_AGE,
+  })
+
+  redirect('/press')
+}
+
+/** Whether to render the owner button at all. */
+export async function ownerDoorExists(): Promise<boolean> {
+  return ownerKey() !== null
 }
 
 export async function requestLink(_prev: SignInState, form: FormData): Promise<SignInState> {
