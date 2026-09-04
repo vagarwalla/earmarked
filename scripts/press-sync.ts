@@ -39,6 +39,7 @@ import { withStateLock, type PressState } from '../src/lib/press/issues'
 import { loadSettings } from '../src/lib/press/settings'
 import { OWNER_ACCOUNT_ID } from '../src/lib/press/accounts'
 import { pressDb } from '../src/lib/press/db'
+import { sameOrder } from '../src/lib/press/types'
 
 const ROOT = path.join(process.cwd(), '.press')
 const DRY = process.argv.includes('--dry-run')
@@ -64,8 +65,6 @@ function client(): SupabaseClient {
   // the scoping and the thing that makes the write work at all.
   return pressDb(OWNER_ACCOUNT_ID)
 }
-
-const sameOrder = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i])
 
 // ── 1. Pull the running order the website is showing ─────────────────────────
 
