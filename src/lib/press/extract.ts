@@ -27,6 +27,7 @@ import {
   type CandidateImage,
   type StoredImage,
 } from './images'
+import { cleanTitle } from './title'
 import { collectOutboundLinks, type OutboundLink } from './linkpost'
 import type { Article, ArticleBlock, ArticleFootnote, ArticleImage } from './types'
 
@@ -568,42 +569,6 @@ function largerVersionsOf(img: Element): string[] {
 }
 
 /**
- * Tidy a title for print.
- *
- * Two kinds of rubbish arrive in one: markup, because some extractors hand
- * back the `<h1>`'s inner HTML rather than its text (Issue 4's cover printed
- * `<em>g</em>, a Statistical Myth`); and the publication's own name, which
- * many sites append to `<title>` and which reads as an error on a cover that
- * already says where the piece came from (`... - Works in Progress Magazine`).
- *
- * The suffix is only cut when there is a real title in front of it, so a piece
- * genuinely called "The Economist" survives.
- */
-export function cleanTitle(raw: string | null | undefined, siteName?: string | null): string {
-  let title = String(raw ?? '')
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&#39;|&apos;/gi, "'")
-    .replace(/&quot;/gi, '"')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/\s+/g, ' ')
-    .trim()
-
-  const site = (siteName ?? '').trim()
-  if (site) {
-    // " - Site", " | Site", " — Site", " · Site" at the very end.
-    const escaped = site.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const suffix = new RegExp(`\\s*[-|\u2013\u2014\u00b7:]\\s*${escaped}\\s*$`, 'i')
-    const cut = title.replace(suffix, '').trim()
-    if (cut.length >= 4) title = cut
-  }
-
-  return title
-}
-
-/**
  * A figure block needs an `ArticleImage`, but the real one only exists after
  * the download. We park the candidate's index in `path` and swap it out in
  * `attachImages`.
@@ -708,7 +673,7 @@ function buildRung(
   if (articleLength(blocks) < MIN_ARTICLE_CHARS) return null
   const site = meta.site?.trim() || null
   return {
-    title: cleanTitle(meta.title, site) || 'Untitled',
+    title: cleanTitle(meta.title, site, url) || 'Untitled',
     byline: meta.byline?.trim() || null,
     sourceName: site,
     publishedAt: meta.published || null,
@@ -889,8 +854,8 @@ export async function extractFromNewsletterHtml(
   const doc = dom.window.document
 
   const title =
-    cleanTitle(doc.querySelector('h1')?.textContent, opts.senderName) ||
-    cleanTitle(doc.title, opts.senderName) ||
+    cleanTitle(doc.querySelector('h1')?.textContent, opts.senderName, url) ||
+    cleanTitle(doc.title, opts.senderName, url) ||
     'Untitled'
 
   const root = doc.body
