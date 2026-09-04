@@ -499,7 +499,11 @@ describe('extractFromUrl', () => {
         width: 1600,
         height: 900,
         orientation: 'landscape',
-        sourceUrl: 'https://cdn.example.com/img/salt-pans-wide.jpg',
+        // Fetched from a larger copy than the page showed, which is the
+        // ordinary case now — so the two URLs differ and only `candidateUrl`
+        // can line this back up with the figure that asked for it.
+        sourceUrl: 'https://cdn.example.com/img/salt-pans-wide-2400.jpg',
+        candidateUrl: 'https://cdn.example.com/img/salt-pans-wide.jpg',
       },
     ]
     const { article } = await extractFromUrl({
@@ -850,6 +854,36 @@ describe('fetchAndStoreImage', () => {
     expect(asked).not.toContain('https://static.pinboard.in/si/thumbs/si.001.thumb.jpg')
   })
 
+  it('keeps an upgraded plate attached to the figure that asked for it', async () => {
+    // The regression this guards: `finish()` re-aligns stored images onto
+    // candidates, and once images.ts started fetching a *larger* copy the two
+    // URLs stopped matching — which dropped every upgraded plate silently.
+    const big = new Uint8Array(await png(1920, 1200))
+    const stored = await fetchAndStoreImages(
+      'item1',
+      [
+        {
+          url: 'https://cdn.test/thumbs/a.thumb.jpg',
+          alt: null,
+          caption: null,
+          alternates: ['https://cdn.test/a.jpg'],
+        },
+      ],
+      {
+        fetchBytes: (async (url: string) => ({ bytes: big, url, status: 200, contentType: 'image/png' })) as never,
+        store: (async (p: string) => p) as never,
+      },
+    )
+    expect(stored[0].sourceUrl).toBe('https://cdn.test/a.jpg')
+    expect(stored[0].candidateUrl).toBe('https://cdn.test/thumbs/a.thumb.jpg')
+
+    const blocks = attachImages(
+      [{ type: 'figure', image: { path: '#candidate-0', alt: null, caption: null, width: null, height: null, orientation: 'landscape' } }],
+      [stored[0]],
+    )
+    expect(blocks).toHaveLength(1)
+  })
+
   it('falls back to the URL the page displayed when every guess fails', async () => {
     const bytes = new Uint8Array(await png(1600, 1000))
     const image = await fetchAndStoreImage(
@@ -919,7 +953,7 @@ describe('attachImages', () => {
       { type: 'figure', image: { path: '#candidate-1', alt: null, caption: null, width: null, height: null, orientation: 'landscape' } },
     ]
     const stored: (StoredImage | null)[] = [
-      { path: 'items/i/images/00.jpg', alt: null, caption: null, width: 10, height: 10, orientation: 'square', sourceUrl: 'x' },
+      { path: 'items/i/images/00.jpg', alt: null, caption: null, width: 10, height: 10, orientation: 'square', sourceUrl: 'x', candidateUrl: 'x' },
       null,
     ]
     const out = attachImages(blocks, stored)

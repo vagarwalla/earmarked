@@ -33,6 +33,7 @@ import {
   type ComposeEntry,
 } from './compose'
 import { nameIssue } from './naming'
+import { cleanTitle } from './title'
 import { PRESS_ROOT, recordMeasuredPages } from './issues'
 import type { Article, PressItem, TocEntry } from './types'
 
@@ -153,6 +154,11 @@ export async function buildIssue(opts: BuildOptions): Promise<BuildResult> {
         `No extracted text for "${item.title ?? item.url}" — re-save the link and run press-run.`,
       )
     }
+    // Cleaned here as well as at extraction: every article extracted before
+    // `cleanTitle` existed still has its markup and its publication's name in
+    // the title, and those go straight onto the cover and the contents page.
+    article.title = cleanTitle(article.title, article.sourceName, article.url) || 'Untitled'
+
     entries.push({ kind: 'article', item: { id: item.id, title: item.title } as PressItem, article })
   }
 

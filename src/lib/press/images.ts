@@ -167,8 +167,19 @@ export function looksLikeTrackingPixel(url: string): boolean {
 }
 
 export interface StoredImage extends ArticleImage {
-  /** The URL it came from — kept for diagnostics, never printed or rendered. */
+  /**
+   * Where the bytes actually came from, which may be a larger copy than the
+   * page displayed. Kept for diagnostics and for `press-replate`; never
+   * printed or rendered.
+   */
   sourceUrl: string
+  /**
+   * The candidate URL this was fetched *for* — the `src` in the markup.
+   * Callers align a run of stored images back onto the candidates they asked
+   * for with this, and it is not the same string as `sourceUrl` whenever a
+   * bigger version was found.
+   */
+  candidateUrl: string
 }
 
 export interface FetchImageDeps {
@@ -261,6 +272,7 @@ export async function fetchAndStoreImage(
     height,
     orientation: width && height ? orientationOf(width, height) : 'landscape',
     sourceUrl,
+    candidateUrl: candidate.url,
   }
 }
 
