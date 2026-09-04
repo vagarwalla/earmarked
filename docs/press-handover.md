@@ -1,4 +1,6 @@
-# press — handover, 2026-09-04
+# press — handover
+
+*Parked 2026-09-04. Start at “Where it stopped”.*
 
 What was built to let other people use press, what state it is in, and what is
 left. Written at the end of the session that built it, for whoever picks it up
@@ -8,6 +10,58 @@ The design reasoning is in
 [the plan](plans/2026-09-03-004-feat-press-sharing-plan.md). How to operate it
 is in [the runbook](press-runbook.md). This is the bit neither of those covers:
 **what is unfinished, and what to watch out for.**
+
+---
+
+## Where it stopped
+
+Everything below still holds. What changed on the last afternoon:
+
+**The worker no longer needs a mailer.** It used to refuse to boot without
+`RESEND_API_KEY`, which was stopping the whole pipeline over a weekly summary.
+`db` and `ingest` are the only required units now; a missing mailer logs
+`no_mailer` at boot and `digest_skipped` on the weekly tick. Landed on `main`.
+
+**Fly is blocked on billing, and only you can clear it.** `fly apps create`
+answers *"trial has ended, please add a credit card"* — which is also why
+`vagarwalla-games` has sat at `pending` and never deployed.
+
+> **Next action: add a card at https://fly.io/trial.**
+> Then `fly apps create press-worker -o personal`, `fly secrets import` the
+> values below, `fly deploy -c worker/fly.toml`. A few minutes.
+
+**The worker was run on the laptop instead, for about fifteen minutes, then
+stopped.** It works — it is the same code Fly would run. It got through one
+extraction pass before being parked.
+
+| | Then | Now |
+|---|---|---|
+| `queued` (waiting to be fetched) | 66 | **41** |
+| `laid_out` (in the pool, ready) | 14 | **37** |
+| `failed` | 8 | **10** |
+
+To carry on draining it without Fly:
+
+```bash
+node --env-file=.env.local ./node_modules/.bin/tsx worker/index.ts
+```
+
+25 articles per pass, a pass every 30 minutes, and it only runs while the
+laptop is awake — which is exactly the gap an always-on Fly machine closes.
+
+**Secrets the worker needs** (all in `.env.local` except the last two, which do
+not exist yet and are cheap to make — no third party involved):
+
+`NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `RAINDROP_TOKEN`,
+`RAINDROP_COLLECTION_ID`, `LULU_CLIENT_KEY`, `LULU_CLIENT_SECRET`,
+`LULU_SANDBOX`, `ANTHROPIC_API_KEY`, plus `PRESS_ACTION_TOKEN_SECRET`
+(`openssl rand -hex 32`) and `PRESS_APP_URL=https://earmarked.vercel.app`.
+No Resend.
+
+**Still open, unchanged:** the issue-9 compose job queued since midnight
+(nothing has claimed it), `PRESS_OPEN_OWNER` sitting in `git stash@{0}`, and
+**issue 1 is shared** — publicly readable at `/press/i/vaidehi/1`, and nobody
+in that session shared it.
 
 ---
 
@@ -46,8 +100,9 @@ Nine PRs, migrations 017–020, all on `main`.
 
 Nothing claims jobs and nothing extracts links, so on the deployed site:
 
-- **66 articles are stuck `queued`** — pasted or named by a linkpost, never
-  fetched. They are not lost; they are waiting.
+- **41 articles are stuck `queued`** (was 66 — one local pass cleared 25) —
+  pasted or named by a linkpost, never fetched. They are not lost; they are
+  waiting.
 - **One compose job for issue 9 has been queued since 2026-09-04 00:02** and
   will sit there. The one-live-job index means the Rebuild button on issue 9
   refuses until it clears — `SELECT press_reap_jobs('1 minute');` clears it, or
@@ -60,10 +115,11 @@ None of this affects the laptop, which renders locally and always has.
 ### Deploying it
 
 ```bash
-fly launch --no-deploy -c worker/fly.toml
-fly secrets set -a press-worker …        # the table in docs/press-runbook.md
+# Add a card first — the trial has ended and `apps create` refuses without one.
+fly apps create press-worker -o personal
+fly secrets import -a press-worker < secrets.env   # see "Where it stopped"
 fly deploy -c worker/fly.toml
-fly logs -a press-worker                 # expect: worker_started
+fly logs -a press-worker                 # expect: no_mailer, then worker_started
 ```
 
 About **$2–3/month**. The machine must never auto-stop — the scheduler runs
