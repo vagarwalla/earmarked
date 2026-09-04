@@ -118,10 +118,18 @@ Five PRs, in this order. Each one keeps `npm test`, `npx tsc --noEmit` and
   filesystem, so the shared definition went into a new `html.ts` that imports
   nothing; `render.ts` re-exports it, so no call site changed.
 - **`sameOrder`** — "is this issue's running order the one its PDFs were built
-  from" — existed identically in `local.ts`, `remote.ts` and the workbench
-  page. Whether an issue reads "edited since the last build" should not be
-  three independent answers. Now beside `tocMeta` in `types.ts`, which exists
-  for exactly this reason.
+  from" — existed identically **four** times: `local.ts`, `remote.ts`, the
+  workbench page, and `scripts/press-sync.ts`. Now beside `tocMeta` in
+  `types.ts`, which exists for exactly this reason.
+
+  The fourth was missed on the first pass and found later, because the search
+  that caught the other three did not cover `scripts/`. It is the one that
+  matters most: the other three decide whether a page reads "edited since the
+  last build", while press-sync's decides whether to spend minutes of headless
+  Chromium re-rendering an issue. Worth recording as a lesson about the shape
+  of this codebase — press has two runtimes and its `scripts/` half is real
+  production code, not tooling, so a duplication sweep that stops at `src/`
+  will keep finding three of four.
 - **`PRESS_ROOT`** was recomputed in `handoff.ts`, which already imports
   `withStateLock` from the module that exports it.
 - **`ItemState`** was exported by both `issues.ts` (five states, the disk) and
