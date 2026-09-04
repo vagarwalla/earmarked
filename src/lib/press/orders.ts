@@ -203,6 +203,10 @@ export function isFinished(order: Pick<PressOrder, 'status' | 'shipped_at'>): bo
  * The first order of an issue keys on the issue, so a double-tap of the
  * approval link collapses. A reorder cannot — it is deliberately a second
  * purchase of the same issue — so it carries the moment it was asked for.
+ *
+ * The `-copy-` segment is load-bearing, not decoration: `isPrintRun` below
+ * reads it back to decide whether an order's fate moves the issue's state.
+ * Change the shape of this string and that question stops having an answer.
  */
 export function idempotencyKeyFor(issue: PressIssue, reorder: boolean, now = new Date()): string {
   return reorder ? `press-issue-${issue.id}-copy-${now.getTime()}` : `press-issue-${issue.id}`

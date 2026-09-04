@@ -112,6 +112,11 @@ export async function withBuildLock<T>(fn: () => Promise<T>): Promise<T> {
     if (age === null || age <= BUILD_LOCK_STALE_MS) {
       throw new BuildBusyError('A build is already running. Wait for it to finish.')
     }
+    // Clear it and go round again rather than taking the lock here: another
+    // process may have been doing the same sweep, and whichever loses the race
+    // to create the file must get `BuildBusyError` rather than run a second
+    // render. The recursion can only repeat while somebody keeps leaving stale
+    // locks behind, which is not a state a machine reaches on its own.
     await rm(BUILD_LOCK, { force: true })
     return withBuildLock(fn)
   }
@@ -133,7 +138,10 @@ export async function buildIssue(opts: BuildOptions): Promise<BuildResult> {
     new Uint8Array(await readFile(path.join(root, storagePath)))
 
   progress(`Loading ${items.length} article${items.length === 1 ? '' : 's'}`)
-  const entries: ComposeEntry[] = []
+  // Narrower than `ComposeEntry`: a local build has no PDF items, because a
+  // PDF only ever arrives through the email door, which is a deployed-only
+  // path. Saying so here is what lets `entry.article` be read without a cast.
+  const entries: Extract<ComposeEntry, { kind: 'article' }>[] = []
   for (const item of items) {
     let article: Article
     try {
@@ -152,7 +160,6 @@ export async function buildIssue(opts: BuildOptions): Promise<BuildResult> {
   // renders below; Vivliostyle resolves them from a scratch directory.
   const images = new Map<string, Uint8Array>()
   for (const entry of entries) {
-    if (entry.kind !== 'article') continue
     for (const image of articleImages(entry.article)) {
       const name = imageFileName(image.path)
       if (!images.has(name)) images.set(name, await load(image.path))
@@ -171,7 +178,7 @@ export async function buildIssue(opts: BuildOptions): Promise<BuildResult> {
   const pageCounts: number[] = []
   for (const [i, entry] of entries.entries()) {
     const measured = await render(
-      buildDocument([buildArticleSection({ article: (entry as { article: Article }).article }, i)], {
+      buildDocument([buildArticleSection({ article: entry.article }, i)], {
         issueNumber: number,
         startPage: 1,
         measurement: true,
@@ -216,7 +223,7 @@ export async function buildIssue(opts: BuildOptions): Promise<BuildResult> {
   progress(`Rendering ${items.length} article${items.length === 1 ? '' : 's'} — this takes a while`)
   const prose = await render(
     buildDocument(
-      entries.map((e, i) => buildArticleSection({ article: (e as { article: Article }).article }, i)),
+      entries.map((e, i) => buildArticleSection({ article: e.article }, i)),
       { issueNumber: number, startPage: toc[0].startPage, documentTitle: name },
     ),
   )

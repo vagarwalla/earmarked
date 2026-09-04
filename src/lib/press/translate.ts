@@ -215,7 +215,15 @@ Rules:
  * Greek, Arabic, Devanagari. Deliberately crude: it only has to answer "would
  * this print".
  */
-const NON_LATIN = /[^ -˿Ḁ-ỿ -⁯₠-⃏]/
+const NON_LATIN =
+  // Written as escapes, not as the characters themselves. Spelled literally
+  // this range starts with a NUL byte and contains several invisible format
+  // characters, which makes the whole file binary to `file`, to grep and to
+  // ripgrep — so every code search over the repo silently skipped translate.ts.
+  // The ranges are: Latin and its diacritics (through Latin Extended-B and the
+  // spacing modifiers), Latin Extended Additional, General Punctuation, and
+  // the currency symbols.
+  /[^\u0000-\u02FF\u1E00-\u1EFF\u2000-\u206F\u20A0-\u20CF]/
 
 /** Whether a string contains anything the magazine's fonts cannot set. */
 export function needsRomanizing(value: string | null): boolean {

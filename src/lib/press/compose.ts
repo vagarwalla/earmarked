@@ -175,7 +175,16 @@ export async function loadEntries(
 
 // ── Front matter ─────────────────────────────────────────────────────────────
 
-/** Rough capacity of one TOC page; only used to sanity-check the rendered count. */
+/**
+ * Rough capacity of one TOC page — the first guess at how long the front
+ * matter is, not a check on it.
+ *
+ * It has to be a guess because the contents page states where each article
+ * starts, and it cannot know that until it knows its own length. So the
+ * estimate is rendered, the true count comes back, and the TOC is rebuilt and
+ * rendered once more. Being wrong costs one extra render; only the second
+ * number reaches the page.
+ */
 const TOC_ENTRIES_PER_PAGE = 18
 
 /**
@@ -555,38 +564,26 @@ export async function composeIssue(issue: PressIssue, deps: ComposeDeps): Promis
 
   // 2. Name the issue from what is actually in it — unless it already has one.
   const provisionalToc = computeToc(entries, pageCounts, 0)
-  let name = deps.name
-  if (!name) {
+  let chosenName = deps.name
+  if (!chosenName) {
     progress('Naming the issue')
-    name = await nameFn({
+    chosenName = await nameFn({
       issueNumber: issue.number,
       toc: provisionalToc,
       apiKey: settings.anthropicApiKey,
     })
   }
+  // Settled from here on, and a const so the closures below can see that.
+  const name: string = chosenName
 
   // 3. Render the front matter to learn how long it really is, then rebuild it
   //    with the page numbers that knowledge produces.
   progress('Setting the contents page')
-  let frontPages = Math.max(1, Math.ceil(entries.length / TOC_ENTRIES_PER_PAGE))
-  let toc = computeToc(entries, pageCounts, frontPages)
-  let front = await renderHtml(
-    buildDocument([buildTocSection(name, issue.number, toc)], {
-      issueNumber: issue.number,
-      startPage: 1,
-      measurement: true,
-      documentTitle: name,
-    }),
-    new Map(),
-    deps,
-  )
-  if (front.pageCount !== frontPages) {
-    // The estimate was off; the real count is now known, so one correction is
-    // enough — the entry count did not change, so neither will the length.
-    frontPages = front.pageCount
-    toc = computeToc(entries, pageCounts, frontPages)
-    front = await renderHtml(
-      buildDocument([buildTocSection(name, issue.number, toc)], {
+  // The contents page has no images and never had any, so an empty map rather
+  // than a load — the TOC is set entirely in type.
+  const renderFront = (contents: TocEntry[]) =>
+    renderHtml(
+      buildDocument([buildTocSection(name, issue.number, contents)], {
         issueNumber: issue.number,
         startPage: 1,
         measurement: true,
@@ -595,6 +592,16 @@ export async function composeIssue(issue: PressIssue, deps: ComposeDeps): Promis
       new Map(),
       deps,
     )
+
+  let frontPages = Math.max(1, Math.ceil(entries.length / TOC_ENTRIES_PER_PAGE))
+  let toc = computeToc(entries, pageCounts, frontPages)
+  let front = await renderFront(toc)
+  if (front.pageCount !== frontPages) {
+    // The estimate was off; the real count is now known, so one correction is
+    // enough — the entry count did not change, so neither will the length.
+    frontPages = front.pageCount
+    toc = computeToc(entries, pageCounts, frontPages)
+    front = await renderFront(toc)
   }
 
   // 4. Render the prose. One pass when nothing interrupts it.

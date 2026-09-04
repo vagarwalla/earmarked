@@ -31,7 +31,12 @@ export const PRINT_SPEC = {
   /** Perfect binding needs at least 32 pages; Lulu caps colour interiors at 800. */
   minPages: 32,
   maxPages: 800,
-  /** Pages per inch for 80# coated stock — drives spine width. */
+  /**
+   * Pages per inch of the stock in `LULU_PACKAGE_ID` — drives spine width.
+   * Still 444 after the 2026-09-01 move from 80# coated to 60# uncoated (see
+   * the note above the spec), which is why that change needed no arithmetic
+   * here; it is a property of the paper, so it moves with the package id.
+   */
   pagesPerInch: 444,
   /**
    * Constant Lulu adds to every softcover perfect-bound spine, on top of the
