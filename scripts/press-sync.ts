@@ -39,10 +39,22 @@ import { withStateLock, type PressState } from '../src/lib/press/issues'
 import { loadSettings } from '../src/lib/press/settings'
 import { OWNER_ACCOUNT_ID } from '../src/lib/press/accounts'
 import { pressDb } from '../src/lib/press/db'
+import { sameOrder } from '../src/lib/press/types'
 
 const ROOT = path.join(process.cwd(), '.press')
 const DRY = process.argv.includes('--dry-run')
 const NO_POLL = process.argv.includes('--no-poll')
+/**
+ * Rebuild every issue whether or not its contents moved.
+ *
+ * The staleness check compares the running order against what was last built,
+ * which is the right question when the *articles* change and the wrong one when
+ * the *templates* do: a change to press.css or the cover leaves every PDF out
+ * of date and every running order identical. This is for that.
+ *
+ *   npm run press:sync -- --no-poll --force
+ */
+const FORCE = process.argv.includes('--force')
 
 const say = (line: string) => console.log(`${DRY ? '[dry] ' : ''}${line}`)
 
@@ -53,8 +65,6 @@ function client(): SupabaseClient {
   // the scoping and the thing that makes the write work at all.
   return pressDb(OWNER_ACCOUNT_ID)
 }
-
-const sameOrder = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i])
 
 // ── 1. Pull the running order the website is showing ─────────────────────────
 
@@ -123,13 +133,40 @@ function poll(): void {
 
 // ── 3. Rebuild only when the PDFs no longer match the draft ──────────────────
 
-async function rebuildIfStale(): Promise<boolean> {
+/**
+ * Which issues it is safe to re-render, according to Postgres.
+ *
+ * Not `.press/state.json`, which is the question this answers instead of. The
+ * disk can say an issue is a draft while the database has it `ordered` — they
+ * drift, that drift is the whole reason this script exists — and rendering
+ * over an ordered issue replaces the exact two objects a Lulu job is pointing
+ * at. The database is authoritative about state for the same reason the
+ * website is authoritative about order: it is where the change is made.
+ */
+async function buildable(db: SupabaseClient): Promise<Set<number>> {
+  const { data, error } = await db.from('press_issues').select('number,state')
+  if (error) throw new Error(`buildable: ${error.message}`)
+  return new Set(
+    ((data ?? []) as { number: number; state: string }[])
+      .filter((i) => i.state === 'open')
+      .map((i) => i.number),
+  )
+}
+
+async function rebuildIfStale(db: SupabaseClient): Promise<boolean> {
   const state = JSON.parse(await readFile(path.join(ROOT, 'state.json'), 'utf8')) as PressState
   const settings = loadSettings()
+  const open = await buildable(db)
   let built = false
 
   for (const draft of state.issues ?? []) {
     if (draft.state === 'ordered') continue
+    // A locked, approved, ordered or shipped issue is frozen against the PDFs
+    // it was frozen with. Unlock it first if it really needs re-rendering.
+    if (!open.has(draft.number)) {
+      say(`issue ${draft.number}: not a draft — leaving its PDFs alone`)
+      continue
+    }
 
     const dir = path.join(ROOT, `issue-${draft.number}`)
     let builtOrder: string[] = []
@@ -142,7 +179,7 @@ async function rebuildIfStale(): Promise<boolean> {
       // Never built.
     }
 
-    if (existsSync(path.join(dir, 'interior.pdf')) && sameOrder(draft.itemIds, builtOrder)) {
+    if (!FORCE && existsSync(path.join(dir, 'interior.pdf')) && sameOrder(draft.itemIds, builtOrder)) {
       say(`issue ${draft.number}: PDFs are current`)
       continue
     }
@@ -205,8 +242,8 @@ async function main(): Promise<void> {
   say('2/4 polling for new reading…')
   poll()
 
-  say('3/4 rebuilding if anything moved…')
-  await rebuildIfStale()
+  say(FORCE ? '3/4 rebuilding every draft…' : '3/4 rebuilding if anything moved…')
+  await rebuildIfStale(db)
 
   say('4/4 pushing back to the website…')
   push()
