@@ -94,10 +94,16 @@ export async function unlockIssue(
   return data as PressIssue
 }
 
-/** Rename by hand. Free until the issue locks; see plan question 3. */
+/**
+ * Rename by hand. Free until the issue locks; see plan question 3.
+ *
+ * `null` clears the name, so the next compose names the issue afresh — the
+ * route trims first, and an empty answer is a request for a new one rather
+ * than a request for an issue called "".
+ */
 export async function renameIssue(
   issueId: string,
-  name: string,
+  name: string | null,
   db: SupabaseClient,
 ): Promise<void> {
   const { error } = await db

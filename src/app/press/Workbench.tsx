@@ -52,6 +52,7 @@ import {
   Lock,
   LockOpen,
   Package,
+  Pencil,
   Plus,
   RefreshCw,
   Sparkles,
@@ -546,6 +547,45 @@ export function Workbench(props: Props) {
   // Stable, because `track` closes over it for the length of a render and a
   // fresh identity every keystroke would mean a fresh `track` mid-poll.
   const refresh = useCallback(() => startTransition(() => router.refresh()), [router, startTransition])
+
+  /**
+   * Rename a draft by hand. The build named it once, with a model, and the
+   * person whose issue it is gets the last word — until lock, where the name
+   * is frozen with everything else (plan question 3).
+   *
+   * An empty name clears it, and the next rebuild names the issue again.
+   * Resolves to whether the server took it, so the title knows whether to
+   * leave edit mode.
+   */
+  const rename = useCallback(
+    async (number: number, name: string): Promise<boolean> => {
+      setError(null)
+      setNote(null)
+      const res = await fetch(`/api/press/issue/${number}/name`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name }),
+      })
+      const body = await readJson<{ name: string | null }>(res)
+      if (!res.ok) {
+        setError(body.error ?? 'Could not rename that.')
+        return false
+      }
+      const taken = body.name ?? `Issue ${number}`
+      setIssues((all) => all.map((i) => (i.number === number ? { ...i, name: taken } : i)))
+      const built = issues.find((i) => i.number === number)?.built
+      setNote(
+        body.name === null
+          ? `Cleared — the next rebuild will name it.${built ? ' The PDF on file still carries the old name.' : ''}`
+          : built
+            ? 'Renamed. The PDF on file still carries the old name; rebuild — or lock — to put this one on the cover.'
+            : 'Renamed.',
+      )
+      refresh()
+      return true
+    },
+    [issues, refresh],
+  )
 
   const newIssue = async () => {
     setBusy(true)
@@ -1104,6 +1144,7 @@ export function Workbench(props: Props) {
               sheet={issue.hasCover ? sheet : 'interior'}
               previewOpen={previewOpen}
               onRemove={(itemId) => returnToPool(issue, itemId)}
+              onRename={(name) => rename(issue.number, name)}
             />
           ) : (
             <p className="text-muted-foreground rounded-lg border border-dashed p-10 text-center text-sm">
@@ -1247,6 +1288,7 @@ function IssuePanel({
   sheet,
   previewOpen,
   onRemove,
+  onRename,
 }: {
   issue: WorkbenchIssue
   editable: boolean
@@ -1260,6 +1302,8 @@ function IssuePanel({
   previewOpen: boolean
   /** Send one article back to the pool, by id. */
   onRemove: (itemId: string) => void
+  /** Give the issue a name of your own. Resolves to whether the server took it. */
+  onRename: (name: string) => Promise<boolean>
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: 'issue', disabled: !editable })
 
@@ -1272,7 +1316,7 @@ function IssuePanel({
           on file, which only a build changes. Then how many times this has
           been printed, which is what says a reorder is a reorder. */}
       <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h2 className="font-serif text-2xl">{issue.name}</h2>
+        <IssueTitle issue={issue} editable={editable && !locked} onRename={onRename} />
         <p className="text-muted-foreground text-xs">
           Issue {issue.number} · {STATE_LABEL[issue.state] ?? issue.state} ·{' '}
           <span className="text-foreground tabular-nums">{issue.pages}pp</span> of articles ·{' '}
@@ -1577,6 +1621,110 @@ function Reasons({ reasons, heading }: { reasons: string[]; heading?: string }) 
  * matched its contents — looked exactly like the ones that did not. Here the
  * order is the order they are used in: fill it, build it, freeze it, print it.
  */
+/**
+ * The issue's name, and the way to change it.
+ *
+ * A pencil beside the title rather than a form in the right-hand column: the
+ * name is the one thing on the workbench that is *about* the issue and not an
+ * action on it, and it should be edited where it is read. Enter or blur saves,
+ * Escape puts back what was there, and an empty field is allowed — it asks
+ * the next build to name the issue again.
+ *
+ * Only a moving draft can be renamed; once locked, the name is frozen with the
+ * contents it describes, and the pencil goes away rather than saying no.
+ */
+function IssueTitle({
+  issue,
+  editable,
+  onRename,
+}: {
+  issue: WorkbenchIssue
+  editable: boolean
+  onRename: (name: string) => Promise<boolean>
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(issue.name)
+  const [busy, setBusy] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  // Escape after a blur-save is the one order of events that would save twice.
+  const settledRef = useRef(false)
+
+  useEffect(() => {
+    if (editing) inputRef.current?.select()
+  }, [editing])
+
+  const start = () => {
+    settledRef.current = false
+    setDraft(issue.name)
+    setEditing(true)
+  }
+
+  const cancel = () => {
+    settledRef.current = true
+    setEditing(false)
+  }
+
+  const save = async () => {
+    if (settledRef.current || busy) return
+    settledRef.current = true
+    // The same name is not a rename, and the fallback title is not a name.
+    if (draft.trim() === issue.name || (draft.trim() === '' && issue.name === `Issue ${issue.number}`)) {
+      setEditing(false)
+      return
+    }
+    setBusy(true)
+    try {
+      const ok = await onRename(draft)
+      if (ok) setEditing(false)
+      else settledRef.current = false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => void save()}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            void save()
+          } else if (e.key === 'Escape') {
+            e.preventDefault()
+            cancel()
+          }
+        }}
+        disabled={busy}
+        maxLength={48}
+        aria-label="Issue name"
+        placeholder={`Issue ${issue.number}`}
+        className={`${FIELD} h-10 max-w-md font-serif text-2xl`}
+      />
+    )
+  }
+
+  return (
+    <span className="flex min-w-0 items-baseline gap-2">
+      <h2 className="font-serif text-2xl">{issue.name}</h2>
+      {editable && (
+        <button
+          type="button"
+          onClick={start}
+          aria-label="Rename issue"
+          title="Rename"
+          className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 self-center rounded p-1 focus-visible:ring-3 focus-visible:outline-none"
+        >
+          <Pencil className="size-4" />
+        </button>
+      )}
+    </span>
+  )
+}
+
 function IssueActions({
   issue,
   editable,
