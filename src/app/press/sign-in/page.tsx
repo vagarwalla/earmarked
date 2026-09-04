@@ -10,6 +10,8 @@ import { pressUiEnabled } from '@/lib/press/local'
 import { runningLocally, signedInAccount } from '@/lib/press/auth'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import SignInForm from './SignInForm'
+import OwnerKeyForm from './OwnerKeyForm'
+import { ownerDoorExists } from './actions'
 
 export const dynamic = 'force-dynamic'
 
@@ -52,6 +54,10 @@ export default async function SignInPage({
         </p>
       )}
       <SignInForm />
+      {/* Only where there is a key to hold. With PRESS_OWNER_KEY unset the
+          door does not exist, and advertising one that cannot be opened is
+          worse than showing nothing. */}
+      {(await ownerDoorExists()) && <OwnerKeyForm />}
     </main>
   )
 }
