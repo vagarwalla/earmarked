@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { parseGoodreadsUserId, parseGoodreadsShelfFromUrl, fetchShelves } from '@/lib/goodreadsShelf'
+import {
+  parseGoodreadsUserId,
+  parseGoodreadsShelfFromUrl,
+  fetchShelves,
+  GoodreadsError,
+} from '@/lib/goodreadsShelf'
 
-// Every account has these even if neither scraped page lists them
+// Every account has these even if the profile page lists none of them
 const DEFAULT_SHELVES = ['read', 'currently-reading', 'to-read']
 
 export async function GET(req: NextRequest) {
@@ -22,16 +27,26 @@ export async function GET(req: NextRequest) {
   try {
     let shelves = await fetchShelves(userId)
     if (shelves.length === 0) {
-      // Page layouts changed or shelves not listed — offer the built-in shelves
+      // Profile loaded but listed no shelves — layout changed, or the shelves
+      // are hidden. The built-in three exist on every account, so offer those.
       shelves = DEFAULT_SHELVES.map((name) => ({ name, count: -1 }))
     }
     if (requestedShelf && !shelves.some((s) => s.name === requestedShelf)) {
       shelves = [{ name: requestedShelf, count: -1 }, ...shelves]
     }
     return NextResponse.json({ userId, shelves, requestedShelf })
-  } catch {
+  } catch (err) {
+    // A missing profile is final: the shelf feeds are gated the same way, so
+    // offering shelves here would only push the dead end one screen later.
+    if (err instanceof GoodreadsError && err.reason === 'not-found') {
+      return NextResponse.json(
+        { error: `Goodreads has no public profile at ID ${userId}. Check the URL, and that your profile is set to public.` },
+        { status: 404 }
+      )
+    }
     if (requestedShelf) {
-      // Shelf pages unreachable but the URL already tells us which shelf to load
+      // Goodreads is flaky but the URL already names the shelf — the RSS feed
+      // is a separate surface and may well answer.
       return NextResponse.json({
         userId,
         shelves: [{ name: requestedShelf, count: -1 }],

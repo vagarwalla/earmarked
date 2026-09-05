@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { CartItem } from '@/lib/types'
-import type { GoodreadsShelf, GoodreadsShelfBook } from '@/lib/goodreadsShelf'
+import { IMPORT_BATCH_SIZE, type GoodreadsShelf, type GoodreadsShelfBook } from '@/lib/goodreadsShelf'
 
 const PROFILE_KEY = 'earmarked:goodreads-profile'
 
@@ -35,6 +35,7 @@ export function GoodreadsImport({ slug, existingTitles, onImported }: Props) {
   const [shelfName, setShelfName] = useState<string | null>(null)
   const [books, setBooks] = useState<GoodreadsShelfBook[]>([])
   const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [imported, setImported] = useState(0)
 
   const existingSet = new Set(existingTitles.map(normTitle))
 
@@ -108,30 +109,58 @@ export function GoodreadsImport({ slug, existingTitles, onImported }: Props) {
     })
   }
 
+  /**
+   * Import in batches. Matching each book against Open Library takes seconds, so
+   * a whole shelf in one request would outrun the server's timeout and lose the
+   * lot. Each batch is committed on its own: a failure part-way keeps the books
+   * already added rather than rolling back the shelf.
+   */
   async function handleImport() {
     const chosen = books.filter((_, i) => selected.has(i))
     if (chosen.length === 0) return
     setStep('importing')
     setError(null)
-    try {
-      const res = await fetch('/api/goodreads/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ slug, books: chosen }),
-      })
-      const data = await res.json()
-      if (!res.ok) {
-        setError(data?.error ?? 'Import failed')
-        setStep('books')
+    setImported(0)
+
+    const added: CartItem[] = []
+    for (let i = 0; i < chosen.length; i += IMPORT_BATCH_SIZE) {
+      const batch = chosen.slice(i, i + IMPORT_BATCH_SIZE)
+      try {
+        const res = await fetch('/api/goodreads/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slug, books: batch }),
+        })
+        const data = await res.json()
+        if (!res.ok) {
+          finishImport(added, data?.error ?? 'Import failed')
+          return
+        }
+        added.push(...data.items)
+        setImported(added.length)
+      } catch {
+        finishImport(added, 'Import failed — try again')
         return
       }
-      onImported(data.items)
-      toast.success(`${data.items.length} book${data.items.length !== 1 ? 's' : ''} imported from Goodreads`)
-      setOpen(false)
-    } catch {
-      setError('Import failed — try again')
-      setStep('books')
     }
+    finishImport(added, null)
+  }
+
+  /** Hand back whatever made it in, then either close or report where it stopped. */
+  function finishImport(added: CartItem[], failure: string | null) {
+    if (added.length > 0) onImported(added)
+
+    if (!failure) {
+      toast.success(`${added.length} book${added.length !== 1 ? 's' : ''} imported from Goodreads`)
+      setOpen(false)
+      return
+    }
+
+    setError(added.length > 0 ? `${failure} — stopped after ${added.length} book${added.length !== 1 ? 's' : ''}` : failure)
+    // Drop what already landed so a retry doesn't add it twice
+    setBooks((prev) => prev.filter((b) => !added.some((item) => normTitle(item.title) === normTitle(b.title))))
+    setSelected(new Set())
+    setStep('books')
   }
 
   const selectedCount = selected.size
@@ -281,6 +310,9 @@ export function GoodreadsImport({ slug, existingTitles, onImported }: Props) {
             <div className="py-8 flex flex-col items-center gap-3 text-muted-foreground">
               <Loader2 className="h-6 w-6 animate-spin" />
               <p className="text-sm">Matching books and adding them to your stack…</p>
+              <p className="text-xs tabular-nums">
+                {imported} of {selectedCount} added
+              </p>
             </div>
           )}
         </DialogContent>

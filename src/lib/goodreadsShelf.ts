@@ -3,11 +3,18 @@
 // Goodreads retired their public API in 2020, but every public profile still
 // exposes its shelves through two stable, unauthenticated surfaces:
 //   1. The profile page (https://www.goodreads.com/user/show/{id}) lists the
-//      user's shelves with counts in server-rendered HTML.
+//      user's shelves — default and custom — with counts in server-rendered HTML.
 //   2. Each shelf has an RSS feed (https://www.goodreads.com/review/list_rss/{id}?shelf={name})
 //      with up to 100 books per page, including title, author, ISBN, and cover.
 // This module parses both. The profile must be public (not private) for either
 // to work.
+//
+// The My Books page (/review/list/{id}) used to be a third source, and a richer
+// one, but Goodreads now redirects it to a sign-in wall for signed-out callers.
+// It answers 200 with a login form and no shelves, so reading it was not just
+// useless but actively harmful: a "successful" empty parse made a missing or
+// private profile look like a reachable one with no shelves. Only the profile
+// page is read now, and its 404 is the signal that a profile can't be had.
 
 export interface GoodreadsShelf {
   name: string
@@ -30,6 +37,30 @@ const UA_HEADERS = {
 
 const RSS_PAGE_SIZE = 100
 export const MAX_SHELF_BOOKS = 500
+
+/**
+ * Books sent to the import endpoint per request. Resolving a book against Open
+ * Library costs seconds and cannot be parallelised away (see the import route),
+ * so a whole shelf in one POST would outrun any serverless timeout; the client
+ * posts batches of this size in sequence instead, and keeps what already
+ * landed if a later batch fails. Shared so the client chunks to exactly what
+ * the server accepts.
+ */
+export const IMPORT_BATCH_SIZE = 25
+
+/**
+ * Why a shelf lookup failed, so the caller can tell "we could not reach
+ * Goodreads" (worth retrying) from "there is no public profile at that ID"
+ * (retrying will not help — the profile is private, or the ID is wrong).
+ */
+export type GoodreadsFailure = 'unreachable' | 'not-found'
+
+export class GoodreadsError extends Error {
+  constructor(readonly reason: GoodreadsFailure) {
+    super(reason)
+    this.name = 'GoodreadsError'
+  }
+}
 
 /**
  * Extract a numeric Goodreads user ID from raw input: a bare ID ("12345"),
@@ -75,14 +106,12 @@ const INVISIBLE_MARKS = /[\u200a-\u200f\u2060\ufeff]|&lrm;|&rlm;/g
  * <a href="?tag=sociology">sociology</a> <span>(23)</span>
  */
 export function parseShelvesFromHtml(html: string): GoodreadsShelf[] {
-  const shelves: GoodreadsShelf[] = []
-  const seen = new Set<string>()
+  const shelves = new Map<string, GoodreadsShelf>()
   const re = /<a[^>]*href="[^"]*[?&](?:shelf|tag)=([\w%.+~-]+)[^"]*"[^>]*>([\s\S]*?)<\/a>/g
   let m: RegExpExecArray | null
   while ((m = re.exec(html)) !== null) {
     const name = decodeURIComponent(m[1].replace(/\+/g, ' '))
-    if (!name || name.startsWith('#') || seen.has(name)) continue
-    seen.add(name)
+    if (!name || name.startsWith('#')) continue
     // Count is either inside the label ("sociology (23)") or shortly after the
     // anchor — but never past the next link, which belongs to another shelf
     const after = html.slice(re.lastIndex, re.lastIndex + 80).split(/<a[\s>]/)[0]
@@ -90,9 +119,16 @@ export function parseShelvesFromHtml(html: string): GoodreadsShelf[] {
       .replace(INVISIBLE_MARKS, '')
       .replace(/<[^>]*>/g, ' ')
     const countMatch = windowText.match(/\((\d[\d,]*)\)/)
-    shelves.push({ name, count: countMatch ? parseInt(countMatch[1].replace(/,/g, ''), 10) : -1 })
+    const count = countMatch ? parseInt(countMatch[1].replace(/,/g, ''), 10) : -1
+
+    // A shelf is usually linked more than once — the page nav links it bare and
+    // the shelf list links it with a count. Keep the first sighting's position
+    // but take a count from whichever sighting actually carries one.
+    const existing = shelves.get(name)
+    if (!existing) shelves.set(name, { name, count })
+    else if (existing.count < 0 && count >= 0) existing.count = count
   }
-  return shelves
+  return [...shelves.values()]
 }
 
 /** Read the text content of an XML tag, unwrapping CDATA. Returns null when absent/empty. */
@@ -176,38 +212,23 @@ export function parseRssOwnerName(xml: string): string | null {
  * pages are unreachable.
  */
 export async function fetchShelves(userId: string): Promise<GoodreadsShelf[]> {
-  const urls = [
-    `https://www.goodreads.com/review/list/${userId}`,
-    `https://www.goodreads.com/user/show/${userId}`,
-  ]
-  const results = await Promise.allSettled(
-    urls.map(async (url) => {
-      const res = await fetch(url, {
-        headers: UA_HEADERS,
-        signal: AbortSignal.timeout(10000),
-        next: { revalidate: 300 },
-      })
-      if (!res.ok) throw new Error(`Goodreads returned ${res.status} for ${url}`)
-      return parseShelvesFromHtml(await res.text())
+  let res: Response
+  try {
+    res = await fetch(`https://www.goodreads.com/user/show/${userId}`, {
+      headers: UA_HEADERS,
+      signal: AbortSignal.timeout(10000),
+      next: { revalidate: 300 },
     })
-  )
-
-  if (results.every((r) => r.status === 'rejected')) {
-    throw new Error('Goodreads unreachable')
+  } catch {
+    throw new GoodreadsError('unreachable')
   }
 
-  const merged = new Map<string, GoodreadsShelf>()
-  for (const r of results) {
-    if (r.status !== 'fulfilled') continue
-    for (const shelf of r.value) {
-      const existing = merged.get(shelf.name)
-      // Prefer whichever source knew the count
-      if (!existing || (existing.count < 0 && shelf.count >= 0)) {
-        merged.set(shelf.name, shelf)
-      }
-    }
-  }
-  return [...merged.values()]
+  // Goodreads 404s both a profile that never existed and one set to private,
+  // and gives no way to tell them apart from the outside.
+  if (res.status === 404) throw new GoodreadsError('not-found')
+  if (!res.ok) throw new GoodreadsError('unreachable')
+
+  return parseShelvesFromHtml(await res.text())
 }
 
 /**

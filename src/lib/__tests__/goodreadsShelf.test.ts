@@ -135,6 +135,16 @@ describe('parseShelvesFromHtml', () => {
     expect(shelves.find((s) => s.name === 'summer reads')?.count).toBe(-1)
   })
 
+  it('takes the count from a later sighting when the first link is bare', () => {
+    // Real profiles link the built-in shelves twice: once bare in the page nav,
+    // once with a count in the shelf list. Keeping only the first left the most
+    //-used shelves showing no count at all.
+    const html = `
+      <a href="/review/list/12345?shelf=read">My Books</a>
+      <a href="/review/list/12345?shelf=read">read&lrm; (628)</a>`
+    expect(parseShelvesFromHtml(html)).toEqual([{ name: 'read', count: 628 }])
+  })
+
   it('returns empty for HTML with no shelf links', () => {
     expect(parseShelvesFromHtml('<html><body>private profile</body></html>')).toEqual([])
   })
@@ -223,39 +233,48 @@ describe('parseRssOwnerName', () => {
 // ── fetchShelves ──────────────────────────────────────────────────────────────
 
 describe('fetchShelves', () => {
-  it('merges shelves from both pages, preferring known counts', async () => {
-    const fetchMock = vi.fn().mockImplementation((url: string) => {
-      if (url.includes('/review/list/')) return Promise.resolve({ ok: true, text: async () => MYBOOKS_HTML })
-      return Promise.resolve({ ok: true, text: async () => PROFILE_HTML })
-    })
+  it('reads the profile page, and only the profile page', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => PROFILE_HTML })
     vi.stubGlobal('fetch', fetchMock)
 
     const { fetchShelves } = await import('../goodreadsShelf')
     const shelves = await fetchShelves('12345')
-    const names = shelves.map((s) => s.name)
-    // Custom shelves from My Books + profile-only shelves both present
-    expect(names).toContain('sociology')
-    expect(names).toContain('favorites')
-    expect(names).toContain('currently-reading')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0][0]).toBe('https://www.goodreads.com/user/show/12345')
+    expect(shelves.map((s) => s.name)).toEqual(['read', 'currently-reading', 'to-read', 'favorites'])
     expect(shelves.find((s) => s.name === 'read')?.count).toBe(142)
   })
 
-  it('still works when one page is unreachable', async () => {
-    const fetchMock = vi.fn().mockImplementation((url: string) => {
-      if (url.includes('/review/list/')) return Promise.resolve({ ok: true, text: async () => MYBOOKS_HTML })
-      return Promise.resolve({ ok: false, status: 403 })
-    })
-    vi.stubGlobal('fetch', fetchMock)
+  it('reports a 404 as not-found, because a private profile 404s the same way', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404 }))
+    const { fetchShelves, GoodreadsError } = await import('../goodreadsShelf')
 
-    const { fetchShelves } = await import('../goodreadsShelf')
-    const shelves = await fetchShelves('12345')
-    expect(shelves.map((s) => s.name)).toContain('sociology')
+    const err = await fetchShelves('12345').catch((e) => e)
+    expect(err).toBeInstanceOf(GoodreadsError)
+    expect(err.reason).toBe('not-found')
   })
 
-  it('throws when both pages are unreachable', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404 }))
+  it('reports any other bad status as unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }))
     const { fetchShelves } = await import('../goodreadsShelf')
-    await expect(fetchShelves('12345')).rejects.toThrow()
+
+    const err = await fetchShelves('12345').catch((e) => e)
+    expect(err.reason).toBe('unreachable')
+  })
+
+  it('reports a network failure as unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ETIMEDOUT')))
+    const { fetchShelves } = await import('../goodreadsShelf')
+
+    const err = await fetchShelves('12345').catch((e) => e)
+    expect(err.reason).toBe('unreachable')
+  })
+
+  it('returns no shelves rather than throwing when the page lists none', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => '<html>hi</html>' }))
+    const { fetchShelves } = await import('../goodreadsShelf')
+    expect(await fetchShelves('12345')).toEqual([])
   })
 })
 
