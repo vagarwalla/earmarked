@@ -54,7 +54,7 @@ import { archiveIssue } from '../src/lib/press/archive'
 import { refreshOrders } from '../src/lib/press/orders'
 import { sendWeeklyDigest } from '../src/lib/press/digest'
 import { getObject } from '../src/lib/press/db'
-import { claimJob, reapStaleJobs } from '../src/lib/press/jobs'
+import { claimJob, noteWorkerAlive, reapStaleJobs } from '../src/lib/press/jobs'
 import { runComposeJob } from '../src/lib/press/run-job'
 import type { Article, LinkpostTarget, PressItem } from '../src/lib/press/types'
 
@@ -260,6 +260,13 @@ async function layoutExtracted(): Promise<number> {
  * issues does not wait thirty seconds between them.
  */
 async function runJobs(): Promise<void> {
+  // Before claiming, not after: this is the loop that runs every ten seconds
+  // whether or not there is work, so it is the honest place to say the machine
+  // exists. The website asks this before it queues anything — without it a
+  // press whose worker is not running accepts the button, waits forever, and
+  // leaves a row that blocks the next press too.
+  await noteWorkerAlive(db(), 'compose', { pid: process.pid })
+
   for (;;) {
     const job = await claimJob(db())
     if (!job) return

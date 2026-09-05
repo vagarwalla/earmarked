@@ -51,6 +51,52 @@ export async function enqueueCompose(
   return data as PressJob
 }
 
+/**
+ * How long a renderer may go quiet before the website stops believing in it.
+ *
+ * The worker touches its row on the job loop, which runs every ten seconds
+ * whether or not there is anything to claim. Five minutes is thirty missed
+ * beats — far past a slow poll or a restart, and far short of leaving a button
+ * refusing after the machine has come back.
+ */
+const WORKER_STALE_MS = 5 * 60 * 1000
+
+/** The renderer saying it is here. Called on the loop, not on the work. */
+export async function noteWorkerAlive(
+  db: SupabaseClient,
+  id = 'compose',
+  detail?: Record<string, unknown>,
+): Promise<void> {
+  const { error } = await db
+    .from('press_workers')
+    .upsert({ id, last_seen_at: new Date().toISOString(), detail: detail ?? null })
+  // A heartbeat that will not write must not stop the renderer from rendering.
+  // The cost of it failing is that the website starts refusing to queue, which
+  // is the safe direction to be wrong in.
+  if (error) console.error(`press/jobs: noteWorkerAlive: ${error.message}`)
+}
+
+/**
+ * Is there a machine that will actually pick a job up?
+ *
+ * Asked before enqueueing, because a queue nobody serves is worse than a
+ * refusal: the refusal tells you to go and use the laptop, while the queue
+ * looks like progress, waits forever, and then blocks the button behind the
+ * row it left. See the plan in 022's migration.
+ *
+ * An unreadable heartbeat counts as no renderer, for the same reason.
+ */
+export async function rendererAlive(db: SupabaseClient, id = 'compose'): Promise<boolean> {
+  const { data, error } = await db
+    .from('press_workers')
+    .select('last_seen_at')
+    .eq('id', id)
+    .maybeSingle()
+  if (error || !data) return false
+  const seen = Date.parse((data as { last_seen_at: string }).last_seen_at)
+  return Number.isFinite(seen) && Date.now() - seen < WORKER_STALE_MS
+}
+
 /** Claim the oldest queued job, or null when there is nothing to do. */
 export async function claimJob(db: SupabaseClient): Promise<PressJob | null> {
   const { data, error } = await db.rpc('press_claim_job')
