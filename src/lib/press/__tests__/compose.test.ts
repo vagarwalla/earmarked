@@ -414,13 +414,7 @@ describe('buildCoverHtml', () => {
   })
 
   it('puts the issue ground on the cover it renders', () => {
-    const html = buildCoverHtml({
-      issueName: 'A Test',
-      issueNumber: 5,
-      pageCount: 140,
-      dateRange: 'Aug 2026',
-      toc: [{ title: 'One', page: 2 }],
-    })
+    const html = buildCoverHtml({ ...base, issueNumber: 5, pageCount: 140 })
     expect(html).toContain(`--bg: ${groundFor(5)}`)
     expect(html).not.toContain('{{GROUND}}')
   })
