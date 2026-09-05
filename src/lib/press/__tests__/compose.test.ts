@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { PDFDocument } from 'pdf-lib'
 import {
   tocMeta,
@@ -61,7 +62,14 @@ function article(title: string, paras = 3): Article {
 }
 
 function item(over: Partial<PressItem> = {}): PressItem {
-  return {
+  // A named, typed base rather than one literal: spreading a `Partial<T>`
+  // over a `T` widens every field the partial declares back to `| undefined`,
+  // so the result stops being a `T`. Annotating the base keeps the literal
+  // contextually typed, and Object.assign keeps the override behaviour.
+  const base: PressItem = {
+    // Owned, as every press row has been since migration 018. The factories
+    // carry it so a test row is the shape the database actually stores.
+    owner_id: '00000000-0000-0000-0000-000000000001',
     id: `item-${Math.random().toString(36).slice(2, 8)}`,
     url: 'https://example.com/a',
     url_key: 'example.com/a',
@@ -85,12 +93,23 @@ function item(over: Partial<PressItem> = {}): PressItem {
     linkpost_scanned_at: null,
     created_at: '2026-08-01T00:00:00Z',
     updated_at: '2026-08-01T00:00:00Z',
-    ...over,
   }
+  return Object.assign(base, over)
 }
 
 function issue(over: Partial<PressIssue> = {}): PressIssue {
-  return {
+  // A named, typed base rather than one literal: spreading a `Partial<T>`
+  // over a `T` widens every field the partial declares back to `| undefined`,
+  // so the result stops being a `T`. Annotating the base keeps the literal
+  // contextually typed, and Object.assign keeps the override behaviour.
+  const base: PressIssue = {
+    // Owned, as every press row has been since migration 018. The factories
+    // carry it so a test row is the shape the database actually stores.
+    owner_id: '00000000-0000-0000-0000-000000000001',
+    // Private until deliberately shared; the row has no implicit default,
+    // so neither does the factory.
+    visibility: 'private',
+    shared_at: null,
     id: 'iss1',
     number: 3,
     state: 'closed',
@@ -114,8 +133,8 @@ function issue(over: Partial<PressIssue> = {}): PressIssue {
     shipped_at: null,
     approval_sent_at: null,
     updated_at: '2026-08-01T00:00:00Z',
-    ...over,
   }
+  return Object.assign(base, over)
 }
 
 const policy = { pageThreshold: 100, maxIssueAgeWeeks: 8 }
@@ -582,14 +601,22 @@ describe('nameIssue', () => {
 // ── loadEntries ──────────────────────────────────────────────────────────────
 
 describe('loadEntries', () => {
+  // Both cases refuse before any query, which is the point of the test: a
+  // half-ingested item is caught from the row alone rather than by a storage
+  // read that comes back empty. So there is nothing for a client to do.
+  const unusedDb = {} as SupabaseClient
+
   it('reports an item with no extracted article instead of printing blanks', async () => {
-    const { entries, skipped } = await loadEntries([item({ content_path: null })], {})
+    const { entries, skipped } = await loadEntries([item({ content_path: null })], { db: unusedDb })
     expect(entries).toHaveLength(0)
     expect(skipped[0].reason).toMatch(/no extracted article/)
   })
 
   it('reports a pdf item with no fragment', async () => {
-    const { skipped } = await loadEntries([item({ source: 'pdf', content_path: null, fragment_path: null })], {})
+    const { skipped } = await loadEntries(
+      [item({ source: 'pdf', content_path: null, fragment_path: null })],
+      { db: unusedDb },
+    )
     expect(skipped[0].reason).toMatch(/no fragment/)
   })
 })

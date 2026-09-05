@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   createLuluClient,
   formatQuote,
@@ -94,7 +95,18 @@ function settings(over: Partial<PressSettings> = {}): PressSettings {
 }
 
 function issue(over: Partial<PressIssue> = {}): PressIssue {
-  return {
+  // A named, typed base rather than one literal: spreading a `Partial<T>`
+  // over a `T` widens every field the partial declares back to `| undefined`,
+  // so the result stops being a `T`. Annotating the base keeps the literal
+  // contextually typed, and Object.assign keeps the override behaviour.
+  const base: PressIssue = {
+    // Owned, as every press row has been since migration 018. The factories
+    // carry it so a test row is the shape the database actually stores.
+    owner_id: '00000000-0000-0000-0000-000000000001',
+    // Private until deliberately shared; the row has no implicit default,
+    // so neither does the factory.
+    visibility: 'private',
+    shared_at: null,
     id: 'iss1',
     number: 3,
     state: 'closed',
@@ -118,8 +130,8 @@ function issue(over: Partial<PressIssue> = {}): PressIssue {
     shipped_at: null,
     approval_sent_at: null,
     updated_at: '2026-08-30T00:00:00Z',
-    ...over,
   }
+  return Object.assign(base, over)
 }
 
 /** A fetch that answers Lulu's auth call and then whatever the test supplies. */
@@ -578,16 +590,27 @@ describe('approval email', () => {
 })
 
 describe('sendMail', () => {
+  // `sendMail` reaches for a client only to load settings it was not given,
+  // and both of these hand it settings — so a working client here would be
+  // dead weight that also hid which argument the behaviour depends on.
+  const unusedDb = {} as SupabaseClient
+
   it('refuses to send while the mail settings are incomplete', async () => {
     await expect(
-      sendMail({ subject: 's', html: 'h' }, { settings: settings({ resendApiKey: '' }) }),
+      sendMail(
+        { subject: 's', html: 'h' },
+        { db: unusedDb, settings: settings({ resendApiKey: '' }) },
+      ),
     ).rejects.toThrow(/RESEND_API_KEY/)
   })
 
   it('surfaces a provider failure so the tick can retry', async () => {
     const fetchImpl = vi.fn(async () => new Response('nope', { status: 422 }))
     await expect(
-      sendMail({ subject: 's', html: 'h' }, { settings: settings(), fetchImpl: fetchImpl as never }),
+      sendMail(
+        { subject: 's', html: 'h' },
+        { db: unusedDb, settings: settings(), fetchImpl: fetchImpl as never },
+      ),
     ).rejects.toThrow(/422/)
   })
 })

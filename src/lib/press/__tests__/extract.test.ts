@@ -276,11 +276,110 @@ describe('comment threads', () => {
     expect(dom.window.document.body.textContent).not.toContain('a reply')
   })
 
-  it('keeps the article when a stray selector cannot be parsed', () => {
-    // stripExternalReferences must never take an extraction down with it.
-    const dom = parseHtml('<body><p>kept</p></body>')
-    expect(() => stripExternalReferences(dom.window.document.body)).not.toThrow()
-    expect(dom.window.document.body.innerHTML).toContain('kept')
+  /**
+   * The shapes real sites wrap a thread in. Each of these has put comments
+   * into a printed issue, or would have: the EA Forum and LessWrong hyphenate
+   * and camel-case, Substack has its own, WordPress numbers its ids, and the
+   * embedded widgets (Disqus, giscus, utterances) name themselves.
+   *
+   * One test per shape rather than one big page, so a regression names the
+   * markup it stopped catching.
+   */
+  const THREADS: [name: string, markup: string][] = [
+    ['a bare #comments section', '<section id="comments">REPLY</section>'],
+    ['LessWrong\u2019s CommentsListSection', '<div class="CommentsListSection">REPLY</div>'],
+    ['the EA Forum\u2019s comment-body', '<div class="comment-body">REPLY</div>'],
+    ['a striped reply row', '<div class="bg-comment-even">REPLY</div>'],
+    ['an underscored class', '<div class="comment_wrap">REPLY</div>'],
+    ['a WordPress comment id', '<li id="comment-4821">REPLY</li>'],
+    ['Disqus', '<div id="disqus_thread">REPLY</div>'],
+    ['giscus', '<div class="giscus">REPLY</div>'],
+    ['utterances', '<div class="utterances">REPLY</div>'],
+    ['a testid a framework left behind', '<div data-testid="CommentThread">REPLY</div>'],
+    ['a labelled region', '<section aria-label="Comments">REPLY</section>'],
+  ]
+
+  const reply = 'A reader replies at length and at length again. '.repeat(60)
+  const body = '<p>Article body long enough to clear the minimum length check. </p>'.repeat(12)
+
+  for (const [name, markup] of THREADS) {
+    it(`does not print ${name}`, async () => {
+      const html = `<article><h1>A post</h1>${body}${markup.replace('REPLY', `<p>${reply}</p>`)}</article>`
+      const { article } = await extractFromUrl({
+        itemId: 'c-thread',
+        url: 'https://forum.example.com/posts/x',
+        deps: {
+          fetchText: async () => ({ text: html, url: 'https://forum.example.com/posts/x', status: 200 }),
+          storeImages: noImages as never,
+        },
+      })
+      const text = JSON.stringify(article)
+      expect(text).toMatch(/Article body/)
+      expect(text).not.toMatch(/A reader replies/)
+    })
+  }
+
+  it('does not let a thread in through the newsletter door either', async () => {
+    // Newsletters skip the extraction ladder entirely, so they do not go past
+    // `stripCommentSections`. `stripExternalReferences` carries the same
+    // selectors for exactly this reason, and that is what this holds down.
+    const html = `<body><h1>A newsletter</h1>${body}
+      <section id="comments"><div class="comment"><p>${reply}</p></div></section></body>`
+    const { article } = await extractFromNewsletterHtml({
+      itemId: 'c-nl',
+      html,
+      deps: { storeImages: noImages as never },
+    })
+    const text = JSON.stringify(article)
+    expect(text).toMatch(/Article body/)
+    expect(text).not.toMatch(/A reader replies/)
+  })
+
+  it('does not turn a thread into footnotes on the way out', async () => {
+    // The apparatus scan looks for a "Notes" heading followed by an ordered
+    // list, which is exactly the shape a thread with a "Notes" aside has. If
+    // the comments survived long enough to be scanned they would print as the
+    // article's own notes, which is a worse failure than printing them as
+    // prose: they would carry numbers and look authored.
+    const html = `<article><h1>A post</h1>${body}
+      <section id="comments">
+        <h2>Notes</h2>
+        <ol><li>${reply}</li></ol>
+      </section></article>`
+    const { article } = await extractFromUrl({
+      itemId: 'c-notes',
+      url: 'https://forum.example.com/posts/x',
+      deps: {
+        fetchText: async () => ({ text: html, url: 'https://forum.example.com/posts/x', status: 200 }),
+        storeImages: noImages as never,
+      },
+    })
+    expect(article.footnotes ?? []).toEqual([])
+    expect(JSON.stringify(article)).not.toMatch(/A reader replies/)
+  })
+
+  it('strips a thread whether it is handed a document or one element', () => {
+    // `extractFromUrl` passes the whole document and the newsletter path
+    // passes `<body>`; both have to lose the thread.
+    for (const asDocument of [true, false]) {
+      const dom = parseHtml('<body><article><p>body</p></article><div class="comment-body"><p>a reply</p></div></body>')
+      const root = asDocument ? dom.window.document : dom.window.document.body
+      stripExternalReferences(root)
+      expect(dom.window.document.body.textContent).toContain('body')
+      expect(dom.window.document.body.textContent).not.toContain('a reply')
+    }
+  })
+
+  it('does not mistake commentary for comments', () => {
+    // The selectors match on the separator precisely so that words which
+    // merely begin with "comment" are left alone.
+    const dom = parseHtml(
+      '<body><div class="commentary"><p>a reading of the text</p></div>' +
+        '<p class="commented">an annotated line</p></body>',
+    )
+    stripCommentSections(dom.window.document)
+    expect(dom.window.document.body.textContent).toContain('a reading of the text')
+    expect(dom.window.document.body.textContent).toContain('an annotated line')
   })
 })
 
