@@ -40,6 +40,7 @@ import {
 } from './db'
 import { loadSettings, type PressSettings } from './settings'
 import { archiveCollectionName, nameIssue } from './naming'
+import { GROUNDS, INKS, fallbackBrief, rampFor, type CoverBrief } from './art-direction'
 import {
   buildArticleSection,
   buildDocument,
@@ -333,6 +334,12 @@ export interface CoverOptions {
   /** Free line printed under the masthead — see `issueDateline`. */
   dateRange: string
   toc: TocEntry[]
+  /**
+   * The colours and composition, chosen from the contents by `chooseCover`.
+   * Omitted, the issue number picks one — which is what every cover used to
+   * do, and is still what a press with no API key gets.
+   */
+  brief?: CoverBrief
 }
 
 /**
@@ -348,39 +355,6 @@ export const COVER_PALETTE = [
   '#2B4C9B', // ultramarine
   '#1E7F6B', // viridian
 ] as const
-
-/**
- * The ground each cover is printed on — one per palette colour, in the same
- * order, so an issue's paper and its art come from the same pair.
- *
- * Hand-picked rather than mixed from the accent. Tinting toward white by
- * formula turns a saturated ink muddy at these lightnesses — crimson goes
- * pink, viridian goes mint — and the register wanted here is the one the art
- * magazines use: a ground you read as paper first and colour second, so the
- * shelf reads as one series in eight shades rather than eight magazines.
- *
- * All of them are held above L*88 so the deep warm ink still carries the type,
- * and none is more than a few percent saturated. The first is the original
- * cream, which is why issue 1 looks unchanged.
- */
-export const COVER_GROUNDS = [
-  '#F4F1EA', // cream — the original paper
-  '#F3E8DF', // pale clay
-  '#F2E6E6', // dusty rose
-  '#ECE8EE', // pale lilac
-  '#E7ECF3', // soft blue-grey
-  '#E5EDE7', // pale sage
-] as const
-
-/**
- * The ground for one issue. Offset by one against `paletteFor`, so an issue
- * never sits its own accent's ground under its own accent — the cream backs
- * the marigold issue, the clay backs the persimmon one, and so on round.
- */
-export function groundFor(issueNumber: number): string {
-  const n = COVER_GROUNDS.length
-  return COVER_GROUNDS[((Math.trunc(issueNumber) - 1) % n + n) % n]
-}
 
 /**
  * The palette rotated by the issue number, so consecutive issues do not come
@@ -536,6 +510,17 @@ export function coverArtFor(issueNumber: number, colors: string[]): CoverArt {
 }
 
 /**
+ * One composition by name, which is how the art direction asks for it.
+ *
+ * The names are the contract between `FIGURES` and the drawings; an unknown
+ * one falls back to the first rather than throwing, because a cover that
+ * cannot be drawn must not be the reason an issue cannot be printed.
+ */
+export function coverArtByName(name: string, colors: string[]): CoverArt {
+  return (COVER_ARTS.map((f) => f(colors)).find((a) => a.name === name) ?? COVER_ARTS[0](colors))
+}
+
+/**
  * Set the issue title at a size that still fits the panel. Measured against
  * the 7" trim less both safety margins; the thresholds are character counts
  * because there is no text metric available at build time.
@@ -597,9 +582,12 @@ export function buildCoverHtml(opts: CoverOptions): string {
   // it shrinks with the spine instead of overflowing onto the faces.
   const spineTextHeight = Math.max(spineTextHeightPt(opts.pageCount), 4)
 
-  const colors = paletteFor(opts.issueNumber)
-
-  const art = coverArtFor(opts.issueNumber, colors)
+  // Two or three colours chosen for what the issue is about, not six rotated
+  // by its number. See art-direction.ts, which holds the rules and the brief.
+  const brief = opts.brief ?? fallbackBrief(opts.issueNumber)
+  const colors = rampFor(brief.scheme, 6, opts.issueNumber)
+  const art = coverArtByName(brief.figure.name, colors)
+  const ground = GROUNDS[brief.scheme.ground]
 
   const values: Record<string, string> = {
     ART_STYLE: art.css,
@@ -607,8 +595,12 @@ export function buildCoverHtml(opts: CoverOptions): string {
     // The accent picks up the first colour of this issue's rotation, so the
     // rules and the spine numeral belong to the same palette as the art.
     ACCENT: colors[0],
-    GROUND: groundFor(opts.issueNumber),
-    PALETTE_BAND: colors.map((c) => `<span style="background:${c}"></span>`).join(''),
+    GROUND: ground,
+    // The band on the back reprises the cover's own colours, so it says which
+    // issue this is rather than showing the whole palette on every one.
+    PALETTE_BAND: brief.scheme.inks
+      .map((ink) => `<span style="background:${INKS[ink]}"></span>`)
+      .join(''),
     COVER_WIDTH: width.toFixed(2),
     COVER_HEIGHT: height.toFixed(2),
     SPINE_WIDTH: spine.toFixed(2),

@@ -36,6 +36,7 @@ import { nameIssue } from './naming'
 import { cleanTitle } from './title'
 import { PRESS_ROOT, measuredPagesFor, recordMeasuredPages } from './issues'
 import { measurementKey } from './measure'
+import { chooseCover } from './art-direction'
 import type { Article, PressItem, TocEntry } from './types'
 
 /** The per-article facts a build needs; a subset of what state.json holds. */
@@ -270,9 +271,18 @@ export async function buildIssue(opts: BuildOptions): Promise<BuildResult> {
 
   // The spine width depends on the finished page count, so the cover can only
   // be drawn once the interior is final.
-  progress('Rendering the cover')
+  //
+  // The colours and the composition are chosen from the contents, not from the
+  // issue number — two or three inks that suit what the issue is about. See
+  // art-direction.ts for the rules and the brief they are stated in. It falls
+  // back to a rotation on its own if there is no key or the call fails, so
+  // this never becomes a reason an issue cannot be printed.
+  progress('Art-directing the cover')
+  const brief = await chooseCover({ issueNumber: number, issueName: name, toc, apiKey })
+  progress(`Rendering the cover — ${brief.scheme.name}, ${brief.figure.name}`)
   const cover = await render(
     buildCoverHtml({
+      brief,
       issueName: name,
       issueNumber: number,
       pageCount,
