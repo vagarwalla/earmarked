@@ -50,14 +50,15 @@
           "DejaVu Sans", sans-serif;
       }
 
-      /* Ink on paper, so the colour in the art is the only colour on the
-         spread and does not have to fight a coloured ground. The soft/faint
+      /* Ink on a ground that changes with the issue — a few percent of colour,
+         never enough to compete with the art, so a shelf of these reads as one
+         series in several shades rather than several magazines. The soft/faint
          steps are written out rather than derived, because colour-mix() is not
          safe to assume in the render browser. The accent is this issue's first
          palette colour, so the rules and the spine numeral belong to the same
          set as the art. */
       body {
-        --bg: var(--paper);
+        --bg: {{GROUND}};
         --fg: var(--ink);
         --fg-soft: rgba(20, 22, 26, 0.56);
         --fg-faint: rgba(20, 22, 26, 0.18);
