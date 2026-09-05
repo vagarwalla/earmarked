@@ -349,6 +349,39 @@ export const COVER_PALETTE = [
 ] as const
 
 /**
+ * The ground each cover is printed on — one per palette colour, in the same
+ * order, so an issue's paper and its art come from the same pair.
+ *
+ * Hand-picked rather than mixed from the accent. Tinting toward white by
+ * formula turns a saturated ink muddy at these lightnesses — crimson goes
+ * pink, viridian goes mint — and the register wanted here is the one the art
+ * magazines use: a ground you read as paper first and colour second, so the
+ * shelf reads as one series in eight shades rather than eight magazines.
+ *
+ * All of them are held above L*88 so the deep warm ink still carries the type,
+ * and none is more than a few percent saturated. The first is the original
+ * cream, which is why issue 1 looks unchanged.
+ */
+export const COVER_GROUNDS = [
+  '#F4F1EA', // cream — the original paper
+  '#F3E8DF', // pale clay
+  '#F2E6E6', // dusty rose
+  '#ECE8EE', // pale lilac
+  '#E7ECF3', // soft blue-grey
+  '#E5EDE7', // pale sage
+] as const
+
+/**
+ * The ground for one issue. Offset by one against `paletteFor`, so an issue
+ * never sits its own accent's ground under its own accent — the cream backs
+ * the marigold issue, the clay backs the persimmon one, and so on round.
+ */
+export function groundFor(issueNumber: number): string {
+  const n = COVER_GROUNDS.length
+  return COVER_GROUNDS[((Math.trunc(issueNumber) - 1) % n + n) % n]
+}
+
+/**
  * The palette rotated by the issue number, so consecutive issues do not come
  * out the same colour. Deterministic: the same issue always prints the same.
  */
@@ -573,6 +606,7 @@ export function buildCoverHtml(opts: CoverOptions): string {
     // The accent picks up the first colour of this issue's rotation, so the
     // rules and the spine numeral belong to the same palette as the art.
     ACCENT: colors[0],
+    GROUND: groundFor(opts.issueNumber),
     PALETTE_BAND: colors.map((c) => `<span style="background:${c}"></span>`).join(''),
     COVER_WIDTH: width.toFixed(2),
     COVER_HEIGHT: height.toFixed(2),
