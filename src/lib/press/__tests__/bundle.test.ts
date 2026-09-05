@@ -90,6 +90,32 @@ describe('quoteBundle', () => {
     expect(result.quote?.totalCents).toBe(851 + 758)
   })
 
+  /**
+   * There was a cap of six issues per parcel, and it existed to bound this
+   * fan-out rather than the order — so the cap went and the fan-out stayed
+   * bounded. A large selection still gets the price it is actually paying;
+   * what it loses is the comparison, which is a flourish, not the purchase.
+   */
+  it('stops shopping the bundle around once the selection is large', async () => {
+    const lulu = pricedLulu()
+    const result = await quoteBundle(Array.from({ length: 9 }, () => line()), address, lulu as never)
+
+    expect(lulu.quote).toHaveBeenCalledTimes(1)
+    expect(result.quote?.totalCents).toBe(851 * 9 + 758)
+    expect(result.separateTotalCents).toBeNull()
+    expect(result.savingCents).toBeNull()
+    // Still allocated, because the order rows are written from these.
+    expect(result.perIssueCents).toHaveLength(9)
+  })
+
+  it('still compares a selection right up to the limit', async () => {
+    const lulu = pricedLulu()
+    const result = await quoteBundle(Array.from({ length: 6 }, () => line()), address, lulu as never)
+
+    expect(lulu.quote).toHaveBeenCalledTimes(7)
+    expect(result.savingCents).toBe(758 * 5)
+  })
+
   it('splits the parcel over the issues so the shares sum to the total', async () => {
     const lulu = pricedLulu()
     const result = await quoteBundle([line(), line(), line()], address, lulu as never)

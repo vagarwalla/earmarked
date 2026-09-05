@@ -15,10 +15,27 @@
  * That is N+1 calls to price N issues, which is worth it exactly here:
  * `/print-job-cost-calculations/` costs nothing and creates nothing, and this
  * is the one screen where the saving is the decision.
+ *
+ * Worth it up to a point. The comparison is the optional half — the bundled
+ * quote is the one the reader is actually buying — so past `COMPARE_LIMIT`
+ * issues only that one is asked for, and the saving line is simply absent.
+ * There used to be a cap of six issues per parcel to stop a large selection
+ * turning this into a dozen round trips; the cap was the wrong half to limit,
+ * because it refused the order rather than the flourish attached to it.
  */
 
 import type { LuluClient, QuoteLine, ShippingAddress } from './lulu'
 import { allocateQuote, type PrintQuote } from './types'
+
+/**
+ * How many issues still get the "against ordering them separately" comparison.
+ *
+ * Above this the dialog shows what the parcel costs and stops there. Six is
+ * where the fan-out stops being one screen's latency and starts being a burst
+ * at somebody else's API — and a selection that large is a batch somebody
+ * means to send, not a choice they are still weighing.
+ */
+const COMPARE_LIMIT = 6
 
 export interface BundleQuote {
   /** The job as it would be placed: every issue, one parcel. */
@@ -68,10 +85,12 @@ export async function quoteBundle(
   // the reader is waiting on all of them. A bundle of one skips the
   // comparison entirely: there is no second parcel to not pay for, and
   // quoting the same job twice to prove a saving of zero is a round trip
-  // spent to render nothing.
+  // spent to render nothing. A very large one skips it too — see
+  // COMPARE_LIMIT above the file.
+  const compare = lines.length > 1 && lines.length <= COMPARE_LIMIT
   const [bundled, ...separate] = await Promise.allSettled([
     lulu.quote(lines, address),
-    ...(lines.length > 1 ? lines.map((line) => lulu.quote(line, address)) : []),
+    ...(compare ? lines.map((line) => lulu.quote(line, address)) : []),
   ])
 
   if (bundled.status === 'rejected') {
