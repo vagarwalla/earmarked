@@ -286,6 +286,31 @@ By some distance the largest file in the subsystem, and the only place where
 with a lot of local state, splitting it is a design decision rather than a
 cleanup, and none of the rest of this work needed to touch it.
 
+### 9. `cost.ts` is fitted to a stock the press stopped printing on
+
+Added to `main` after this audit (`d5de96d`, 2026-09-05), so it was never in
+its scope; noted here because it is the same class of drift the audit was
+looking for, and because the note is cheap while the fitting is fresh.
+
+Its header says the constants come from real quotes for "7×10 full colour,
+80# coated … the package this press actually prints". The package is
+`0700X1000.FC.STD.PB.060UW444.GXX` — `060UW`, 60# uncoated — and has been
+since 2026-09-01; `types.ts` records the move, and `package.test.ts` asserts
+the decoded name. So either the probes were taken against the old package id,
+or the header describes the right quotes wrongly.
+
+It matters less than it looks. `types.ts` puts the two stocks $0.83 apart on a
+106-page issue, against a total nearer $10, and the module exists to compare
+*arrangements of the same articles* — a per-page offset shifts every candidate
+alike and barely moves which layout wins. The file also says plainly it is
+never for telling anyone what they will be charged.
+
+Left alone because settling it needs a live Lulu calculator, which this
+environment has no credentials for. Whoever took the probes can say in a
+minute which it was: if the quotes were for the current package, correct the
+header; if not, re-probe against `060UW444` and refit. `PAGE_CENTS` is the
+one to watch — it multiplies by a few hundred.
+
 ---
 
 ## Verification
