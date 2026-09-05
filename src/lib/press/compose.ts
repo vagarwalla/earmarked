@@ -40,7 +40,7 @@ import {
 } from './db'
 import { loadSettings, type PressSettings } from './settings'
 import { archiveCollectionName, nameIssue } from './naming'
-import { GROUNDS, INKS, fallbackBrief, rampFor, type CoverBrief } from './art-direction'
+import { INKS, fallbackBrief, groundFor, rampFor, type CoverBrief } from './art-direction'
 import {
   buildArticleSection,
   buildDocument,
@@ -585,9 +585,9 @@ export function buildCoverHtml(opts: CoverOptions): string {
   // Two or three colours chosen for what the issue is about, not six rotated
   // by its number. See art-direction.ts, which holds the rules and the brief.
   const brief = opts.brief ?? fallbackBrief(opts.issueNumber)
-  const colors = rampFor(brief.scheme, 6, opts.issueNumber)
+  const colors = rampFor(brief.scheme, 6, opts.issueNumber, opts.issueName)
   const art = coverArtByName(brief.figure.name, colors)
-  const ground = GROUNDS[brief.scheme.ground]
+  const ground = groundFor(brief.scheme, opts.issueName)
 
   const values: Record<string, string> = {
     ART_STYLE: art.css,

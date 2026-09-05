@@ -75,7 +75,15 @@ export interface Scheme {
   /** What this scheme is for, in the words the chooser sees. */
   suits: string
   inks: InkName[]
-  ground: InkName | 'plain'
+  /**
+   * The grounds this scheme may be printed on, any of which sits happily
+   * under its inks. Several rather than one, because the subject picks the
+   * scheme and several issues legitimately share a subject — a shelf where
+   * four issues about systems are four identical blue-grey covers is accurate
+   * and useless to look at. Which one an issue takes is decided by its number,
+   * so the variety is deterministic and a rebuild never moves a cover.
+   */
+  grounds: (InkName | 'plain')[]
 }
 
 export const SCHEMES: Scheme[] = [
@@ -83,43 +91,43 @@ export const SCHEMES: Scheme[] = [
     name: 'ember',
     suits: 'heat, urgency, damage, things going wrong — disease, war, crisis, collapse',
     inks: ['persimmon', 'crimson'],
-    ground: 'persimmon',
+    grounds: ['persimmon', 'marigold', 'crimson', 'plain'],
   },
   {
     name: 'archive',
     suits: 'history, institutions, bureaucracy, the state, the twentieth century',
     inks: ['crimson', 'plum'],
-    ground: 'crimson',
+    grounds: ['crimson', 'plum', 'marigold', 'plain'],
   },
   {
     name: 'cold',
     suits: 'systems, planning, machinery, computation, measurement, economics',
     inks: ['ultramarine', 'plum'],
-    ground: 'ultramarine',
+    grounds: ['ultramarine', 'plum', 'viridian', 'plain'],
   },
   {
     name: 'field',
     suits: 'nature, medicine, biology, growth, agriculture, the living world',
     inks: ['viridian', 'marigold'],
-    ground: 'viridian',
+    grounds: ['viridian', 'marigold', 'ultramarine', 'plain'],
   },
   {
     name: 'daylight',
     suits: 'optimism, invention, progress, building things, wealth, energy',
     inks: ['marigold', 'persimmon'],
-    ground: 'marigold',
+    grounds: ['marigold', 'persimmon', 'viridian', 'plain'],
   },
   {
     name: 'study',
     suits: 'writing, art, interiority, essays, criticism, quiet reflection',
     inks: ['plum', 'marigold'],
-    ground: 'plum',
+    grounds: ['plum', 'crimson', 'ultramarine', 'plain'],
   },
   {
     name: 'depth',
     suits: 'science, distance, the very large or very small, space, the sea, abstraction',
     inks: ['ultramarine', 'viridian'],
-    ground: 'ultramarine',
+    grounds: ['ultramarine', 'viridian', 'plum', 'plain'],
   },
 ]
 
@@ -243,11 +251,47 @@ const SHADE = '#14161A'
  * third colour. That is what makes a two-ink cover look composed instead of
  * either garish or empty.
  */
-export function rampFor(scheme: Scheme, length = 6, rotate = 0): string[] {
+/**
+ * A small non-linear hash, so neighbouring inputs land far apart.
+ *
+ * The ground used to be `issueNumber % grounds.length`, which collides in the
+ * one case that matters: four issues about systems all choose `cold`, and any
+ * linear map sends 1 and 4 — or 5 and 8 — to the same paper. The shelf came
+ * out in matched pairs. A hash of the *name* has no such structure, and every
+ * issue's name is already unique and already frozen at lock.
+ */
+function spread(seed: string): number {
+  let h = 0x811c9dc5
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h >>> 0
+}
+
+/**
+ * Which ground this issue prints on, out of the ones its scheme allows.
+ *
+ * Keyed on the issue's name so a shelf of same-scheme issues still has
+ * different paper under it, and so a rebuild of an issue is always the same
+ * cover. Falls back to the number for a cover with no name yet.
+ */
+export function groundFor(scheme: Scheme, seed: string | number = 0): string {
+  const n = scheme.grounds.length
+  const i = typeof seed === 'string' && seed ? spread(seed) % n : ((Math.trunc(Number(seed)) % n) + n) % n
+  return GROUNDS[scheme.grounds[i]]
+}
+
+export function rampFor(
+  scheme: Scheme,
+  length = 6,
+  rotate = 0,
+  seed: string | number = rotate,
+): string[] {
   const [a, b] = scheme.inks
   const A = INKS[a]
   const B = INKS[b]
-  const ground = GROUNDS[scheme.ground]
+  const ground = groundFor(scheme, seed)
   const tones = [
     A,
     B,

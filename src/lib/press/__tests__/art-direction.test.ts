@@ -11,6 +11,7 @@ import {
   FIGURES,
   GROUNDS,
   INKS,
+  groundFor,
   SCHEMES,
   chooseCover,
   coverBriefPrompt,
@@ -66,6 +67,39 @@ describe('the palette', () => {
         expect(Math.min(...inkHues.map((ih) => apart(h, ih)))).toBeLessThanOrEqual(90)
       }
     }
+  })
+
+  /**
+   * A shelf of same-scheme issues must not be a shelf of identical covers.
+   * Several of these issues are about systems and correctly choose the same
+   * scheme; the ground is what keeps them apart when stacked.
+   */
+  it('offers all of a scheme\'s grounds, and cycles through them by number', () => {
+    for (const scheme of SCHEMES) {
+      const seen = new Set(scheme.grounds.map((_, n) => groundFor(scheme, n)))
+      expect(seen.size).toBe(scheme.grounds.length)
+    }
+  })
+
+  /**
+   * The point of hashing the name rather than the number: four issues about
+   * systems all choose `cold`, and `issueNumber % grounds.length` sent 1 and 4
+   * — and 5 and 8 — to the same paper, so the shelf came out in matched pairs.
+   */
+  it('spreads real issue names across the grounds instead of pairing them', () => {
+    const cold = SCHEMES.find((s) => s.name === 'cold')!
+    const names = ['Effective Uncertainty', 'Hard to Count', 'Soviet Systems and Failures', 'The Record of Trying']
+    const seen = new Set(names.map((n) => groundFor(cold, n)))
+    expect(seen.size).toBeGreaterThanOrEqual(3)
+  })
+
+  it('always gives one issue the same ground, so a rebuild never moves a cover', () => {
+    const s = SCHEMES[0]
+    expect(groundFor(s, 'Hard to Count')).toBe(groundFor(s, 'Hard to Count'))
+  })
+
+  it('offers every scheme more than one ground to print on', () => {
+    for (const scheme of SCHEMES) expect(scheme.grounds.length).toBeGreaterThan(1)
   })
 
   /**
@@ -167,7 +201,7 @@ describe('buildCoverHtml with a brief', () => {
     const html = buildCoverHtml({
       brief, issueName: 'The Planned Century', issueNumber: 5, pageCount: 154, dateRange: 'Sep 2026', toc,
     })
-    expect(html).toContain(`--bg: ${GROUNDS.cold ?? GROUNDS[brief.scheme.ground]}`)
+    expect(html).toContain(`--bg: ${groundFor(brief.scheme, 'The Planned Century')}`)
     expect(html).toContain('data-art="nested"')
     // The back band reprises this cover's inks, not the whole palette.
     expect(html).toContain(INKS.ultramarine)
