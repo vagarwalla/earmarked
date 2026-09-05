@@ -44,6 +44,12 @@ export interface StateItem {
   title: string | null
   state: ItemState
   pageCount?: number
+  /**
+   * The key `pageCount` was measured under — stylesheet, template and article
+   * content, per `measure.ts`. Absent means "measured before this existed",
+   * which is treated as unusable rather than assumed current.
+   */
+  measuredWith?: string
   reason?: string
   savedAt: string
   /**
@@ -221,14 +227,41 @@ export function selectForIssue(state: PressState | null, threshold: number): Sta
  * disk wrong, and by ~30% in the case of the plate-sizing change. `buildIssue`
  * re-measures on every build; this is where those numbers land.
  */
-export async function recordMeasuredPages(measured: Map<string, number>): Promise<void> {
+export async function recordMeasuredPages(
+  measured: Map<string, { pages: number; key?: string }>,
+): Promise<void> {
   if (measured.size === 0) return
   await withStateLock((state) => {
     for (const item of state.items) {
-      const pages = measured.get(item.id)
-      if (pages !== undefined) item.pageCount = pages
+      const m = measured.get(item.id)
+      if (!m) continue
+      item.pageCount = m.pages
+      // Written together, always. A count saved without its key would be
+      // reused forever; a key saved without its count would name nothing.
+      if (m.key !== undefined) item.measuredWith = m.key
+      else delete item.measuredWith
     }
   })
+}
+
+/**
+ * What the disk already knows about these articles' lengths.
+ *
+ * Read once at the top of a build, so deciding what to measure costs one file
+ * read rather than one per article.
+ */
+export async function measuredPagesFor(
+  ids: readonly string[],
+): Promise<Map<string, { pages: number; key: string }>> {
+  const state = await readState()
+  const want = new Set(ids)
+  const out = new Map<string, { pages: number; key: string }>()
+  for (const item of state?.items ?? []) {
+    if (!want.has(item.id)) continue
+    if (item.pageCount === undefined || item.measuredWith === undefined) continue
+    out.set(item.id, { pages: item.pageCount, key: item.measuredWith })
+  }
+  return out
 }
 
 /** The order an issue prints in: whatever it is, with every linkpost's children behind it. */
