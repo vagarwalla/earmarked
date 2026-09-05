@@ -36,7 +36,7 @@ import { nameIssue } from './naming'
 import { cleanTitle } from './title'
 import { PRESS_ROOT, measuredPagesFor, recordMeasuredPages } from './issues'
 import { measurementKey } from './measure'
-import { chooseCover } from './art-direction'
+import { chooseCover, contentsKey, type StoredBrief } from './art-direction'
 import type { Article, PressItem, TocEntry } from './types'
 
 /** The per-article facts a build needs; a subset of what state.json holds. */
@@ -55,6 +55,12 @@ export interface IssueMeta {
   builtAt: string
   preflight: { code: string; detail: string }[]
   articles: BuildItem[]
+  /**
+   * How this issue's cover was directed, and for which contents. Kept so a
+   * rebuild reproduces the same cover rather than asking the model again and
+   * getting a different, equally reasonable answer.
+   */
+  art?: StoredBrief
 }
 
 export interface BuildResult {
@@ -278,7 +284,16 @@ export async function buildIssue(opts: BuildOptions): Promise<BuildResult> {
   // back to a rotation on its own if there is no key or the call fails, so
   // this never becomes a reason an issue cannot be printed.
   progress('Art-directing the cover')
-  const brief = await chooseCover({ issueNumber: number, issueName: name, toc, apiKey })
+  // What this issue was directed as last time, if it has been built before.
+  let previous: StoredBrief | undefined
+  try {
+    previous = (
+      JSON.parse(await readFile(path.join(root, `issue-${number}`, 'meta.json'), 'utf8')) as IssueMeta
+    ).art
+  } catch {
+    // Never built, or built before covers were directed. Either way, choose.
+  }
+  const brief = await chooseCover({ issueNumber: number, issueName: name, toc, apiKey, previous })
   progress(`Rendering the cover — ${brief.scheme.name}, ${brief.figure.name}`)
   const cover = await render(
     buildCoverHtml({
@@ -310,6 +325,7 @@ export async function buildIssue(opts: BuildOptions): Promise<BuildResult> {
     // The freshly measured lengths, not the ones that came in: the caller's
     // copy is what the *previous* layout produced.
     articles: items.map((i, n) => ({ id: i.id, title: i.title, url: i.url, pageCount: pageCounts[n] })),
+    art: { scheme: brief.scheme.name, figure: brief.figure.name, of: contentsKey(toc) },
   }
   await writeFile(path.join(outDir, 'meta.json'), JSON.stringify(meta, null, 2))
 
