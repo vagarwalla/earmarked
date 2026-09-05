@@ -291,6 +291,10 @@ describe('comment threads', () => {
     ['the EA Forum\u2019s comment-body', '<div class="comment-body">REPLY</div>'],
     ['a striped reply row', '<div class="bg-comment-even">REPLY</div>'],
     ['an underscored class', '<div class="comment_wrap">REPLY</div>'],
+    // The three the separator-anchored rules used to miss entirely.
+    ['WordPress\u2019s comments-area', '<div class="comments-area">REPLY</div>'],
+    ['a comments-section', '<div class="comments-section">REPLY</div>'],
+    ['an underscored plural', '<div class="comments_wrapper">REPLY</div>'],
     ['a WordPress comment id', '<li id="comment-4821">REPLY</li>'],
     ['Disqus', '<div id="disqus_thread">REPLY</div>'],
     ['giscus', '<div class="giscus">REPLY</div>'],
@@ -324,7 +328,7 @@ describe('comment threads', () => {
     // `stripCommentSections`. `stripExternalReferences` carries the same
     // selectors for exactly this reason, and that is what this holds down.
     const html = `<body><h1>A newsletter</h1>${body}
-      <section id="comments"><div class="comment"><p>${reply}</p></div></section></body>`
+      <div class="comments-area"><p>${reply}</p></div></body>`
     const { article } = await extractFromNewsletterHtml({
       itemId: 'c-nl',
       html,
