@@ -54,6 +54,10 @@ export async function POST(req: NextRequest) {
   }
 
   const force: boolean = body.force === true
+  // `ai: false` stops at the perceptual-hash tier. It is what the deal search
+  // uses to rank a work's editions by likeness to the chosen cover: a near-exact
+  // hash match is enough for that, and it avoids a model call per book probed.
+  const useAi: boolean = body.ai !== false
   const coverUrls: string[] = [...new Set((body.coverUrls as string[]).map(normalize))]
 
   // 1. Fetch cached hashes
@@ -110,7 +114,7 @@ export async function POST(req: NextRequest) {
   //    This catches cases dHash misses (same cover from different sources, Hamming > 3)
   let finalClusters = tier1Clusters
 
-  if (clusterReps.length >= 2) {
+  if (useAi && clusterReps.length >= 2) {
     const key = groupCacheKey(clusterReps)
 
     // Check Supabase cache (skipped when force=true)

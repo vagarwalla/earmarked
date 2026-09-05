@@ -653,3 +653,101 @@ describe('findShippingRelaxSuggestions', () => {
     expect(result[1].itemId).toBe('i1')
   })
 })
+
+// ── chooseAutoFix ─────────────────────────────────────────────────────────────
+
+import { chooseAutoFix, describeAutoFix, type EditionOption } from '../relaxation'
+
+function makeOption(overrides: Partial<EditionOption> & { isbn: string }): EditionOption {
+  return {
+    edition: makeEdition({ isbn: overrides.isbn, publisher: 'Penguin', publish_year: 2001 }),
+    count: 1,
+    cheapest: 5,
+    cheapestCondition: 'good',
+    newConditions: ['good'],
+    addedLabels: [],
+    sameCover: false,
+    ...overrides,
+  }
+}
+
+describe('chooseAutoFix', () => {
+  const conditionFix = { type: 'condition' as const, newConditions: ['good', 'fair'] as Condition[], addedLabels: ['Fair'], count: 2 }
+
+  it('takes a looser condition on the chosen cover before anything else', () => {
+    const fix = chooseAutoFix({
+      suggestion: conditionFix,
+      nearMiss: null,
+      coverOptions: [makeOption({ isbn: 'x', sameCover: true })],
+      probeDone: false,
+    })
+    expect(fix).toMatchObject({ kind: 'condition', addedLabels: ['Fair'] })
+  })
+
+  it('takes the same cover under another ISBN as soon as it appears, at the reader\'s conditions', () => {
+    const fix = chooseAutoFix({
+      suggestion: null,
+      nearMiss: null,
+      coverOptions: [makeOption({ isbn: 'other', cheapest: 2 }), makeOption({ isbn: 'same', sameCover: true, cheapest: 9 })],
+      probeDone: false,
+    })
+    expect(fix).toMatchObject({ kind: 'cover', option: { isbn: 'same' } })
+  })
+
+  it('waits for the sweep to finish before settling for a different cover', () => {
+    const options = [makeOption({ isbn: 'other' })]
+    expect(chooseAutoFix({ suggestion: null, nearMiss: null, coverOptions: options, probeDone: false })).toBeNull()
+    expect(chooseAutoFix({ suggestion: null, nearMiss: null, coverOptions: options, probeDone: true }))
+      .toMatchObject({ kind: 'cover', option: { isbn: 'other' } })
+  })
+
+  it('prefers a cover with no concession over one that needs a looser condition', () => {
+    const fix = chooseAutoFix({
+      suggestion: null,
+      nearMiss: null,
+      coverOptions: [makeOption({ isbn: 'loose', addedLabels: ['Fair'], cheapest: 1 }), makeOption({ isbn: 'clean', cheapest: 8 })],
+      probeDone: true,
+    })
+    expect(fix).toMatchObject({ kind: 'cover', option: { isbn: 'clean' } })
+  })
+
+  it('lifts the price cap only when nothing else worked and the sweep is over', () => {
+    const near = { cheapestBlocked: 12.5, delta: 1.5 }
+    expect(chooseAutoFix({ suggestion: null, nearMiss: near, coverOptions: [], probeDone: false })).toBeNull()
+    expect(chooseAutoFix({ suggestion: null, nearMiss: near, coverOptions: [], probeDone: true }))
+      .toEqual({ kind: 'max_price', cheapest: 12.5 })
+    expect(chooseAutoFix({ suggestion: { type: 'max_price', count: 3 }, nearMiss: null, coverOptions: [], probeDone: true }))
+      .toEqual({ kind: 'max_price', cheapest: null })
+  })
+
+  it('gives up when there is nothing to apply', () => {
+    expect(chooseAutoFix({ suggestion: null, nearMiss: null, coverOptions: [], probeDone: true })).toBeNull()
+  })
+
+  it('describes each fix in a sentence fragment', () => {
+    expect(describeAutoFix({ kind: 'condition', newConditions: ['good', 'fair'], addedLabels: ['Fair'], count: 2 }))
+      .toBe('accepted Fair condition')
+    expect(describeAutoFix({ kind: 'cover', option: makeOption({ isbn: 's', sameCover: true }) }))
+      .toBe('used the same cover under another ISBN (Penguin 2001)')
+    expect(describeAutoFix({ kind: 'cover', option: makeOption({ isbn: 'd', addedLabels: ['Fair'] }) }))
+      .toBe('used a different cover (Penguin 2001), accepting Fair')
+    expect(describeAutoFix({ kind: 'max_price', cheapest: 12.5 })).toBe('lifted the price cap (cheapest copy $12.50)')
+  })
+})
+
+describe('findEditionOptions — same-cover ranking', () => {
+  it('puts editions sharing the chosen artwork first even when pricier', () => {
+    const item = makeItem({ id: 'a', conditions: ['good'] })
+    const editions = [
+      makeEdition({ isbn: 'cheap', cover_url: 'https://c/1.jpg' }),
+      makeEdition({ isbn: 'same', cover_url: 'https://c/2.jpg' }),
+    ]
+    const byIsbn = {
+      cheap: [makeListing({ listing_id: 'l1', isbn: 'cheap', price: 3, condition: 'Good', condition_normalized: 'good' })],
+      same: [makeListing({ listing_id: 'l2', isbn: 'same', price: 9, condition: 'Good', condition_normalized: 'good' })],
+    }
+    const options = findEditionOptions(item, editions, byIsbn, ['good'], null, 3, new Set(['same']))
+    expect(options.map((o) => o.isbn)).toEqual(['same', 'cheap'])
+    expect(options[0].sameCover).toBe(true)
+  })
+})

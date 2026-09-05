@@ -96,10 +96,15 @@ export interface EditionOption {
   cheapestCondition: Condition
   newConditions: Condition[]  // conditions needed for this edition (== current when addedLabels is empty)
   addedLabels: string[]       // e.g. ['Good'] — empty when no condition relaxation is needed
+  sameCover: boolean          // same artwork as the reader's chosen cover, under another ISBN
 }
 
-/** Cheapest-first, and prefer options that don't also require loosening condition. */
+/**
+ * Same-cover editions first, then the fewest condition concessions, then price.
+ * `sameCover` marks editions whose artwork matches the cover the reader chose.
+ */
 function compareEditionOptions(a: EditionOption, b: EditionOption): number {
+  if (a.sameCover !== b.sameCover) return a.sameCover ? -1 : 1
   if (a.addedLabels.length !== b.addedLabels.length) return a.addedLabels.length - b.addedLabels.length
   if (a.cheapest !== b.cheapest) return a.cheapest - b.cheapest
   return b.edition.popularity_score - a.edition.popularity_score
@@ -123,6 +128,7 @@ export function findEditionOptions(
   conditions: Condition[],
   maxPrice: number | null,
   limit = 3,
+  sameCoverIsbns: ReadonlySet<string> = new Set(),
 ): EditionOption[] {
   const missing = CONDITION_ORDER.filter((c) => !conditions.includes(c))
   const bestByCover = new Map<string, EditionOption>()
@@ -155,6 +161,7 @@ export function findEditionOptions(
       cheapestCondition: cheapest.condition_normalized,
       newConditions,
       addedLabels,
+      sameCover: sameCoverIsbns.has(edition.isbn),
     }
 
     const coverKey = edition.cover_url ?? `isbn:${edition.isbn}`
@@ -321,4 +328,64 @@ export function findCheaperSuggestion(
     }
   }
   return null
+}
+
+// ── Automatic fixes for books with no sellers ────────────────────────────────
+
+export type AutoFix =
+  | { kind: 'condition'; newConditions: Condition[]; addedLabels: string[]; count: number }
+  | { kind: 'cover'; option: EditionOption }
+  | { kind: 'max_price'; cheapest: number | null }
+
+/**
+ * Decide what to change so a book with no sellers gets one, in the order a
+ * price-conscious reader would choose: a looser condition on the cover they
+ * picked, then the same artwork under another ISBN, then any other cover
+ * (at their conditions before looser ones), and only last the price cap.
+ *
+ * Returns null while a better answer may still be on its way: cover options
+ * that need a concession, and the price cap, wait for the edition sweep to
+ * finish (`probeDone`), because a later edition may need none. A same-cover
+ * match at the reader's own conditions is taken as soon as it appears — no
+ * later result can beat it.
+ */
+export function chooseAutoFix(args: {
+  suggestion: RelaxSuggestion | null
+  nearMiss: NearMissPrice | null
+  coverOptions: EditionOption[]
+  probeDone: boolean
+}): AutoFix | null {
+  const { suggestion, nearMiss, coverOptions, probeDone } = args
+
+  if (suggestion?.type === 'condition') {
+    return { kind: 'condition', newConditions: suggestion.newConditions, addedLabels: suggestion.addedLabels, count: suggestion.count }
+  }
+
+  const clean = coverOptions.filter((o) => o.addedLabels.length === 0)
+  const cleanSameCover = clean.find((o) => o.sameCover)
+  if (cleanSameCover) return { kind: 'cover', option: cleanSameCover }
+  if (probeDone && clean.length > 0) return { kind: 'cover', option: clean[0] }
+  if (!probeDone) return null
+
+  if (coverOptions.length > 0) return { kind: 'cover', option: coverOptions[0] }
+  if (suggestion?.type === 'max_price') return { kind: 'max_price', cheapest: null }
+  if (nearMiss) return { kind: 'max_price', cheapest: nearMiss.cheapestBlocked }
+  return null
+}
+
+/** One line saying what an automatic fix did, for the panel and the undo link. */
+export function describeAutoFix(fix: AutoFix): string {
+  switch (fix.kind) {
+    case 'condition':
+      return `accepted ${fix.addedLabels.join(' or ')} condition`
+    case 'cover': {
+      const { option } = fix
+      const cover = option.sameCover ? 'the same cover under another ISBN' : 'a different cover'
+      const who = [option.edition.publisher, option.edition.publish_year].filter(Boolean).join(' ')
+      const concession = option.addedLabels.length > 0 ? `, accepting ${option.addedLabels.join(' or ')}` : ''
+      return `used ${cover}${who ? ` (${who})` : ''}${concession}`
+    }
+    case 'max_price':
+      return fix.cheapest != null ? `lifted the price cap (cheapest copy $${fix.cheapest.toFixed(2)})` : 'lifted the price cap'
+  }
 }

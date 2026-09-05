@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Loader2, ExternalLink, TrendingDown, AlertCircle, ChevronDown, ChevronUp, Lightbulb, BookOpen, ShoppingCart } from 'lucide-react'
+import { Loader2, ExternalLink, TrendingDown, AlertCircle, ChevronDown, ChevronUp, Lightbulb, BookOpen, ShoppingCart, Undo2, Wand2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -15,6 +15,9 @@ import {
   findSuggestion,
   findEditionOptions,
   findRelaxedDeal,
+  chooseAutoFix,
+  describeAutoFix,
+  type AutoFix,
   findNearMissPrice,
   findShippingRelaxSuggestions,
   type EditionOption,
@@ -400,13 +403,29 @@ const SOURCE_BADGE: Record<'abe' | 'thriftbooks' | 'bwb', { label: string; class
 }
 
 
-// Alternate-cover probing for books that came up empty. Bounded on every axis
-// because /api/prices scrapes uncached ISBNs one at a time: a stack where
-// dozens of books come up empty would otherwise fan out into hundreds of
-// sequential scrapes. Books past the batch size are probed on request.
-const ALT_COVERS_PER_BOOK = 6
+// Edition sweep for books that came up empty. Every edition of the work is
+// ranked — same artwork as the chosen cover first, then popularity — and
+// probed in small chunks through the fast (AbeBooks + ThriftBooks) lookup,
+// stopping as soon as one works at the reader's own conditions. The per-book
+// cap keeps a classic with hundreds of printings from running for minutes;
+// "Browse all editions" is still there for the rest.
+const MAX_EDITIONS_PROBED_PER_BOOK = 40
+const PROBE_CHUNK = 6
 const COVER_PROBE_CONCURRENCY = 2
-const COVER_PROBE_BATCH = 20
+const COVER_PROBE_BATCH = 50
+const AUTOFIX_STORAGE_KEY = 'earmarked:autofix'
+
+function readAutoFixPreference(): boolean {
+  try { return localStorage.getItem(AUTOFIX_STORAGE_KEY) !== 'off' } catch { return true }
+}
+
+interface AutoFixRecord {
+  itemId: string
+  title: string
+  description: string
+  /** What the book's constraints were before the fix, for undo. */
+  before: { conditions: Condition[]; maxPrice: number | null; isbns: string[] | null }
+}
 
 /** The link that puts a copy in the seller's cart, or the listing page when there is none. */
 function cartLink(l: Listing): string {
@@ -474,6 +493,17 @@ export function OptimizationPanel({ items, cartSlug, onUpdateItem }: Props) {
   const [altEditions, setAltEditions] = useState<Record<string, Edition[]>>({})
   const [coverProbeStatus, setCoverProbeStatus] = useState<Record<string, 'searching' | 'done' | 'error'>>({})
   const [coverProbeBudget, setCoverProbeBudget] = useState(COVER_PROBE_BATCH)
+  // ISBNs of other editions that share the chosen cover's artwork, keyed by item id
+  const [sameCoverIsbns, setSameCoverIsbns] = useState<Record<string, string[]>>({})
+  const [probeProgress, setProbeProgress] = useState<Record<string, { checked: number; total: number; editions: number }>>({})
+  // Automatic fixes for books with no sellers: on by default, remembered per browser
+  const [autoFix, setAutoFix] = useState(true)
+  const [autoApplied, setAutoApplied] = useState<AutoFixRecord[]>([])
+  // Books already fixed (or whose fix was undone) — never touched again this search
+  const autoHandled = useRef(new Set<string>())
+  const autoRunning = useRef(false)
+  const [autoTick, setAutoTick] = useState(0)
+  useEffect(() => { setAutoFix(readAutoFixPreference()) }, [])
   // Bumped on every new search so in-flight probes from a previous run can't write stale listings
   const probeGen = useRef(0)
   // Queued item ids, tracked synchronously — state updates land too late to keep
@@ -498,6 +528,10 @@ export function OptimizationPanel({ items, cartSlug, onUpdateItem }: Props) {
     setAltEditions({})
     setCoverProbeStatus({})
     setCoverProbeBudget(COVER_PROBE_BATCH)
+    setSameCoverIsbns({})
+    setProbeProgress({})
+    setAutoApplied([])
+    autoHandled.current = new Set()
     probeGen.current++
     queuedForProbe.current = new Set()
 
@@ -589,25 +623,76 @@ export function OptimizationPanel({ items, cartSlug, onUpdateItem }: Props) {
         ...(item.isbn_preferred ? [item.isbn_preferred] : []),
         ...(item.isbns_candidates ?? []),
       ])
-      const fresh = all
-        .filter((e) => !known.has(e.isbn))
-        .sort((a, b) => b.popularity_score - a.popularity_score)
-        .slice(0, ALT_COVERS_PER_BOOK)
+      const fresh = all.filter((e) => !known.has(e.isbn))
       if (fresh.length === 0) {
         setCoverProbeStatus((prev) => ({ ...prev, [item.id]: 'done' }))
         return
       }
-      setAltEditions((prev) => ({ ...prev, [item.id]: fresh }))
 
-      const priceRes = await fetch('/api/prices', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isbns: fresh.map((e) => e.isbn) }),
-      })
-      if (!priceRes.ok) throw new Error(`price lookup failed (${priceRes.status})`)
-      const priceData: PriceResponse = await priceRes.json()
+      // Which of these editions carry the artwork the reader chose? Perceptual
+      // hashes are enough for that; no model call per book.
+      const same = new Set<string>()
+      const coverUrls = [...new Set([item.cover_url, ...fresh.map((e) => e.cover_url)].filter((u): u is string => !!u))]
+      if (item.cover_url && coverUrls.length > 1) {
+        try {
+          const hashRes = await fetch('/api/cover-hashes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ coverUrls, ai: false }),
+          })
+          if (hashRes.ok) {
+            const { clusters } = (await hashRes.json()) as { clusters: Record<string, string> }
+            const mine = clusters[item.cover_url] ?? item.cover_url
+            for (const e of fresh) {
+              if (e.cover_url && (e.cover_url === item.cover_url || (clusters[e.cover_url] ?? e.cover_url) === mine)) same.add(e.isbn)
+            }
+          }
+        } catch {
+          // Ranking only; the sweep still runs in popularity order.
+        }
+      }
       if (probeGen.current !== gen) return
-      setListingsByIsbn((prev) => ({ ...prev, ...(priceData.listings ?? {}) }))
+
+      const ranked = [...fresh]
+        .sort((a, b) => {
+          const sa = same.has(a.isbn) ? 1 : 0
+          const sb = same.has(b.isbn) ? 1 : 0
+          if (sa !== sb) return sb - sa
+          return b.popularity_score - a.popularity_score
+        })
+        .slice(0, MAX_EDITIONS_PROBED_PER_BOOK)
+      setSameCoverIsbns((prev) => ({ ...prev, [item.id]: [...same] }))
+      setAltEditions((prev) => ({ ...prev, [item.id]: ranked }))
+      setProbeProgress((prev) => ({ ...prev, [item.id]: { checked: 0, total: ranked.length, editions: fresh.length } }))
+
+      const conditions = conditionOverrides[item.id] ?? item.conditions ?? []
+      const maxPrice = item.id in maxPriceOverrides ? maxPriceOverrides[item.id] : item.max_price
+      for (let i = 0; i < ranked.length; i += PROBE_CHUNK) {
+        // A fix that no longer needs the sweep (a looser condition on the
+        // chosen cover, say) has landed for this book meanwhile.
+        if (autoHandled.current.has(item.id)) break
+        const chunk = ranked.slice(i, i + PROBE_CHUNK)
+        const priceRes = await fetch('/api/prices', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ isbns: chunk.map((e) => e.isbn), fast: true }),
+        })
+        if (!priceRes.ok) throw new Error(`price lookup failed (${priceRes.status})`)
+        const priceData: PriceResponse = await priceRes.json()
+        if (probeGen.current !== gen) return
+        const got = priceData.listings ?? {}
+        setListingsByIsbn((prev) => ({ ...prev, ...got }))
+        setProbeProgress((prev) => ({
+          ...prev,
+          [item.id]: { ...(prev[item.id] ?? { total: ranked.length, editions: fresh.length }), checked: Math.min(ranked.length, i + chunk.length) },
+        }))
+        // Stop once an edition works at the reader's own conditions — chunks
+        // run in preference order, so nothing later would be chosen over it.
+        const satisfied = chunk.some((e) =>
+          computeListings({ ...item, isbn_preferred: e.isbn, isbns_candidates: null }, got, conditions, maxPrice).length > 0,
+        )
+        if (satisfied) break
+      }
       setCoverProbeStatus((prev) => ({ ...prev, [item.id]: 'done' }))
     } catch {
       if (probeGen.current === gen) setCoverProbeStatus((prev) => ({ ...prev, [item.id]: 'error' }))
@@ -662,6 +747,66 @@ export function OptimizationPanel({ items, cartSlug, onUpdateItem }: Props) {
     }
   }
 
+  /** Apply the fix the auto-fixer chose for a book, remembering how to undo it. */
+  async function applyAutoFix(item: CartItem, fix: AutoFix) {
+    const before: AutoFixRecord['before'] = {
+      conditions: conditionOverrides[item.id] ?? item.conditions ?? [],
+      maxPrice: item.id in maxPriceOverrides ? maxPriceOverrides[item.id] : item.max_price,
+      isbns: isbnCandidateOverrides[item.id] ?? item.isbns_candidates ?? null,
+    }
+    const description = describeAutoFix(fix)
+    setAutoApplied((prev) => [...prev, { itemId: item.id, title: item.title, description, before }])
+    if (fix.kind === 'condition') {
+      await applyRelaxation(item.id, { ...conditionOverrides, [item.id]: fix.newConditions }, maxPriceOverrides)
+    } else if (fix.kind === 'cover') {
+      await applyEditionOption(item, fix.option)
+    } else {
+      await applyRelaxation(item.id, conditionOverrides, { ...maxPriceOverrides, [item.id]: null })
+    }
+    toast.message(`${item.title}: ${description}`)
+  }
+
+  /** Put a book's constraints back the way they were before its automatic fix. */
+  async function undoAutoFix(record: AutoFixRecord) {
+    setAutoApplied((prev) => prev.filter((r) => r !== record))
+    const newCondOverrides = { ...conditionOverrides, [record.itemId]: record.before.conditions }
+    const newMaxPriceOverrides = { ...maxPriceOverrides, [record.itemId]: record.before.maxPrice }
+    const newIsbnOverrides = { ...isbnCandidateOverrides, [record.itemId]: record.before.isbns ?? [] }
+    setConditionOverrides(newCondOverrides)
+    setMaxPriceOverrides(newMaxPriceOverrides)
+    setIsbnCandidateOverrides(newIsbnOverrides)
+    setRelaxing(true)
+    try {
+      const patch: Partial<CartItem> = {
+        conditions: record.before.conditions,
+        max_price: record.before.maxPrice,
+        isbns_candidates: record.before.isbns,
+      }
+      fetch(`/api/cart/${encodeURIComponent(cartSlug)}/items/${record.itemId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      }).catch(() => {})
+      onUpdateItem?.(record.itemId, patch)
+      const overriddenItems = itemsWithIsbn.map((i) => ({
+        ...i,
+        conditions: newCondOverrides[i.id] ?? i.conditions,
+        max_price: i.id in newMaxPriceOverrides ? newMaxPriceOverrides[i.id] : i.max_price,
+        isbns_candidates: newIsbnOverrides[i.id] ?? i.isbns_candidates,
+      }))
+      await updateAllResults(listingsByIsbn, overriddenItems)
+    } catch {
+      // silent
+    } finally {
+      setRelaxing(false)
+    }
+  }
+
+  function setAutoFixPreference(on: boolean) {
+    setAutoFix(on)
+    try { localStorage.setItem(AUTOFIX_STORAGE_KEY, on ? 'on' : 'off') } catch { /* private mode */ }
+  }
+
   /** Every cart link in a seller group — one per copy, so quantities come through. */
   function groupCartLinks(group: OptimizationResult['groups'][number]): string[] {
     return group.assignments.flatMap((a) => a.listings.map(cartLink))
@@ -701,17 +846,40 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
   // work (each of those probed at the user's conditions first, looser only if needed).
   const missingWithOptions = missingItems.map(({ item, conditions, maxPrice }) => {
     const suggestion = findSuggestion(item, listingsByIsbn, conditions, maxPrice)
+    const nearMiss = suggestion ? null : findNearMissPrice(item, listingsByIsbn, conditions, maxPrice)
+    const coverOptions = findEditionOptions(
+      item, altEditions[item.id] ?? [], listingsByIsbn, conditions, maxPrice, 5, new Set(sameCoverIsbns[item.id] ?? []),
+    )
+    // Books queued for this batch count as probing too, so the panel never
+    // flashes "nothing found" before their search has even started.
+    const probing = coverProbeStatus[item.id] === 'searching' || willProbe.has(item.id)
+    const probeDone = !item.work_id || coverProbeStatus[item.id] === 'done' || coverProbeStatus[item.id] === 'error'
     return {
       item,
       maxPrice,
       suggestion,
-      nearMiss: suggestion ? null : findNearMissPrice(item, listingsByIsbn, conditions, maxPrice),
-      coverOptions: findEditionOptions(item, altEditions[item.id] ?? [], listingsByIsbn, conditions, maxPrice),
-      // Books queued for this batch count as probing too, so the panel never
-      // flashes "nothing found" before their search has even started.
-      probing: coverProbeStatus[item.id] === 'searching' || willProbe.has(item.id),
+      nearMiss,
+      coverOptions,
+      probing,
+      fix: chooseAutoFix({ suggestion, nearMiss, coverOptions, probeDone }),
     }
   })
+
+  // Apply one automatic fix at a time: each re-runs the optimizer with the
+  // overrides as they stand, so two in flight would race on stale maps.
+  const autoKey = missingWithOptions.map((x) => `${x.item.id}:${x.fix?.kind ?? '-'}`).join('|')
+  useEffect(() => {
+    if (!autoFix || !searched || relaxing || autoRunning.current) return
+    const next = missingWithOptions.find(({ item, fix }) => fix && !autoHandled.current.has(item.id))
+    if (!next?.fix) return
+    autoHandled.current.add(next.item.id)
+    autoRunning.current = true
+    applyAutoFix(next.item, next.fix).finally(() => {
+      autoRunning.current = false
+      setAutoTick((t) => t + 1)
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoFix, searched, relaxing, autoKey, autoTick])
 
   const missingIdsKey = missingItems.map((x) => x.item.id).join(',')
   useEffect(() => {
@@ -750,6 +918,19 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
           : '🔍 Find Best Deals'
         }
       </Button>
+
+      <label className="flex items-start gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={autoFix}
+          onChange={(e) => setAutoFixPreference(e.target.checked)}
+        />
+        <span>
+          <span className="font-medium text-foreground">Fix books with no sellers automatically.</span>
+          {' '}Tries a looser condition on your cover first, then the same cover under another ISBN, then other covers, and lifts the price cap only as a last resort. Every change is listed with an undo.
+        </span>
+      </label>
 
       {hasUnpricedItems && (
         <p className="text-sm text-muted-foreground text-center">
@@ -1046,6 +1227,33 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
         </div>
       )}
 
+      {/* What the auto-fixer changed, each with an undo */}
+      {autoApplied.length > 0 && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 divide-y divide-blue-100">
+          <div className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-blue-800">
+            <Wand2 className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              {autoApplied.length === 1 ? '1 book' : `${autoApplied.length} books`} had no sellers, so the criteria were adjusted
+            </span>
+          </div>
+          {autoApplied.map((record) => (
+            <div key={record.itemId} className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs">
+              <span className="text-blue-900 min-w-0">
+                <span className="font-medium">{record.title}</span>: {record.description}
+              </span>
+              <button
+                disabled={relaxing}
+                onClick={() => undoAutoFix(record)}
+                className="shrink-0 flex items-center gap-1 text-blue-700 hover:text-blue-900 underline disabled:opacity-50"
+              >
+                <Undo2 className="h-3 w-3" />
+                Undo
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Books with no listings — both relaxation axes searched automatically */}
       {searched && missingItems.length > 0 && (() => {
         const anyProbing = missingWithOptions.some((m) => m.probing)
@@ -1168,10 +1376,22 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
                   </div>
                 )}
 
-                {probing && (
-                  <p className="flex items-center gap-1.5 text-xs text-amber-700">
-                    <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-                    Checking other covers of this book…
+                {probing && (() => {
+                  const progress = probeProgress[item.id]
+                  return (
+                    <p className="flex items-center gap-1.5 text-xs text-amber-700">
+                      <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                      {progress
+                        ? `Checking other editions — ${progress.checked} of ${progress.total} so far${progress.editions > progress.total ? ` (the ${progress.total} likeliest of ${progress.editions})` : ''}…`
+                        : 'Finding the other editions of this book…'}
+                    </p>
+                  )
+                })()}
+                {!probing && probeProgress[item.id] && coverOptions.length === 0 && !suggestion && (
+                  <p className="text-xs text-amber-700">
+                    Checked {probeProgress[item.id].checked} edition{probeProgress[item.id].checked !== 1 ? 's' : ''}
+                    {probeProgress[item.id].editions > probeProgress[item.id].total ? ` of ${probeProgress[item.id].editions}` : ''}
+                    {' '}with AbeBooks and ThriftBooks.
                   </p>
                 )}
 

@@ -175,3 +175,46 @@ describe('POST /api/prices', () => {
     expect(body.sources).toEqual([])
   })
 })
+
+// ── fast (probe) mode ─────────────────────────────────────────────────────────
+
+describe('fast mode', () => {
+  it('asks only the cheap sources and caches under a separate key', async () => {
+    const cache = mockCache([])
+    vi.mocked(fetchListingsByISBN).mockResolvedValue(ok([makeListing('111', 5)]))
+    vi.mocked(fetchThriftBooksListings).mockResolvedValue(ok([makeListing('111', 6)]))
+    const req = new NextRequest('http://localhost/api/prices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isbns: ['111'], fast: true }),
+    })
+    const data = (await (await POST(req)).json()) as PriceResponse
+    expect(fetchBWBListings).not.toHaveBeenCalled()
+    expect(data.listings['111']).toHaveLength(2)
+    expect(data.sources.map((s) => s.name)).toEqual(['AbeBooks', 'ThriftBooks'])
+    expect(cache.upsert).toHaveBeenCalledWith([expect.objectContaining({ isbn: 'f:111' })])
+  })
+
+  it('serves a fast request from a fast or full cache row, but a full request never from a fast row', async () => {
+    const now = new Date().toISOString()
+    mockCache([{ isbn: 'f:222', listings: [makeListing('222', 4)], cached_at: now }])
+    const fastReq = new NextRequest('http://localhost/api/prices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isbns: ['222'], fast: true }),
+    })
+    const fastData = (await (await POST(fastReq)).json()) as PriceResponse
+    expect(fastData.listings['222']).toHaveLength(1)
+    expect(fetchListingsByISBN).not.toHaveBeenCalled()
+
+    vi.clearAllMocks()
+    vi.mocked(fetchListingsByISBN).mockResolvedValue(ok())
+    vi.mocked(fetchThriftBooksListings).mockResolvedValue(ok())
+    vi.mocked(fetchBWBListings).mockResolvedValue(ok())
+    // A full request only asks for plain keys, so the mocked cache is empty for it.
+    mockCache([])
+    const fullData = (await (await POST(request(['222']))).json()) as PriceResponse
+    expect(fetchListingsByISBN).toHaveBeenCalledWith('222')
+    expect(fullData.listings['222']).toEqual([])
+  })
+})

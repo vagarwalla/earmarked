@@ -22,25 +22,40 @@ const FETCH_CONCURRENCY = 4
 // partial results plus an honest list of what went unchecked.
 const DEADLINE_MS = 45_000
 
+// Fast mode is for probing: when the panel is sweeping the other editions of
+// a book that came up empty, it asks for the two cheap sources only. Better
+// World Books costs ~10s per ISBN behind a browser, which turns a sweep of 40
+// editions into minutes; the winners get a full lookup afterwards anyway.
+const FAST_CONCURRENCY = 6
+
+// Fast results are cached under their own key so they never stand in for a
+// full lookup (they hold no BWB listings), while a full row satisfies both.
+const FAST_KEY = 'f:'
+
 const SOURCES: Array<{
   name: string
   fetch: (isbn: string) => Promise<SourceFetch>
   searchUrl: (isbn: string) => string
+  /** Included in fast (probe) lookups. */
+  fast: boolean
 }> = [
   {
     name: 'AbeBooks',
     fetch: fetchListingsByISBN,
     searchUrl: (isbn) => `https://www.abebooks.com/servlet/SearchResults?isbn=${isbn}&sortby=17`,
+    fast: true,
   },
   {
     name: 'ThriftBooks',
     fetch: fetchThriftBooksListings,
     searchUrl: (isbn) => `https://www.thriftbooks.com/browse/?b.search=${isbn}`,
+    fast: true,
   },
   {
     name: 'Better World Books',
     fetch: fetchBWBListings,
     searchUrl: (isbn) => `https://www.betterworldbooks.com/search/results?q=${isbn}`,
+    fast: false,
   },
 ]
 
@@ -56,13 +71,16 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => null)
     const isbns: string[] = Array.isArray(body?.isbns) ? body.isbns : []
+    const fast = body?.fast === true
     if (isbns.length === 0) {
       return NextResponse.json({ listings: {}, sources: [], unchecked_isbns: [] } satisfies PriceResponse)
     }
 
+    const sources = fast ? SOURCES.filter((s) => s.fast) : SOURCES
+    const concurrency = fast ? FAST_CONCURRENCY : FETCH_CONCURRENCY
     const unique = [...new Set(isbns)]
     const allListings: Record<string, Listing[]> = {}
-    const health = SOURCES.map(() => ({ found: 0, failed: 0, error: null as string | null }))
+    const health = sources.map(() => ({ found: 0, failed: 0, error: null as string | null }))
 
     // One cache round-trip for the whole batch instead of a query per ISBN.
     // A cache outage must not take price search down with it — worst case we
@@ -72,7 +90,7 @@ export async function POST(req: NextRequest) {
       const { data } = await supabase
         .from('price_cache')
         .select('isbn, listings, cached_at')
-        .in('isbn', unique)
+        .in('isbn', fast ? [...unique, ...unique.map((i) => FAST_KEY + i)] : unique)
       cachedRows = data
     } catch (err) {
       console.error('price_cache read failed:', (err as Error).message)
@@ -80,10 +98,14 @@ export async function POST(req: NextRequest) {
 
     const cutoff = Math.max(Date.now() - CACHE_TTL_HOURS * 3600 * 1000, CACHE_MIN_DATE)
     const cached = new Set<string>()
-    for (const row of cachedRows ?? []) {
+    // A full row wins over a fast one for the same ISBN.
+    const rows = [...(cachedRows ?? [])].sort((a, b) => Number(a.isbn.startsWith(FAST_KEY)) - Number(b.isbn.startsWith(FAST_KEY)))
+    for (const row of rows) {
+      const isbn = row.isbn.startsWith(FAST_KEY) ? row.isbn.slice(FAST_KEY.length) : row.isbn
+      if (cached.has(isbn)) continue
       if (new Date(row.cached_at).getTime() >= cutoff) {
-        allListings[row.isbn] = row.listings as Listing[]
-        cached.add(row.isbn)
+        allListings[isbn] = row.listings as Listing[]
+        cached.add(isbn)
       }
     }
 
@@ -93,7 +115,7 @@ export async function POST(req: NextRequest) {
 
     let cursor = 0
     await Promise.all(
-      Array.from({ length: Math.min(FETCH_CONCURRENCY, queue.length) }, async () => {
+      Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
         while (cursor < queue.length) {
           const isbn = queue[cursor++]
           if (Date.now() - startedAt > DEADLINE_MS) {
@@ -101,7 +123,7 @@ export async function POST(req: NextRequest) {
             continue
           }
 
-          const results = await Promise.all(SOURCES.map((s) => s.fetch(isbn)))
+          const results = await Promise.all(sources.map((s) => s.fetch(isbn)))
           const listings: Listing[] = []
           results.forEach((result, i) => {
             if (result.error) {
@@ -117,7 +139,7 @@ export async function POST(req: NextRequest) {
           // Only cache real results, so a blocked scraper can't poison the cache
           // with emptiness for the next six hours.
           if (listings.length > 0) {
-            toCache.push({ isbn, listings, cached_at: new Date().toISOString() })
+            toCache.push({ isbn: fast ? FAST_KEY + isbn : isbn, listings, cached_at: new Date().toISOString() })
           }
         }
       }),
@@ -133,7 +155,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const sources: SourceInfo[] = SOURCES.map((source, i) => ({
+    const sourceInfo: SourceInfo[] = sources.map((source, i) => ({
       name: source.name,
       search_url: source.searchUrl(unique[0]),
       found: health[i].found,
@@ -141,14 +163,14 @@ export async function POST(req: NextRequest) {
       error: summarize(health[i].error),
     }))
 
-    for (const s of sources) {
+    for (const s of sourceInfo) {
       if (s.failed > 0) console.error(`${s.name}: ${s.failed}/${queue.length} lookups failed — ${s.error}`)
     }
     if (unchecked.length > 0) {
       console.error(`prices: ${unchecked.length} ISBNs unchecked after ${Date.now() - startedAt}ms`)
     }
 
-    return NextResponse.json({ listings: allListings, sources, unchecked_isbns: unchecked } satisfies PriceResponse)
+    return NextResponse.json({ listings: allListings, sources: sourceInfo, unchecked_isbns: unchecked } satisfies PriceResponse)
   } catch (err) {
     console.error('prices route failed:', err)
     return NextResponse.json({ error: (err as Error).message }, { status: 500 })
