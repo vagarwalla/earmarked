@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Loader2, ExternalLink, TrendingDown, AlertCircle, ChevronDown, ChevronUp, Lightbulb, BookOpen } from 'lucide-react'
+import { Loader2, ExternalLink, TrendingDown, AlertCircle, ChevronDown, ChevronUp, Lightbulb, BookOpen, ShoppingCart } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -408,6 +408,32 @@ const ALT_COVERS_PER_BOOK = 6
 const COVER_PROBE_CONCURRENCY = 2
 const COVER_PROBE_BATCH = 20
 
+/** The link that puts a copy in the seller's cart, or the listing page when there is none. */
+function cartLink(l: Listing): string {
+  return l.add_to_cart_url ?? l.url
+}
+
+/**
+ * Open one tab per URL from a single click. Browsers allow one pop-up per
+ * click unless the site has been allowed, so count what got blocked and say
+ * so, rather than silently adding two of five books to a cart.
+ */
+function openTabs(urls: string[], what: string): void {
+  const unique = [...new Set(urls)]
+  let blocked = 0
+  for (const url of unique) {
+    const win = window.open(url, '_blank', 'noopener')
+    if (!win) blocked++
+  }
+  if (blocked === 0) {
+    toast.success(`Opened ${unique.length} tab${unique.length !== 1 ? 's' : ''} — ${what}`)
+  } else if (blocked === unique.length) {
+    toast.error('Your browser blocked the tabs. Allow pop-ups for this site (the icon in the address bar), then try again.')
+  } else {
+    toast.warning(`${blocked} of ${unique.length} tabs were blocked. Allow pop-ups for this site and click again — the sellers' carts keep what already went in.`)
+  }
+}
+
 // One request returns every source view — the server qualifies listings once
 // and partitions per source, and guarantees combined ≤ each single source.
 async function runOptimizeBatch(
@@ -636,8 +662,9 @@ export function OptimizationPanel({ items, cartSlug, onUpdateItem }: Props) {
     }
   }
 
-  function openGroup(urls: string[]) {
-    urls.forEach((url) => window.open(url, '_blank', 'noopener'))
+  /** Every cart link in a seller group — one per copy, so quantities come through. */
+  function groupCartLinks(group: OptimizationResult['groups'][number]): string[] {
+    return group.assignments.flatMap((a) => a.listings.map(cartLink))
   }
 
 const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
@@ -797,6 +824,22 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
 
             {activeResult && activeResult.groups.length > 0 ? (
               <>
+                {(() => {
+                  const links = activeResult.groups.flatMap(groupCartLinks)
+                  const sellers = activeResult.groups.length
+                  return (
+                    <Button
+                      className="w-full"
+                      onClick={() => openTabs(links, `check each seller's cart, then check out`)}
+                    >
+                      <ShoppingCart className="h-4 w-4 mr-2" />
+                      Add all {links.length} book{links.length !== 1 ? 's' : ''} to cart{sellers !== 1 ? `s (${sellers} sellers)` : ''}
+                    </Button>
+                  )
+                })()}
+                <p className="text-xs text-muted-foreground -mt-1">
+                  Opens one tab per copy on the seller&apos;s site and adds it to your cart there. If your browser blocks pop-ups, allow them for this site once.
+                </p>
                 {activeResult.groups.map((group) => (
                   <Card key={group.seller_id} className="overflow-hidden">
                     <CardHeader className="py-2 px-3 bg-muted/50 flex-row items-center justify-between space-y-0">
@@ -840,7 +883,18 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
                               </Badge>
                             )}
                           </div>
-                          <span className="shrink-0 font-medium ml-2">${subtotal.toFixed(2)}</span>
+                          <span className="shrink-0 ml-2 flex items-center gap-2">
+                            <span className="font-medium">${subtotal.toFixed(2)}</span>
+                            <a
+                              href={cartLink(listing)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title={listing.add_to_cart_url ? 'Add this copy to cart' : 'Open the listing page'}
+                              className="text-muted-foreground hover:text-foreground"
+                            >
+                              <ShoppingCart className="h-3.5 w-3.5" />
+                            </a>
+                          </span>
                         </div>
                       ))}
                       <div className="border-t pt-1.5 flex justify-between text-sm text-muted-foreground">
@@ -885,15 +939,25 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
                           </div>
                         )
                       })()}
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="w-full mt-1 h-8 text-sm"
-                        onClick={() => openGroup([...new Set(group.assignments.flatMap((a) => a.listings.map((l) => l.url)))])}
-                      >
-                        <ExternalLink className="h-3 w-3 mr-1.5" />
-                        Open {group.assignments.length} listing{group.assignments.length !== 1 ? 's' : ''} on {group.seller_name}
-                      </Button>
+                      <div className="flex gap-1.5 mt-1">
+                        <Button
+                          size="sm"
+                          className="flex-1 h-8 text-sm"
+                          onClick={() => openTabs(groupCartLinks(group), `now in your ${group.seller_name} cart`)}
+                        >
+                          <ShoppingCart className="h-3 w-3 mr-1.5" />
+                          Add {group.assignments.length} to cart on {group.seller_name}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 text-sm"
+                          title={`Open the ${group.assignments.length} listing page${group.assignments.length !== 1 ? 's' : ''} without adding to cart`}
+                          onClick={() => openTabs(group.assignments.flatMap((a) => a.listings.map((l) => l.url)), 'listing pages')}
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                        </Button>
+                      </div>
                     </CardContent>
                   </Card>
                 ))}
