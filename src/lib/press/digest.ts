@@ -12,6 +12,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { itemsInState } from './db'
+import { escapeHtml as escape } from './html'
 import { sendMail, type MailerDeps } from './approval'
 import type { PressItem } from './types'
 
@@ -38,10 +39,6 @@ export function digestLines(items: PressItem[], since: Date): DigestLine[] {
       reason: i.failure_reason ?? 'unknown',
       when: i.updated_at.slice(0, 10),
     }))
-}
-
-function escape(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
 export function digestHtml(lines: DigestLine[]): string {

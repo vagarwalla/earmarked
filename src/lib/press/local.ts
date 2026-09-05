@@ -20,7 +20,7 @@
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
-import type { TocEntry } from './types'
+import { sameOrder, type TocEntry } from './types'
 import type { IssueMeta } from './build'
 import {
   PRESS_ROOT,
@@ -187,9 +187,6 @@ function resolveContents(
     }
   })
 }
-
-const sameOrder = (a: string[], b: string[]) =>
-  a.length === b.length && a.every((id, i) => id === b[i])
 
 /**
  * Every issue worth showing, newest first: each one that has been built, plus
