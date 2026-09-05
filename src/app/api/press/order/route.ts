@@ -53,16 +53,6 @@ export const dynamic = 'force-dynamic'
 const ORDERING_ENABLED = process.env.PRESS_ORDER_ENABLED === '1'
 
 /**
- * How many issues one parcel may carry.
- *
- * Not a Lulu limit — it is a limit on this screen. Pricing a bundle costs one
- * quote for the job plus one per issue to show what it saved, and a bundle
- * nobody would actually ask for should not be able to turn a dialog into a
- * dozen round trips. Anything larger is two orders.
- */
-const MAX_BUNDLE = 6
-
-/**
  * Read the selection. `?issues=3,4` on the GET, `{ issues: [3, 4] }` on the
  * POST — the same list either way.
  *
@@ -83,9 +73,6 @@ function parseIssueNumbers(raw: unknown): { numbers: number[] } | { error: strin
     return { error: 'bad issue list' }
   }
   const numbers = [...new Set(parts.map((p) => Number.parseInt(p, 10)))].sort((a, b) => a - b)
-  if (numbers.length > MAX_BUNDLE) {
-    return { error: `A single parcel takes at most ${MAX_BUNDLE} issues.` }
-  }
   return { numbers }
 }
 

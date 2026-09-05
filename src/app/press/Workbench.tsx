@@ -878,6 +878,29 @@ export function Workbench(props: Props) {
     )
 
   /**
+   * What "all" means: everything ticked in the rail as it is filtered right
+   * now, not every issue in the press.
+   *
+   * That is the gesture the filters are already there for — Draft, select all,
+   * Lock — and it is also the safe reading. Ticking issues that are scrolled
+   * out of sight behind a filter is how somebody orders a parcel they did not
+   * look at.
+   */
+  const selectableInView = railIssues.filter(tickable).map((i) => i.number)
+  const allInViewTicked =
+    selectableInView.length > 0 && selectableInView.every((n) => ticked.includes(n))
+
+  const toggleAllInView = () =>
+    setTicked((t) =>
+      allInViewTicked
+        ? t.filter((n) => !selectableInView.includes(n))
+        : // A union, not a replacement: ticks made under a different filter are
+          // still part of the selection the bar is about to act on, and
+          // silently dropping them would act on less than it says.
+          [...new Set([...t, ...selectableInView])].sort((a, b) => a - b),
+    )
+
+  /**
    * Don't touch this one while it is being made.
    *
    * Scoped to the issue the render is for, not to the whole workbench. It used
@@ -920,6 +943,36 @@ export function Workbench(props: Props) {
               </Toggle>
             ))}
           </div>
+          {/* Aligned with the rows' own checkboxes, and above them, so it reads
+              as the column header it is rather than another action. Absent
+              when the filter has left nothing to tick — a select-all over
+              nothing is a button that does nothing. */}
+          {selectableInView.length > 0 && (
+            <div className="mb-1 flex items-center gap-1.5 px-0.5">
+              <input
+                type="checkbox"
+                className="size-4 shrink-0"
+                checked={allInViewTicked}
+                ref={(el) => {
+                  // Some ticked but not all: the box says "partly", which is a
+                  // property no attribute can set and only the DOM node has.
+                  if (el) el.indeterminate = !allInViewTicked && selectableInView.some((n) => ticked.includes(n))
+                }}
+                onChange={toggleAllInView}
+                aria-label={allInViewTicked ? 'Clear the selection' : 'Select every issue shown'}
+              />
+              <button
+                type="button"
+                onClick={toggleAllInView}
+                className="text-muted-foreground hover:text-foreground text-xs"
+              >
+                {/* "shown" only when the rail is filtered, because that is the
+                    only time "all" and "all of them" differ. */}
+                {allInViewTicked ? 'Clear' : 'Select'} {selectableInView.length}
+                {railFilter !== 'all' || railQuery.trim() ? ' shown' : ''}
+              </button>
+            </div>
+          )}
           <ul className="space-y-0.5">
             {railIssues.map((i) => (
               <li key={i.number} className="flex items-center gap-1.5">
