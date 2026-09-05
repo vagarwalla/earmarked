@@ -34,7 +34,8 @@ import {
 } from './compose'
 import { nameIssue } from './naming'
 import { cleanTitle } from './title'
-import { PRESS_ROOT, recordMeasuredPages } from './issues'
+import { PRESS_ROOT, measuredPagesFor, recordMeasuredPages } from './issues'
+import { measurementKey } from './measure'
 import type { Article, PressItem, TocEntry } from './types'
 
 /** The per-article facts a build needs; a subset of what state.json holds. */
@@ -129,6 +130,22 @@ export async function withBuildLock<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * Why the measurement pass below is a plain sequential loop.
+ *
+ * The obvious speed-up is to render the articles concurrently: they are
+ * independent of each other and of everything else in the build. It does not
+ * work. `vivliostyleRenderer` calls `@vivliostyle/cli`'s `build()` inside this
+ * process, and two of those at once fail with
+ *
+ *   ProtocolError: Protocol error (Page.printToPDF): Printing failed
+ *
+ * — the CLI keeps state across a call and was not written to be re-entered.
+ * Making it concurrent means one child process per render, which is a
+ * different renderer rather than a flag. Worth doing if the cache below ever
+ * stops being enough; not worth it while a warm build measures nothing at all.
+ */
+
 export async function buildIssue(opts: BuildOptions): Promise<BuildResult> {
   const { number, items, apiKey = null, root = PRESS_ROOT } = opts
   const progress = opts.onProgress ?? (() => {})
@@ -173,24 +190,42 @@ export async function buildIssue(opts: BuildOptions): Promise<BuildResult> {
   }
   const render = (html: string) => renderHtml(html, images)
 
-  // Measure every article *now* rather than trusting the count recorded when
-  // it was ingested. The contents page is built from these numbers, so a stale
-  // one prints a magazine whose page references are wrong — which is exactly
-  // what happens the first time a layout change lands, since every count on
-  // disk was measured against the previous stylesheet. An article is rendered
-  // alone here and merged into a continuous document below; both give it the
-  // same length, because every article starts on a fresh page (KTD7).
-  progress(`Measuring ${items.length} article${items.length === 1 ? '' : 's'}`)
-  const pageCounts: number[] = []
-  for (const [i, entry] of entries.entries()) {
-    const measured = await render(
-      buildDocument([buildArticleSection({ article: entry.article }, i)], {
-        issueNumber: number,
-        startPage: 1,
-        measurement: true,
-      }),
+  // The contents page is built from these numbers, so a stale one prints a
+  // magazine whose page references are wrong. What decides whether a recorded
+  // number is stale is `measurementKey` — the stylesheet, the template and the
+  // article itself — so a count taken under the same three can be reused, and
+  // one taken under anything else is measured again. This used to re-render
+  // every article on every build, which for a nineteen-article issue was
+  // nineteen Chromium launches to reproduce nineteen numbers already on disk.
+  //
+  // An article is rendered alone here and merged into a continuous document
+  // below; both give it the same length, because every article starts on a
+  // fresh page (KTD7). That is also what makes a cached measurement sound.
+  const keys = entries.map((e) => measurementKey(e.article))
+  const known = await measuredPagesFor(items.map((i) => i.id))
+  const pageCounts: number[] = entries.map((_, i) => {
+    const hit = known.get(items[i].id)
+    return hit && hit.key === keys[i] ? hit.pages : -1
+  })
+  const todo = pageCounts.flatMap((p, i) => (p === -1 ? [i] : []))
+
+  if (todo.length === 0) {
+    progress(`Measured already — ${items.length} article${items.length === 1 ? '' : 's'} unchanged`)
+  } else {
+    progress(
+      `Measuring ${todo.length} article${todo.length === 1 ? '' : 's'}` +
+        (todo.length < items.length ? ` (${items.length - todo.length} unchanged)` : ''),
     )
-    pageCounts.push(measured.pageCount)
+    for (const i of todo) {
+      const measured = await render(
+        buildDocument([buildArticleSection({ article: entries[i].article }, i)], {
+          issueNumber: number,
+          startPage: 1,
+          measurement: true,
+        }),
+      )
+      pageCounts[i] = measured.pageCount
+    }
   }
 
   let name = opts.name?.trim() ?? ''
@@ -281,7 +316,9 @@ export async function buildIssue(opts: BuildOptions): Promise<BuildResult> {
   // Only for a real build: a test or a scratch render passes its own root and
   // has no business writing V's state.
   if (root === PRESS_ROOT) {
-    await recordMeasuredPages(new Map(items.map((i, n) => [i.id, pageCounts[n]])))
+    await recordMeasuredPages(
+      new Map(items.map((i, n) => [i.id, { pages: pageCounts[n], key: keys[n] }])),
+    )
   }
 
   return { name, pageCount, pageCounts, toc, preflight, outDir }
