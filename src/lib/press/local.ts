@@ -269,9 +269,3 @@ export function pendingItems(state: LocalState | null): LocalItem[] {
 export function itemsInState(state: LocalState | null, want: LocalItemState): LocalItem[] {
   return (state?.items ?? []).filter((i) => i.state === want)
 }
-
-export function formatBytes(bytes: number | null): string {
-  if (bytes === null) return '—'
-  const mb = bytes / (1024 * 1024)
-  return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`
-}

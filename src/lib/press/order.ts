@@ -310,7 +310,10 @@ export async function performBundledApproval(
           db,
         )
       }
-      const items = await itemsForIssue(issue.id, db)
+      // Named apart from the `items` above, which is the job's line items:
+      // this is what is inside the issue, recorded so the audit log says how
+      // many articles were bought.
+      const articles = await itemsForIssue(issue.id, db)
       await recordEvent(
         {
           issue_id: issue.id,
@@ -318,7 +321,7 @@ export async function performBundledApproval(
           detail: {
             jobId: job.id,
             orderId: order.id,
-            items: items.length,
+            items: articles.length,
             reorder,
             ...(bundled ? { bundleKey, bundledWith: issues.length - 1 } : {}),
           },
