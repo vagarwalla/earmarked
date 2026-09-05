@@ -29,6 +29,7 @@ import {
   FRONT_MATTER_PT,
 } from '../src/lib/press/balance'
 import { findDraft, withStateLock, type IssueDraft } from '../src/lib/press/issues'
+import { costSummary, estimateCost, money } from '../src/lib/press/cost'
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2)
@@ -72,6 +73,26 @@ async function main(): Promise<void> {
     } else {
       console.log('\nnothing to move.')
     }
+
+    // What it costs, before and after. The page counts above are the argument
+    // for a layout; this is the argument against it, and the two were never on
+    // the same screen. Printed pages, not article pages — front matter is
+    // bound and paid for like everything else.
+    const beforeCost = estimateCost(drafts.map((d) => (before.get(d.number) ?? 0) + FRONT_MATTER_PT))
+    const afterCost = estimateCost(drafts.map((d) => pagesOf(state, d) + FRONT_MATTER_PT))
+    console.log('\ncost')
+    console.log(`  now    ${costSummary(beforeCost)}`)
+    if (afterCost.totalCents !== beforeCost.totalCents) {
+      const delta = afterCost.totalCents - beforeCost.totalCents
+      console.log(`  after  ${costSummary(afterCost)}`)
+      console.log(`  change ${delta > 0 ? '+' : ''}${money(delta)}`)
+    }
+    // The shape, so the numbers above can be reasoned about without re-running
+    // this: a book is expensive and a page is not.
+    console.log(
+      '  a book costs ~$2.35 + ~6.1c/page, and a parcel ~$4.90 + ~$0.78/book —' +
+        ' so splitting an issue costs about $3, and moving pages between issues costs nothing.',
+    )
 
     const pool = availableFor(state, { number: -1, itemIds: [], state: 'draft' } as IssueDraft)
     console.log(`\n${pool.length} articles left in the pool (${pool.reduce((n, i) => n + (i.pageCount ?? 0), 0)}pp)`)
