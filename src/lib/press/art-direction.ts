@@ -26,6 +26,25 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { TocEntry } from './types'
 
+/**
+ * A small non-linear hash, so neighbouring inputs land far apart.
+ *
+ * The ground used to be `issueNumber % grounds.length`, which collides in the
+ * one case that matters: four issues about systems all choose `cold`, and any
+ * linear map sends 1 and 4 — or 5 and 8 — to the same paper. The shelf came
+ * out in matched pairs. A hash of the *name* has no such structure, and every
+ * issue's name is already unique and already frozen at lock.
+ */
+function spread(seed: string): number {
+  let h = 0x811c9dc5
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h >>> 0
+}
+
+
 // ── The colours ──────────────────────────────────────────────────────────────
 
 /**
@@ -164,6 +183,27 @@ export interface CoverBrief {
   figure: Figure
 }
 
+/** A brief as it survives in `meta.json` — two names, resolved on the way back. */
+export interface StoredBrief {
+  scheme: string
+  figure: string
+  /** The contents it was chosen for; a different list earns a fresh look. */
+  of: string
+}
+
+/** What an issue's contents amount to, for deciding whether to re-direct. */
+export function contentsKey(toc: TocEntry[]): string {
+  return String(spread(toc.map((e) => e.title).join('\u0000')))
+}
+
+/** Resolve a stored brief, or null if it names something that no longer exists. */
+export function briefFromStored(stored: StoredBrief | undefined | null): CoverBrief | null {
+  if (!stored) return null
+  const scheme = SCHEMES.find((s) => s.name === stored.scheme)
+  const figure = FIGURES.find((f) => f.name === stored.figure)
+  return scheme && figure ? { scheme, figure } : null
+}
+
 /**
  * The brief, addressed to whoever is choosing. This is the prompt, and it is
  * kept beside the rules it states so the two cannot drift apart.
@@ -252,24 +292,6 @@ const SHADE = '#14161A'
  * either garish or empty.
  */
 /**
- * A small non-linear hash, so neighbouring inputs land far apart.
- *
- * The ground used to be `issueNumber % grounds.length`, which collides in the
- * one case that matters: four issues about systems all choose `cold`, and any
- * linear map sends 1 and 4 — or 5 and 8 — to the same paper. The shelf came
- * out in matched pairs. A hash of the *name* has no such structure, and every
- * issue's name is already unique and already frozen at lock.
- */
-function spread(seed: string): number {
-  let h = 0x811c9dc5
-  for (let i = 0; i < seed.length; i++) {
-    h ^= seed.charCodeAt(i)
-    h = Math.imul(h, 0x01000193) >>> 0
-  }
-  return h >>> 0
-}
-
-/**
  * Which ground this issue prints on, out of the ones its scheme allows.
  *
  * Keyed on the issue's name so a shelf of same-scheme issues still has
@@ -319,6 +341,11 @@ export interface ChooseCoverOptions {
   issueName: string
   toc: TocEntry[]
   apiKey?: string | null
+  /**
+   * What this issue was directed as last time, if it has been built before.
+   * Reused unless the contents have changed — see `chooseCover`.
+   */
+  previous?: StoredBrief | null
   /** Injected by the tests. */
   client?: Anthropic
 }
@@ -333,7 +360,17 @@ export interface ChooseCoverOptions {
  */
 export async function chooseCover(opts: ChooseCoverOptions): Promise<CoverBrief> {
   const { issueNumber, issueName, toc, apiKey } = opts
-  if (!apiKey || toc.length === 0) return fallbackBrief(issueNumber)
+
+  // An issue that has already been directed keeps its cover. The model is
+  // asked fresh on every build otherwise, and it does not answer identically
+  // every time — so rebuilding an issue to fix a typo would quietly restyle
+  // it, and "recreate the PDFs" would mean "redesign the magazine". Contents
+  // change is the one thing that earns a second look, because that is the
+  // thing the choice was made from.
+  const kept = briefFromStored(opts.previous)
+  if (kept && opts.previous?.of === contentsKey(toc)) return kept
+
+  if (!apiKey || toc.length === 0) return kept ?? fallbackBrief(issueNumber)
 
   const client = opts.client ?? new Anthropic({ apiKey })
   try {

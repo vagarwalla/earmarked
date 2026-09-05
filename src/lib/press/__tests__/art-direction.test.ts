@@ -18,6 +18,8 @@ import {
   fallbackBrief,
   parseCoverBrief,
   rampFor,
+  contentsKey,
+  briefFromStored,
 } from '../art-direction'
 import { buildCoverHtml } from '../compose'
 
@@ -184,6 +186,45 @@ describe('chooseCover', () => {
     expect(
       await chooseCover({ issueNumber: 5, issueName: 'x', toc, apiKey: 'k', client: rambling as never }),
     ).toEqual(rotation)
+  })
+
+  /**
+   * The model does not answer identically every time, so without this a
+   * rebuild to fix a typo would quietly restyle the magazine — and "always
+   * lock what you rebuild" would mean "redesign it every time you lock it".
+   */
+  it('keeps the cover an issue already has, without asking again', async () => {
+    const client = { messages: { create: vi.fn() } }
+    const previous = { scheme: 'field', figure: 'horizon', of: contentsKey(toc) }
+    const brief = await chooseCover({
+      issueNumber: 5, issueName: 'x', toc, apiKey: 'k', previous, client: client as never,
+    })
+    expect(brief.scheme.name).toBe('field')
+    expect(brief.figure.name).toBe('horizon')
+    expect(client.messages.create).not.toHaveBeenCalled()
+  })
+
+  it('looks again when the contents have changed', async () => {
+    const client = {
+      messages: { create: vi.fn(async () => ({ content: [{ type: 'text', text: 'ember lens' }] })) },
+    }
+    const previous = { scheme: 'field', figure: 'horizon', of: 'something-else' }
+    const brief = await chooseCover({
+      issueNumber: 5, issueName: 'x', toc, apiKey: 'k', previous, client: client as never,
+    })
+    expect(brief.scheme.name).toBe('ember')
+    expect(client.messages.create).toHaveBeenCalled()
+  })
+
+  it('keeps the old cover rather than the rotation when it cannot ask', async () => {
+    const previous = { scheme: 'field', figure: 'horizon', of: 'stale' }
+    const brief = await chooseCover({ issueNumber: 5, issueName: 'x', toc, apiKey: null, previous })
+    expect(brief.scheme.name).toBe('field')
+  })
+
+  it('ignores a stored brief naming something that no longer exists', () => {
+    expect(briefFromStored({ scheme: 'retired', figure: 'horizon', of: 'x' })).toBeNull()
+    expect(briefFromStored(null)).toBeNull()
   })
 
   it('varies the fallback, so a press with no key still gets a shelf', () => {
