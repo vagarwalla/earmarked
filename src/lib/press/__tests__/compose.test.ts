@@ -11,8 +11,10 @@ import {
   contentsClass,
   COVER_ARTS,
   coverArtFor,
+  COVER_GROUNDS,
   COVER_PALETTE,
   issueDateline,
+  groundFor,
   paletteFor,
   mergePdfs,
   padToEven,
@@ -392,6 +394,35 @@ describe('buildCoverHtml', () => {
     expect(new Set(paletteFor(3))).toEqual(new Set(COVER_PALETTE))
     // A number below the first issue must not index off the front.
     expect(paletteFor(0).every((c) => COVER_PALETTE.includes(c as never))).toBe(true)
+  })
+
+  it('gives each issue its own ground, and keeps it light enough to read on', () => {
+    expect(groundFor(1)).not.toBe(groundFor(2))
+    // Deterministic, and it wraps rather than running off the end.
+    expect(groundFor(1)).toBe(groundFor(COVER_GROUNDS.length + 1))
+    // A number below the first issue must not index off the front.
+    expect(COVER_GROUNDS).toContain(groundFor(0))
+
+    // Every ground is a pale tint: the deep warm ink has to carry type on all
+    // of them, so none may be dark, and none may be saturated enough to read
+    // as a colour field rather than as paper.
+    for (const hex of COVER_GROUNDS) {
+      const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16))
+      expect(Math.min(r, g, b)).toBeGreaterThan(0xd8)
+      expect(Math.max(r, g, b) - Math.min(r, g, b)).toBeLessThan(0x20)
+    }
+  })
+
+  it('puts the issue ground on the cover it renders', () => {
+    const html = buildCoverHtml({
+      issueName: 'A Test',
+      issueNumber: 5,
+      pageCount: 140,
+      dateRange: 'Aug 2026',
+      toc: [{ title: 'One', page: 2 }],
+    })
+    expect(html).toContain(`--bg: ${groundFor(5)}`)
+    expect(html).not.toContain('{{GROUND}}')
   })
 
   it('prints spine text only once the spine can hold it', () => {
