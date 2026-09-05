@@ -91,17 +91,37 @@ interface PressJobView {
 }
 
 /**
- * What the issue's buttons are doing, and the line they are reporting.
+ * What one issue's buttons are doing, and the line they are reporting.
  *
- * `number` is carried because a render no longer happens inside the request
- * that asked for it: one queued for issue 4 goes on running while you open
- * issue 5, and without this its progress would light up issue 5's buttons and
- * freeze a panel that has nothing to do with it.
+ * Held per issue rather than one at a time, because more than one can be in
+ * flight: ticking four drafts and pressing Lock queues four renders, and a
+ * single slot would have the fourth one's progress reporting on the first
+ * one's panel. It is also what the resume on load needs — every live job is
+ * picked back up, not just the oldest, which used to leave the newest render
+ * looking idle and the oldest one's issue frozen behind a job nobody claimed.
  */
 interface Working {
   what: 'rebuild' | 'lock' | 'unlock'
-  number: number
   message: string
+  /** Queued, and no renderer has taken it yet. */
+  stalled?: boolean
+}
+
+/** Keyed by issue number. Absent means that issue is idle. */
+type WorkingMap = Record<number, Working>
+
+/**
+ * A run of composes started from one press of a multi-select button.
+ *
+ * Sequential, because the renderer is: locally `withBuildLock` serialises
+ * them, and on the worker there is one machine. What this carries is the only
+ * thing the loop knows that the per-issue lines do not — how far through the
+ * list it is.
+ */
+interface Batch {
+  what: 'rebuild' | 'lock'
+  total: number
+  done: number
 }
 
 export interface WorkbenchIssue {
@@ -189,6 +209,30 @@ function orderable(state: string): boolean {
   return state === 'closed' || state === 'shipped'
 }
 
+/**
+ * Whether an issue has anything the selection bar could do to it.
+ *
+ * A draft can be locked or rebuilt, a locked or shipped one ordered. An issue
+ * mid-order — approved, waiting on Lulu — has nothing on offer, and a checkbox
+ * that ticks but changes no button is a checkbox that looks broken.
+ */
+function tickable(issue: { state: string; contents: unknown[] }): boolean {
+  if (orderable(issue.state)) return true
+  return issue.state === 'open' && issue.contents.length > 0
+}
+
+/** "3 drafts", "1 draft" — the count and its noun, agreeing. */
+function countOf(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? '' : 's'}`
+}
+
+/** The one word a rail row has room for while an issue is being made. */
+const WORKING_VERB: Record<'rebuild' | 'lock' | 'unlock', string> = {
+  rebuild: 'building',
+  lock: 'locking',
+  unlock: 'unlocking',
+}
+
 const RAIL_FILTERS = ['all', 'draft', 'locked', 'printed'] as const
 type RailFilter = (typeof RAIL_FILTERS)[number]
 
@@ -272,13 +316,19 @@ export function Workbench(props: Props) {
    */
   const [ordering, setOrdering] = useState<number[] | null>(null)
   /**
-   * Ticked in the rail, waiting to be ordered together.
+   * Ticked in the rail.
+   *
+   * One selection, not one per action. It began as the bundle for an order and
+   * is now what Lock and Rebuild act on too — the gesture is the same in all
+   * three cases ("these ones"), and a second row of checkboxes for the other
+   * two would have made the reader choose which set they were in before they
+   * had chosen what to do with it.
    *
    * Kept here rather than in the dialog because the selection is made across
    * the rail, over several issues, before the dialog exists — and because
    * closing the dialog should not throw away a selection someone assembled.
    */
-  const [bundle, setBundle] = useState<number[]>([])
+  const [ticked, setTicked] = useState<number[]>([])
 
   const issue = useMemo(
     () => issues.find((i) => i.number === selected) ?? null,
@@ -451,7 +501,7 @@ export function Workbench(props: Props) {
     // the contents it had a minute ago — the exact trap the lock route composes
     // first to avoid. Not `locked`: that includes a commit in flight, and two
     // quick drags in a row are meant to work.
-    if (working !== null) return
+    if (issue.number in working) return
 
     const activeId = String(active.id)
     const overId = String(over.id)
@@ -532,21 +582,25 @@ export function Workbench(props: Props) {
   }
 
   /**
-   * The ticked issues that are still orderable.
+   * The ticked issues, split by what can actually be done to them.
    *
-   * The checkbox shows `bundle` directly, because a checkbox should say what
-   * was ticked. What may not use it raw is the order bar: once the emailed
-   * link is followed an issue moves to `approved`, its checkbox stops being
-   * rendered, and the number it left behind in `bundle` would otherwise still
-   * be counted in "Order these 2" and handed to `setOrdering` — offering to
-   * spend money on something the server now refuses. Derived rather than
-   * cleaned up on re-seed, so a stale number falls out on its own.
+   * The checkbox shows `ticked` directly, because a checkbox should say what
+   * was ticked. What may not use it raw are the action buttons: once the
+   * emailed link is followed an issue moves to `approved`, and the number it
+   * left behind in `ticked` would otherwise still be counted in "Order these
+   * 2" and handed to `setOrdering` — offering to spend money on something the
+   * server now refuses. The same holds for Lock and Rebuild, which only a
+   * draft with something in it can take. Derived rather than cleaned up on
+   * re-seed, so a stale number falls out on its own.
    */
-  const selection = bundle.filter((n) =>
-    issues.some((i) => i.number === n && orderable(i.state)),
-  )
+  const pick = (fn: (i: WorkbenchIssue) => boolean) =>
+    ticked.filter((n) => issues.some((i) => i.number === n && fn(i)))
+
+  const orderSelection = pick((i) => orderable(i.state))
+  const draftSelection = pick((i) => i.state === 'open' && i.contents.length > 0)
+
   /**
-   * What the issue's buttons are doing, and the line they are streaming.
+   * What each issue's buttons are doing, and the line they are streaming.
    *
    * Lifted out of the issue panel because the buttons and the progress they
    * report now live in different columns — the actions on the right, the issue
@@ -554,7 +608,22 @@ export function Workbench(props: Props) {
    * button that was pressed says it is working; a single boolean made Lock
    * announce a rebuild.
    */
-  const [working, setWorking] = useState<Working | null>(null)
+  const [working, setWorking] = useState<WorkingMap>({})
+  /** The multi-select run in flight, if there is one. */
+  const [batch, setBatch] = useState<Batch | null>(null)
+
+  /** Set or clear one issue's line, leaving every other issue alone. */
+  const setWorkingFor = useCallback((number: number, next: Working | null) => {
+    setWorking((all) => {
+      if (next === null) {
+        if (!(number in all)) return all
+        const rest = { ...all }
+        delete rest[number]
+        return rest
+      }
+      return { ...all, [number]: next }
+    })
+  }, [])
 
   /** Say what a finished compose produced, in the one line the panel has. */
   const announce = useCallback(
@@ -576,7 +645,8 @@ export function Workbench(props: Props) {
    * stages it is reporting and is one indexed row read.
    */
   const track = useCallback(
-    async (jobId: string, what: 'rebuild' | 'lock', number: number) => {
+    async (jobId: string, what: 'rebuild' | 'lock', number: number): Promise<boolean> => {
+      const startedAt = Date.now()
       for (;;) {
         await new Promise((r) => setTimeout(r, 2000))
         let job: PressJobView | undefined
@@ -587,26 +657,37 @@ export function Workbench(props: Props) {
         } catch (err) {
           // A dropped poll is not a failed render — the worker is still going.
           // Say so and keep asking; only a job row can end this loop.
-          setWorking({ what, number, message: (err as Error).message })
+          setWorkingFor(number, { what, message: (err as Error).message })
           continue
         }
         if (!job) {
           setError('That render is no longer on the queue.')
-          return
+          return false
         }
         if (job.state === 'failed') {
           setError(job.error ?? 'The render failed.')
-          return
+          return false
         }
         if (job.state === 'done') {
           if (job.result) announce(job.result)
           refresh()
-          return
+          return true
         }
-        setWorking({ what, number, message: job.progress ?? 'Working' })
+        // Queued, and still nobody has picked it up. Worth saying out loud
+        // rather than spinning: a press with no renderer running looks exactly
+        // like a slow one, and the difference is minutes against forever.
+        // Nothing is aborted — a worker that starts late still finds the row.
+        const stalled = job.state === 'queued' && Date.now() - startedAt > 45_000
+        setWorkingFor(number, {
+          what,
+          stalled,
+          message: stalled
+            ? 'No renderer has picked this up. It stays queued until one does.'
+            : (job.progress ?? 'Working'),
+        })
       }
     },
-    [announce, refresh],
+    [announce, refresh, setWorkingFor],
   )
 
   /**
@@ -617,12 +698,13 @@ export function Workbench(props: Props) {
    * answers 202 with a job row the worker will claim, and this polls it. One
    * button, one route, and the difference is which response arrives.
    */
-  const compose = async (what: 'rebuild' | 'lock', number: number, body?: object) => {
+  const compose = async (what: 'rebuild' | 'lock', number: number): Promise<boolean> => {
     const url =
       what === 'lock' ? `/api/press/issue/${number}/lock` : `/api/press/issue/${number}/rebuild`
-    setWorking({ what, number, message: 'Starting' })
+    setWorkingFor(number, { what, message: 'Starting' })
     setError(null)
     setNote(null)
+    const body = what === 'lock' ? { action: 'lock' } : undefined
     try {
       const res = await fetch(url, {
         method: 'POST',
@@ -631,23 +713,25 @@ export function Workbench(props: Props) {
       })
       const isJson = res.headers.get('content-type')?.includes('application/json')
       // A refusal — an empty issue, an article this machine cannot render, a
-      // render already in flight — arrives as JSON, not as a stream.
+      // render already in flight — arrives as JSON, not as a stream. Named
+      // with its issue, because a run of five makes "That did not work"
+      // useless on its own.
       if (!res.ok && isJson) {
         const err = (await res.json()) as { error?: string }
-        setError(err.error ?? 'That did not work.')
-        return
+        setError(`#${number}: ${err.error ?? 'That did not work.'}`)
+        return false
       }
       if (res.status === 202 && isJson) {
         const { job } = (await res.json()) as { job: PressJobView }
-        setWorking({ what, number, message: job.progress ?? 'Queued' })
-        await track(job.id, what, number)
-        return
+        setWorkingFor(number, { what, message: job.progress ?? 'Queued' })
+        return await track(job.id, what, number)
       }
       if (!res.body) throw new Error('No response from the builder.')
 
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
+      let ok = false
       for (;;) {
         const { done, value } = await reader.read()
         if (done) break
@@ -661,29 +745,83 @@ export function Workbench(props: Props) {
             error?: string
             done?: { name: string; pageCount: number; preflight: { code: string }[] }
           }
-          if (event.progress) setWorking({ what, number, message: event.progress })
-          if (event.error) setError(event.error)
+          if (event.progress) setWorkingFor(number, { what, message: event.progress })
+          if (event.error) setError(`#${number}: ${event.error}`)
           if (event.done) {
             announce(event.done)
             refresh()
+            ok = true
           }
         }
       }
+      return ok
     } catch (err) {
-      setError((err as Error).message)
+      setError(`#${number}: ${(err as Error).message}`)
+      return false
     } finally {
-      setWorking(null)
+      setWorkingFor(number, null)
     }
   }
 
   /**
-   * Pick up a render that was already in flight when this page loaded.
+   * The same compose, over a list, one after another.
+   *
+   * Sequential and not `Promise.all`: there is one renderer. Locally
+   * `withBuildLock` would serialise them anyway and the parallel calls would
+   * simply queue against each other with no way to say which is which; on the
+   * worker the second would be refused outright by the one-live-job index and
+   * the reader would get four failures for work that was never attempted.
+   *
+   * A failure does not stop the run. Locking five issues where the third has
+   * an article this machine cannot render should still lock the other four —
+   * so the loop carries on and the count at the end says what actually
+   * happened.
+   */
+  const composeMany = async (what: 'rebuild' | 'lock', numbers: number[]) => {
+    if (numbers.length === 0) return
+    if (numbers.length === 1) {
+      await compose(what, numbers[0])
+      return
+    }
+    setBatch({ what, total: numbers.length, done: 0 })
+    const failed: number[] = []
+    try {
+      for (const [i, number] of numbers.entries()) {
+        setBatch({ what, total: numbers.length, done: i })
+        // `compose` clears the error before each one, so the last failure is
+        // the one on screen; this keeps the whole tally.
+        if (!(await compose(what, number))) failed.push(number)
+      }
+    } finally {
+      setBatch(null)
+    }
+    const won = numbers.length - failed.length
+    const verb = what === 'lock' ? 'Locked' : 'Rebuilt'
+    setNote(
+      failed.length === 0
+        ? `${verb} ${won} issues.`
+        : `${verb} ${won} of ${numbers.length}. ${failed.map((n) => `#${n}`).join(', ')} did not go through.`,
+    )
+    // Only what went through leaves the selection, so a second press retries
+    // exactly the ones that did not.
+    setTicked((t) => t.filter((n) => failed.includes(n)))
+  }
+
+  /**
+   * Pick up the renders that were already in flight when this page loaded.
    *
    * The point of composing on the worker is that it survives the tab that
    * asked for it — pressed on a phone, watched on a laptop, or simply reloaded
    * halfway through. Without this the page shows an idle Rebuild button over a
    * machine four minutes into a hundred pages, and pressing it earns a refusal
    * from the one-live-job index rather than the progress that already exists.
+   *
+   * Every live job, not `jobs[0]`. That was written when one render could be
+   * in flight; ticking four drafts and pressing Lock makes four. The old code
+   * took the *oldest* live row and followed only that one, so the three newer
+   * renders looked idle — and, worse, a single abandoned job at the head of
+   * the queue meant every reload resumed a render nobody was doing, froze that
+   * issue's buttons behind it, and polled it every two seconds forever.
    */
   const resumed = useRef(false)
   useEffect(() => {
@@ -694,23 +832,28 @@ export function Workbench(props: Props) {
         const res = await fetch('/api/press/job', { cache: 'no-store' })
         if (!res.ok) return
         const { jobs } = (await res.json()) as { jobs: PressJobView[] }
-        const live = jobs[0]
-        if (!live) return
-        const number = props.issues.find((i) => i.id === live.issue_id)?.number
-        if (number === undefined) return
-        setWorking({ what: live.intent, number, message: live.progress ?? 'Working' })
-        await track(live.id, live.intent, number)
+        const byId = new Map(props.issues.map((i) => [i.id, i.number]))
+        await Promise.all(
+          jobs.map(async (live) => {
+            const number = byId.get(live.issue_id)
+            if (number === undefined) return
+            setWorkingFor(number, { what: live.intent, message: live.progress ?? 'Working' })
+            try {
+              await track(live.id, live.intent, number)
+            } finally {
+              setWorkingFor(number, null)
+            }
+          }),
+        )
       } catch {
         // Nothing to recover, and nothing worth saying about it: the buttons
         // work either way, and a render nobody is watching still finishes.
-      } finally {
-        setWorking(null)
       }
     })()
-  }, [props.issues, track])
+  }, [props.issues, track, setWorkingFor])
 
   const unlock = async (number: number) => {
-    setWorking({ what: 'unlock', number, message: 'Unlocking' })
+    setWorkingFor(number, { what: 'unlock', message: 'Unlocking' })
     setError(null)
     try {
       const res = await fetch(`/api/press/issue/${number}/lock`, {
@@ -722,7 +865,7 @@ export function Workbench(props: Props) {
       if (!res.ok) setError(body.error ?? 'Could not unlock.')
       else refresh()
     } finally {
-      setWorking(null)
+      setWorkingFor(number, null)
     }
   }
 
@@ -743,7 +886,7 @@ export function Workbench(props: Props) {
    * worker outlives the tab, so a global lock would mean opening /press during
    * a four-minute render found every button dead, on every issue.
    */
-  const locked = busy || (working !== null && working.number === issue?.number)
+  const locked = busy || batch !== null || (issue !== null && issue.number in working)
 
   return (
     <DndContext
@@ -782,18 +925,22 @@ export function Workbench(props: Props) {
               <li key={i.number} className="flex items-center gap-1.5">
                 {/* Outside the row button, not inside it: a checkbox nested in
                     a button is neither valid nor clickable on its own, and
-                    ticking an issue must not also select it for editing. */}
-                {orderable(i.state) ? (
+                    ticking an issue must not also select it for editing.
+                    On every issue that has an action, not only the orderable
+                    ones: what the tick means is decided by the bar below,
+                    which offers Lock and Rebuild for the drafts in the
+                    selection and Order for the ones already frozen. */}
+                {tickable(i) ? (
                   <input
                     type="checkbox"
                     className="size-4 shrink-0"
-                    checked={bundle.includes(i.number)}
+                    checked={ticked.includes(i.number)}
                     onChange={(e) =>
-                      setBundle((b) =>
-                        e.target.checked ? [...b, i.number].sort((x, y) => x - y) : b.filter((n) => n !== i.number),
+                      setTicked((t) =>
+                        e.target.checked ? [...t, i.number].sort((x, y) => x - y) : t.filter((n) => n !== i.number),
                       )
                     }
-                    aria-label={`Order issue ${i.number} with others`}
+                    aria-label={`Select issue ${i.number}`}
                   />
                 ) : (
                   <span className="w-4 shrink-0" />
@@ -825,6 +972,18 @@ export function Workbench(props: Props) {
                     </span>
                   )}
                 </button>
+                {/* A render in flight on an issue you are not looking at. The
+                    middle column reports the selected one; without this a run
+                    of five was four invisible builds and one visible. */}
+                {working[i.number] && (
+                  <span
+                    className="text-muted-foreground shrink-0 text-[0.65rem]"
+                    title={working[i.number].message}
+                    aria-label={working[i.number].message}
+                  >
+                    {working[i.number].stalled ? 'queued' : WORKING_VERB[working[i.number].what]}
+                  </span>
+                )}
               </li>
             ))}
             {railIssues.length === 0 && (
@@ -834,25 +993,77 @@ export function Workbench(props: Props) {
             )}
           </ul>
 
-          {/* The bundling gesture, and the only place it is offered. Two
-              issues in one Lulu job pay for one parcel instead of two, and
-              the dialog says how much that is before anything is sent. */}
-          {selection.length > 0 && (
-            <div className="mt-2 rounded-lg border p-2.5">
+          {/* What the ticks are for, and the only place any of it is offered.
+              Three actions over one selection, each shown only for the part of
+              it that can take it — so ticking four drafts and a locked issue
+              offers to lock or rebuild the four and to order the one, and says
+              which is which rather than silently doing the wrong subset. */}
+          {ticked.length > 0 && (
+            <div className="mt-2 grid gap-2 rounded-lg border p-2.5">
               <p className="text-muted-foreground text-xs">
-                {selection.length === 1
-                  ? `Issue ${selection[0]} selected. Tick another to share one parcel.`
-                  : `${selection.map((n) => `#${n}`).join(', ')} — one job, one shipping charge.`}
+                {ticked.map((n) => `#${n}`).join(', ')} selected.
               </p>
-              <div className="mt-2 flex gap-2">
-                <Button size="lg" className="flex-1" onClick={() => setOrdering(selection)}>
+
+              {draftSelection.length > 0 && (
+                <>
+                  <Button
+                    size="lg"
+                    className="w-full justify-start"
+                    disabled={busy || batch !== null}
+                    onClick={() => void composeMany('lock', draftSelection)}
+                  >
+                    <Lock data-icon="inline-start" />
+                    {batch?.what === 'lock'
+                      ? `Locking ${batch.done + 1} of ${batch.total}…`
+                      : `Lock ${countOf(draftSelection.length, 'draft')}`}
+                  </Button>
+                  <Button
+                    size="lg"
+                    variant="outline"
+                    className="w-full justify-start"
+                    disabled={busy || batch !== null}
+                    onClick={() => void composeMany('rebuild', draftSelection)}
+                  >
+                    <RefreshCw data-icon="inline-start" />
+                    {batch?.what === 'rebuild'
+                      ? `Rebuilding ${batch.done + 1} of ${batch.total}…`
+                      : `Rebuild ${countOf(draftSelection.length, 'draft')}`}
+                  </Button>
+                </>
+              )}
+
+              {/* Two issues in one Lulu job pay for one parcel instead of two,
+                  and the dialog says how much that is before anything is
+                  sent. */}
+              {orderSelection.length > 0 && (
+                <Button
+                  size="lg"
+                  variant={draftSelection.length > 0 ? 'outline' : 'default'}
+                  className="w-full justify-start"
+                  disabled={batch !== null}
+                  onClick={() => setOrdering(orderSelection)}
+                >
                   <Package data-icon="inline-start" />
-                  Order {selection.length === 1 ? 'it' : `these ${selection.length}`}
+                  Order {orderSelection.length === 1 ? `#${orderSelection[0]}` : `these ${orderSelection.length}`}
+                  {orderSelection.length > 1 && ' — one parcel'}
                 </Button>
-                <Button size="lg" variant="outline" onClick={() => setBundle([])}>
-                  Clear
-                </Button>
-              </div>
+              )}
+
+              {draftSelection.length === 0 && orderSelection.length === 0 && (
+                <p className="text-muted-foreground text-xs">
+                  Nothing here can be locked, rebuilt or ordered as it stands.
+                </p>
+              )}
+
+              <Button
+                size="lg"
+                variant="ghost"
+                className="w-full justify-start"
+                disabled={batch !== null}
+                onClick={() => setTicked([])}
+              >
+                Clear the selection
+              </Button>
             </div>
           )}
 
@@ -889,7 +1100,7 @@ export function Workbench(props: Props) {
               issue={issue}
               editable={editable}
               locked={locked}
-              working={working?.message ?? null}
+              working={working[issue.number]?.message ?? null}
               sheet={issue.hasCover ? sheet : 'interior'}
               previewOpen={previewOpen}
               onRemove={(itemId) => returnToPool(issue, itemId)}
@@ -955,12 +1166,12 @@ export function Workbench(props: Props) {
                     issue={issue}
                     editable={editable}
                     locked={locked}
-                    working={working}
+                    working={working[issue.number] ?? null}
                     poolCount={pool.length}
                     threshold={props.threshold}
                     onAutoFill={autoFill}
                     onRebuild={() => void compose('rebuild', issue.number)}
-                    onLock={() => void compose('lock', issue.number, { action: 'lock' })}
+                    onLock={() => void compose('lock', issue.number)}
                     onUnlock={() => void unlock(issue.number)}
                   />
                   <ShareControls
