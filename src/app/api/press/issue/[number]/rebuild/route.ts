@@ -26,7 +26,7 @@
 
 import { NextResponse } from 'next/server'
 import { itemsForIssue } from '@/lib/press/db'
-import { JobError, enqueueCompose } from '@/lib/press/jobs'
+import { JobError, enqueueCompose, rendererAlive } from '@/lib/press/jobs'
 import { localItems, mirrorOrder, publishBuild } from '@/lib/press/handoff'
 import { issueByNumber } from '@/lib/press/workbench'
 import { reviewSource } from '@/lib/press/review'
@@ -81,6 +81,20 @@ export async function POST(
     // issue would be claimed only to fail four minutes later, and refusing it
     // here is the same refusal in the same place.
     if (reviewSource() === 'supabase') {
+      // A queue nobody serves is worse than a refusal. Without this the
+      // button is accepted, waits forever on a Fly machine that is not
+      // running, and leaves a `queued` row that 017's one-live-job index then
+      // holds against every later press for this issue. Said plainly, and
+      // with the way out: the laptop with `.press/` can still do this.
+      if (!(await rendererAlive(db))) {
+        return NextResponse.json(
+          {
+            error:
+              'No renderer is running, so this cannot be built here. Build it on the machine that has .press/ — or start the press worker.',
+          },
+          { status: 503 },
+        )
+      }
       try {
         const job = await enqueueCompose(issue.id, 'rebuild', db)
         return NextResponse.json({ job }, { status: 202 })
