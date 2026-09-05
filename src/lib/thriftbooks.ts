@@ -14,6 +14,7 @@
 
 import type { Listing, SourceFetch } from './types'
 import { normalizeCondition } from './abebooks'
+import { thriftBooksCartLink } from './thriftbooksCart'
 
 const SEARCH_BASE = 'https://www.thriftbooks.com/browse/?b.search='
 
@@ -156,9 +157,9 @@ function parseThriftBooksHTML(html: string, pageUrl: string, requestedIsbn: stri
         dust_jacket: !cond.noDj,
         url: listingUrl,
         isbn: requestedIsbn,
-        // ThriftBooks' own client navigates to /addtocart/{idIq}/{quantity}
-        // after a cart add; opened directly it puts this copy in the cart.
-        ...(cond.idIq ? { add_to_cart_url: `https://www.thriftbooks.com/addtocart/${cond.idIq}/1` } : {}),
+        // The cart page with this copy in the hash — see thriftbooksCart.ts
+        // for why ThriftBooks needs a bookmarklet to do the actual add.
+        ...(cond.idIq ? { add_to_cart_url: thriftBooksCartLink(cond.idIq) } : {}),
       })
     }
   }

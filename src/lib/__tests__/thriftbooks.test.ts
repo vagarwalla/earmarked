@@ -211,13 +211,13 @@ describe('fetchThriftBooksListings', () => {
 })
 
 describe('add-to-cart link', () => {
-  it('builds the /addtocart/{idIq}/1 link from the condition\'s inventory id', async () => {
+  it('links to the cart page with the condition\'s inventory id in the hash', async () => {
     const html = `<html><head><link rel="canonical" href="https://www.thriftbooks.com/w/the-alchemist/246270/"></head><body><script>var x = {"conditions":[{"bindingIdMedia":45,"idQuality":3,"quality":"Good","isbn":"0062315005","ean":"9780062315007","upc":null,"idIq":3624658,"idAmazon":2338845,"price":9.89,"listPrice":18.0,"exLib":false,"noDj":false,"quantity":1}]}</script></body></html>`
     global.fetch = vi.fn().mockResolvedValue({ ok: true, url: 'https://www.thriftbooks.com/w/the-alchemist/246270/', text: async () => html } as Response)
     const { fetchThriftBooksListings } = await import('../thriftbooks')
     const result = await fetchThriftBooksListings('9780062315007')
     expect(result.listings).toHaveLength(1)
-    expect(result.listings[0].add_to_cart_url).toBe('https://www.thriftbooks.com/addtocart/3624658/1')
+    expect(result.listings[0].add_to_cart_url).toBe('https://www.thriftbooks.com/shopping-cart/#earmarked=3624658:1')
     expect(result.listings[0].price).toBe(9.89)
   })
 })

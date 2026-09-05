@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import type { CartItem, Condition, Edition, Listing, OptimizationResult, PriceResponse, SourceInfo } from '@/lib/types'
 import { getSellerSource } from '@/lib/optimizer/batch'
+import { mergeThriftBooksCartLinks, isThriftBooksCartLink, THRIFTBOOKS_BOOKMARKLET } from '@/lib/thriftbooksCart'
 import {
   CONDITION_LABELS,
   CONDITION_ORDER,
@@ -438,7 +439,8 @@ function cartLink(l: Listing): string {
  * so, rather than silently adding two of five books to a cart.
  */
 function openTabs(urls: string[], what: string): void {
-  const unique = [...new Set(urls)]
+  // Every ThriftBooks copy rides in one cart-page link (see thriftbooksCart.ts).
+  const unique = [...new Set(mergeThriftBooksCartLinks(urls))]
   let blocked = 0
   for (const url of unique) {
     const win = window.open(url, '_blank', 'noopener')
@@ -451,6 +453,37 @@ function openTabs(urls: string[], what: string): void {
   } else {
     toast.warning(`${blocked} of ${unique.length} tabs were blocked. Allow pop-ups for this site and click again — the sellers' carts keep what already went in.`)
   }
+}
+
+/**
+ * The one-time setup ThriftBooks needs: a bookmark that, clicked on the
+ * ThriftBooks cart page our button opens, adds the copies named in its URL.
+ * The href is set outside React because React refuses javascript: links.
+ */
+function ThriftBooksBookmarklet() {
+  const ref = useRef<HTMLAnchorElement>(null)
+  useEffect(() => { ref.current?.setAttribute('href', THRIFTBOOKS_BOOKMARKLET) }, [])
+  return (
+    <div className="rounded-md border border-dashed border-border bg-muted/40 px-2.5 py-2 text-xs text-muted-foreground space-y-1">
+      <p>
+        <span className="font-medium text-foreground">ThriftBooks needs one extra click.</span>
+        {' '}It has no link that adds to the cart, so the button opens your ThriftBooks cart page with the copies listed in its address. Once there, click this bookmark and they go in.
+      </p>
+      <p className="flex items-center gap-2 flex-wrap">
+        <span>Set up once — drag this to your bookmarks bar:</span>
+        <a
+          ref={ref}
+          onClick={(e) => { e.preventDefault(); toast.message('Drag this button to your bookmarks bar rather than clicking it here.') }}
+          className="inline-flex items-center gap-1 rounded border bg-background px-2 py-0.5 font-medium text-foreground cursor-grab select-none"
+          title="Drag me to the bookmarks bar"
+        >
+          <ShoppingCart className="h-3 w-3" />
+          Earmarked → ThriftBooks cart
+        </a>
+        <span className="opacity-70">(Bookmarks bar hidden? Press ⌘⇧B.)</span>
+      </p>
+    </div>
+  )
 }
 
 // One request returns every source view — the server qualifies listings once
@@ -977,6 +1010,14 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
                     <div className={`tabular-nums ${isActive ? 'text-primary-foreground' : hasResult ? 'text-foreground font-semibold' : ''}`}>
                       {hasResult ? `$${r!.grand_total.toFixed(2)}` : '—'}
                     </div>
+                    {hasResult && (() => {
+                      const books = r!.groups.reduce((n, g) => n + g.assignments.length, 0)
+                      return (
+                        <div className={`tabular-nums ${isActive ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>
+                          ({books} book{books !== 1 ? 's' : ''})
+                        </div>
+                      )
+                    })()}
                   </button>
                 )
               })}
@@ -1021,6 +1062,7 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
                 <p className="text-xs text-muted-foreground -mt-1">
                   Opens one tab per copy on the seller&apos;s site and adds it to your cart there. If your browser blocks pop-ups, allow them for this site once.
                 </p>
+                {activeResult.groups.some((g) => groupCartLinks(g).some(isThriftBooksCartLink)) && <ThriftBooksBookmarklet />}
                 {activeResult.groups.map((group) => (
                   <Card key={group.seller_id} className="overflow-hidden">
                     <CardHeader className="py-2 px-3 bg-muted/50 flex-row items-center justify-between space-y-0">
@@ -1127,7 +1169,9 @@ const hasUnpricedItems = items.some((i) => !i.isbn_preferred)
                           onClick={() => openTabs(groupCartLinks(group), `now in your ${group.seller_name} cart`)}
                         >
                           <ShoppingCart className="h-3 w-3 mr-1.5" />
-                          Add {group.assignments.length} to cart on {group.seller_name}
+                          {group.seller_id === 'thriftbooks'
+                            ? `Open ThriftBooks cart with ${group.assignments.length} book${group.assignments.length !== 1 ? 's' : ''} queued`
+                            : `Add ${group.assignments.length} to cart on ${group.seller_name}`}
                         </Button>
                         <Button
                           size="sm"
