@@ -49,9 +49,38 @@ interface TBCondition {
   isbn: string
   ean: string
   idAmazon: number
+  /** Inventory-quality id: the thing ThriftBooks' own add-to-cart call takes. */
+  idIq: number | null
   price: number
   exLib: boolean
   noDj: boolean
+}
+
+/** Each `{…}` inside a `"conditions":[…]` array, parsed leniently. */
+function parseConditionObjects(blockText: string): TBCondition[] {
+  const out: TBCondition[] = []
+  const objRe = /\{[^{}]*\}/g
+  let m: RegExpExecArray | null
+  while ((m = objRe.exec(blockText)) !== null) {
+    let raw: Record<string, unknown>
+    try {
+      raw = JSON.parse(m[0]) as Record<string, unknown>
+    } catch {
+      continue
+    }
+    if (typeof raw.quality !== 'string' || typeof raw.price !== 'number') continue
+    out.push({
+      quality: raw.quality,
+      isbn: typeof raw.isbn === 'string' ? raw.isbn : '',
+      ean: typeof raw.ean === 'string' ? raw.ean : '',
+      idAmazon: typeof raw.idAmazon === 'number' ? raw.idAmazon : 0,
+      idIq: typeof raw.idIq === 'number' ? raw.idIq : null,
+      price: raw.price,
+      exLib: raw.exLib === true,
+      noDj: raw.noDj === true,
+    })
+  }
+  return out
 }
 
 function parseThriftBooksHTML(html: string, pageUrl: string, requestedIsbn: string): Listing[] {
@@ -89,22 +118,7 @@ function parseThriftBooksHTML(html: string, pageUrl: string, requestedIsbn: stri
 
   while ((blockMatch = conditionBlockRe.exec(html)) !== null) {
     const blockText = blockMatch[1]
-    // Each condition is a JSON object; extract key fields via regex
-    // because the arrays can be large and JSON.parse on the whole string is error-prone.
-    const condRe = /\{[^{}]*"quality":"([^"]+)"[^{}]*"isbn":"([^"]*)"[^{}]*"ean":"([^"]*)"[^{}]*"idAmazon":(\d+)[^{}]*"price":([\d.]+)[^{}]*"exLib":(true|false)[^{}]*"noDj":(true|false)[^{}]*/g
-    let condMatch: RegExpExecArray | null
-    while ((condMatch = condRe.exec(blockText)) !== null) {
-      const [, quality, condIsbn10, condEan, idAmazonStr, priceStr, exLibStr, noDjStr] = condMatch
-      const cond: TBCondition = {
-        quality,
-        isbn: condIsbn10,
-        ean: condEan,
-        idAmazon: parseInt(idAmazonStr, 10),
-        price: parseFloat(priceStr),
-        exLib: exLibStr === 'true',
-        noDj: noDjStr === 'true',
-      }
-
+    for (const cond of parseConditionObjects(blockText)) {
       // Filter: must match the requested ISBN (either 10 or 13 digit)
       const matchesIsbn =
         (isbn13 && (cond.ean === isbn13)) ||
@@ -142,6 +156,9 @@ function parseThriftBooksHTML(html: string, pageUrl: string, requestedIsbn: stri
         dust_jacket: !cond.noDj,
         url: listingUrl,
         isbn: requestedIsbn,
+        // ThriftBooks' own client navigates to /addtocart/{idIq}/{quantity}
+        // after a cart add; opened directly it puts this copy in the cart.
+        ...(cond.idIq ? { add_to_cart_url: `https://www.thriftbooks.com/addtocart/${cond.idIq}/1` } : {}),
       })
     }
   }

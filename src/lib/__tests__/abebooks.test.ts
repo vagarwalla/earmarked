@@ -222,3 +222,69 @@ describe('fetchListingsByISBN — error handling', () => {
     expect(error).toBeNull()
   })
 })
+
+// ── fetchListingsByISBN — embedded JSON (September 2026 site) ────────────────
+
+import { readFileSync } from 'fs'
+import { join } from 'path'
+import { parseListingsFromFlightJSON, normalizeAbeConditionCode } from '../abebooks'
+
+const FLIGHT_FIXTURE = readFileSync(join(__dirname, 'fixtures', 'abebooks-search-2026-09.html'), 'utf8')
+
+describe('parseListingsFromFlightJSON', () => {
+  it('reads every listing out of the page JSON', () => {
+    const listings = parseListingsFromFlightJSON(FLIGHT_FIXTURE, '9780062315007')
+    expect(listings.map((l) => l.listing_id)).toEqual(['32509173928', '32341912906', '32509697388'])
+    expect(listings[0]).toMatchObject({
+      seller_id: '83267321',
+      seller_name: 'Giant Giant',
+      price: 5.65,
+      shipping_base: 0,
+      shipping_per_additional: 1.99,
+      condition: 'As New',
+      condition_normalized: 'fine',
+      url: 'https://www.abebooks.com/Alchemist-Modern-Classic-Fable-Spiritual-Healing/32509173928/bd',
+      add_to_cart_url: 'https://www.abebooks.com/checkout/basket?ac=a&ik=32509173928&ref=bs_srp',
+      isbn: '9780062315007',
+    })
+  })
+
+  it('shows the enum label instead of the seller\'s free-text condition', () => {
+    const listings = parseListingsFromFlightJSON(FLIGHT_FIXTURE, '9780062315007')
+    // Seller wrote "good" (lowercase); the enum says USED_GOOD.
+    expect(listings[1].condition).toBe('Good')
+    expect(listings[1].condition_normalized).toBe('good')
+  })
+
+  it('takes the cheapest offered shipping rate', () => {
+    const listings = parseListingsFromFlightJSON(FLIGHT_FIXTURE, '9780062315007')
+    expect(listings.every((l) => Number.isFinite(l.shipping_base))).toBe(true)
+    expect(Math.max(...listings.map((l) => l.shipping_base))).toBeLessThanOrEqual(4)
+  })
+
+  it('returns nothing for a page without the results payload', () => {
+    expect(parseListingsFromFlightJSON('<html><body>nothing</body></html>', '123')).toEqual([])
+  })
+
+  it('is what fetchListingsByISBN uses on the new site', async () => {
+    mockFetch(FLIGHT_FIXTURE)
+    const result = await fetchListingsByISBN('9780062315007')
+    expect(result.error).toBeNull()
+    expect(result.listings).toHaveLength(3)
+  })
+})
+
+describe('normalizeAbeConditionCode', () => {
+  it('maps the AbeBooks enum onto the four-step scale', () => {
+    expect(normalizeAbeConditionCode('NEW', 'x')).toBe('new')
+    expect(normalizeAbeConditionCode('USED_ASNEW', 'x')).toBe('fine')
+    expect(normalizeAbeConditionCode('USED_FINE', 'x')).toBe('fine')
+    expect(normalizeAbeConditionCode('USED_VERYGOOD', 'x')).toBe('good')
+    expect(normalizeAbeConditionCode('USED_GOOD', 'x')).toBe('good')
+    expect(normalizeAbeConditionCode('USED_FAIR', 'x')).toBe('fair')
+    expect(normalizeAbeConditionCode('USED_POOR', 'x')).toBe('fair')
+  })
+  it('falls back to the seller text when the enum is missing', () => {
+    expect(normalizeAbeConditionCode(undefined, 'Like New')).toBe('fine')
+  })
+})

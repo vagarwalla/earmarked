@@ -75,6 +75,12 @@ export interface Listing {
   dust_jacket: boolean
   url: string
   isbn: string
+  /**
+   * A link that puts this exact copy in the seller's cart when opened in the
+   * shopper's browser. Absent when the seller has no such link, in which case
+   * `url` (the listing page) is the closest thing.
+   */
+  add_to_cart_url?: string
 }
 
 export interface SellerGroup {

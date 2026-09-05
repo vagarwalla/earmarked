@@ -52,7 +52,13 @@ export async function fetchListingsByISBN(isbn: string): Promise<SourceFetch> {
     }
 
     const html = await res.text()
-    return { listings: parseListingsFromHTML(html, isbn), error: null }
+    // AbeBooks moved to a React front end (September 2026) that ships the
+    // results as JSON inside the page; the old server-rendered <li> markup is
+    // gone. Read the JSON first and keep the HTML parser as a fallback in case
+    // the old page is still served to some visitors.
+    const fromJson = parseListingsFromFlightJSON(html, isbn)
+    const listings = fromJson.length > 0 ? fromJson : parseListingsFromHTML(html, isbn)
+    return { listings, error: null }
   } catch (err) {
     console.error(`AbeBooks fetch error for ${isbn}:`, err)
     return { listings: [], error: (err as Error).message }
@@ -155,4 +161,184 @@ function parseListingsFromHTML(html: string, isbn: string): Listing[] {
   }
 
   return listings
+}
+
+// ── Next.js flight payload parser ────────────────────────────────────────────
+//
+// The new search page streams its React tree through `self.__next_f.push([1,
+// "<escaped JSON>"])` script tags. One of those chunks holds
+// `"searchResultsArray":{"results":[{"listing":{...}}, …]}` — every listing on
+// the page with price, shipping, condition, vendor, and the add-to-basket link.
+
+interface AbeMoney { amount: number; currency: string }
+
+interface AbeFlightListing {
+  listingId?: number
+  bdpCanonicalUrl?: string
+  addToBasketUrl?: string
+  quantity?: number
+  isbn13?: string
+  isbn10?: string
+  binding?: string
+  description?: string
+  condition?: string          // enum, e.g. USED_VERYGOOD, USED_ASNEW, NEW
+  vendorCondition?: string    // seller's own words, e.g. "Very Good"
+  productType?: string
+  bsaCodes?: string[]
+  searchAttributes?: string[]
+  vendorId?: number
+  vendorName?: string
+  priceInPurchaseCurrency?: AbeMoney
+  shippingPriceInPurchaseCurrency?: AbeMoney
+  shippingRates?: Array<{ shippingPriceInPurchaseCurrency?: AbeMoney }>
+}
+
+const ABE_ORIGIN = 'https://www.abebooks.com'
+
+/** Map AbeBooks' condition enum onto our four-step scale. */
+export function normalizeAbeConditionCode(code: string | undefined, fallback: string): Condition {
+  const c = (code ?? '').toUpperCase()
+  if (c === 'NEW') return 'new'
+  if (/ASNEW|NEARFINE|FINE|LIKENEW/.test(c)) return 'fine'
+  if (/VERYGOOD|GOOD/.test(c)) return 'good'
+  if (/FAIR|POOR|ACCEPTABLE/.test(c)) return 'fair'
+  return normalizeCondition(fallback)
+}
+
+/** Human label for a condition enum when the seller gave none. */
+function labelForConditionCode(code: string | undefined): string | null {
+  const c = (code ?? '').toUpperCase()
+  if (!c) return null
+  if (c === 'NEW') return 'New'
+  if (c.includes('ASNEW')) return 'As New'
+  if (c.includes('NEARFINE')) return 'Near Fine'
+  if (c.includes('FINE')) return 'Fine'
+  if (c.includes('VERYGOOD')) return 'Very Good'
+  if (c.includes('GOOD')) return 'Good'
+  if (c.includes('FAIR')) return 'Fair'
+  if (c.includes('POOR')) return 'Poor'
+  return null
+}
+
+/** Every `self.__next_f.push([1, "…"])` chunk, unescaped. */
+function flightChunks(html: string): string[] {
+  const chunks: string[] = []
+  const re = /self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(html)) !== null) {
+    if (!m[1].includes('searchResultsArray')) continue
+    try {
+      chunks.push(JSON.parse(`"${m[1]}"`))
+    } catch {
+      // A chunk we cannot unescape is not the one we want.
+    }
+  }
+  return chunks
+}
+
+/** The JSON object starting at `start` (which must point at `{`), by brace matching. */
+function sliceObject(text: string, start: number): string | null {
+  let depth = 0
+  let inString = false
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i]
+    if (inString) {
+      if (ch === '\\') i++
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') inString = true
+    else if (ch === '{') depth++
+    else if (ch === '}') {
+      depth--
+      if (depth === 0) return text.slice(start, i + 1)
+    }
+  }
+  return null
+}
+
+export function parseListingsFromFlightJSON(html: string, isbn: string): Listing[] {
+  const listings: Listing[] = []
+  const seen = new Set<string>()
+
+  for (const chunk of flightChunks(html)) {
+    const re = /"listing":\{/g
+    let m: RegExpExecArray | null
+    while ((m = re.exec(chunk)) !== null) {
+      const objText = sliceObject(chunk, m.index + '"listing":'.length)
+      if (!objText) continue
+      let raw: AbeFlightListing
+      try {
+        raw = JSON.parse(objText) as AbeFlightListing
+      } catch {
+        continue
+      }
+      const listing = toListing(raw, isbn, listings.length)
+      if (!listing || seen.has(listing.listing_id)) continue
+      seen.add(listing.listing_id)
+      listings.push(listing)
+    }
+  }
+
+  return listings
+}
+
+const NON_BOOK_BINDING = /\b(cd|dvd|vhs|cassette|vinyl|audio|mp3|digital)\b/i
+
+function toListing(raw: AbeFlightListing, isbn: string, index: number): Listing | null {
+  const price = raw.priceInPurchaseCurrency?.amount
+  if (typeof price !== 'number' || !(price > 0)) return null
+  if (raw.productType && raw.productType !== 'DEFAULT') return null
+  if (raw.binding && NON_BOOK_BINDING.test(raw.binding)) return null
+
+  // Cheapest offered rate is the one the basket defaults to. An unreadable
+  // shipping figure falls back to the standard rate rather than to free.
+  const rates = (raw.shippingRates ?? [])
+    .map((r) => r.shippingPriceInPurchaseCurrency?.amount)
+    .filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
+  const headline = raw.shippingPriceInPurchaseCurrency?.amount
+  const shipping = rates.length > 0
+    ? Math.min(...rates)
+    : typeof headline === 'number' && Number.isFinite(headline) ? headline : ABE_DEFAULT_SHIPPING
+
+  const codes = [...(raw.bsaCodes ?? []), ...(raw.searchAttributes ?? [])].map((c) => c.toUpperCase())
+  const description = raw.description ?? ''
+  const signed = codes.some((c) => c.includes('SIGNED')) || /\bsigned\b/i.test(description)
+  const first_edition = codes.some((c) => c.includes('FIRST_EDITION') || c === 'FIRSTEDITION')
+    || /\bfirst edition\b|\b1st edition\b/i.test(description)
+  const noJacket = codes.some((c) => c.includes('NO_JACKET'))
+  const dust_jacket = !noJacket && (
+    codes.some((c) => c.startsWith('JACKET_CONDITION') || c.includes('DUST_JACKET'))
+    || /\b(with|in) dust ?jacket\b|\bdj\b/i.test(description)
+  )
+
+  // Sellers' own wording is inconsistent ("very_good", "acceptable", "Very Good"),
+  // so the enum's label is shown when there is one.
+  const vendorCondition = raw.vendorCondition?.trim()
+  const condition = labelForConditionCode(raw.condition) || vendorCondition || 'Good'
+  const condition_normalized = normalizeAbeConditionCode(raw.condition, condition)
+
+  const listingId = raw.listingId != null ? String(raw.listingId) : `${isbn}_${index}`
+  const sellerId = raw.vendorId != null ? String(raw.vendorId) : listingId
+  const url = raw.bdpCanonicalUrl ? `${ABE_ORIGIN}${raw.bdpCanonicalUrl}` : searchUrl(isbn)
+  const add_to_cart_url = raw.addToBasketUrl
+    ? `${ABE_ORIGIN}${raw.addToBasketUrl}`
+    : raw.listingId != null ? `${ABE_ORIGIN}/checkout/basket?ac=a&ik=${raw.listingId}` : undefined
+
+  return {
+    listing_id: listingId,
+    seller_id: sellerId,
+    seller_name: raw.vendorName?.trim() || 'AbeBooks Seller',
+    price,
+    shipping_base: shipping,
+    shipping_per_additional: 1.99,
+    condition,
+    condition_normalized,
+    signed,
+    first_edition,
+    dust_jacket,
+    url,
+    isbn,
+    ...(add_to_cart_url ? { add_to_cart_url } : {}),
+  }
 }

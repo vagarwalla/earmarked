@@ -7,6 +7,11 @@ import type { Listing, PriceResponse, SourceFetch, SourceInfo } from '@/lib/type
 
 const CACHE_TTL_HOURS = 6
 
+// Rows cached before this were written while the AbeBooks scraper was blind to
+// the site's new front end (it returned nothing for months), so they hold only
+// ThriftBooks results. Ignore them and re-scrape rather than serve them out.
+const CACHE_MIN_DATE = Date.parse('2026-09-05T00:00:00Z')
+
 // ISBNs are fetched concurrently. Serially they cannot fit the budget: BWB alone
 // costs ~10s per ISBN (Cloudflare challenge wait), so a one-at-a-time loop blows
 // the 60s function limit (vercel.json) after roughly six books and the whole
@@ -73,7 +78,7 @@ export async function POST(req: NextRequest) {
       console.error('price_cache read failed:', (err as Error).message)
     }
 
-    const cutoff = Date.now() - CACHE_TTL_HOURS * 3600 * 1000
+    const cutoff = Math.max(Date.now() - CACHE_TTL_HOURS * 3600 * 1000, CACHE_MIN_DATE)
     const cached = new Set<string>()
     for (const row of cachedRows ?? []) {
       if (new Date(row.cached_at).getTime() >= cutoff) {
